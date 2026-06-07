@@ -849,7 +849,7 @@
       "Style primary CTA button linking to checkout_url opens in new tab",
       "Verify countdown reaches zero and displays expired message"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-072",

@@ -1,0 +1,69 @@
+{# Click-to-pay CTA with Alpine countdown to Kapruka checkout link expiry. #}
+<section
+  id="checkout-payment-cta"
+  class="flex flex-col gap-4 rounded-xl border border-commerce-parchment bg-commerce-parchment/30 p-4"
+  data-testid="checkout-payment-cta"
+  aria-label="Complete payment"
+  x-data="paymentCountdown('{{ payment.expires_at }}')"
+>
+  <header class="flex flex-col gap-1 border-b border-commerce-parchment pb-3">
+    <h3 class="text-sm font-semibold text-commerce-ink">Complete your payment</h3>
+    <p class="text-xs text-commerce-muted" data-testid="checkout-payment-order-ref">
+      Order reference: <span class="font-medium text-commerce-ink">{{ payment.order_ref }}</span>
+    </p>
+  </header>
+
+  <div class="flex flex-col gap-2">
+    <p class="text-sm text-commerce-ink">
+      Total due:
+      <span class="font-semibold text-kapruka-700" data-testid="checkout-payment-grand-total">
+        {{ payment.grand_total | format_currency(payment.currency) }}
+      </span>
+    </p>
+
+    <div
+      class="flex items-center justify-between gap-3 rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm"
+      data-testid="checkout-payment-countdown"
+      :class="warning ? 'border-amber-400 bg-amber-50' : ''"
+      aria-live="polite"
+    >
+      <span class="text-commerce-muted">Link expires in</span>
+      <span
+        class="font-mono text-base font-semibold tabular-nums"
+        :class="warning ? 'text-amber-700' : 'text-commerce-ink'"
+        data-testid="checkout-payment-countdown-display"
+        x-text="display"
+      >00:00</span>
+    </div>
+
+    <p
+      class="text-xs font-medium text-amber-700"
+      data-testid="checkout-payment-warning"
+      x-show="warning && !expired"
+      x-cloak
+    >
+      Less than 10 minutes left — complete payment soon to lock in this price.
+    </p>
+
+    <p
+      class="text-sm font-medium text-red-700"
+      data-testid="checkout-payment-expired"
+      x-show="expired"
+      x-cloak
+    >
+      This payment link has expired. Start checkout again to get a fresh link.
+    </p>
+  </div>
+
+  <a
+    href="{{ payment.checkout_url }}"
+    target="_blank"
+    rel="noopener noreferrer"
+    class="inline-flex items-center justify-center rounded-lg bg-kapruka-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-kapruka-700 focus:outline-none focus:ring-2 focus:ring-kapruka-500/40 disabled:pointer-events-none disabled:opacity-50"
+    data-testid="checkout-payment-cta-button"
+    :class="expired ? 'pointer-events-none opacity-50' : ''"
+    :aria-disabled="expired"
+  >
+    Pay securely on Kapruka
+  </a>
+</section>

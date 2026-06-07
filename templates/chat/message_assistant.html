@@ -27,5 +27,15 @@
       {{ checkout_review_html | safe }}
     </div>
     {% endif %}
+    {% if checkout_payment_html %}
+    <div
+      class="assistant-checkout-payment mt-3 border-t border-commerce-parchment/60 pt-3"
+      data-slot="checkout-payment"
+      role="region"
+      aria-label="Complete payment"
+    >
+      {{ checkout_payment_html | safe }}
+    </div>
+    {% endif %}
   </div>
 </div>

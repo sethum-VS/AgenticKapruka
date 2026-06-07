@@ -189,7 +189,7 @@ def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> st
             ref_note = f" (reference {order_ref})" if order_ref else ""
             return (
                 f"Your Kapruka order is ready{ref_note}. "
-                f"Complete payment using this secure link: {checkout_url}"
+                "Use the button below to pay securely before the link expires."
             )
     return "Continuing your Kapruka checkout."
 
@@ -199,6 +199,7 @@ def render_assistant_html(
     *,
     products_html: str | None = None,
     checkout_review_html: str | None = None,
+    checkout_payment_html: str | None = None,
 ) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
@@ -207,6 +208,7 @@ def render_assistant_html(
         message=message,
         products_html=products_html,
         checkout_review_html=checkout_review_html,
+        checkout_payment_html=checkout_payment_html,
     )
 
 
@@ -297,8 +299,15 @@ async def generate_response(
 
         checkout_reply = _build_checkout_assistant_message(tool_results)
         if checkout_reply:
+            payment_html = checkout.get("payment_cta_html") if checkout else None
+            payment_html_str = (
+                payment_html if isinstance(payment_html, str) and payment_html.strip() else None
+            )
             return {
-                "response_html": render_assistant_html(checkout_reply),
+                "response_html": render_assistant_html(
+                    checkout_reply,
+                    checkout_payment_html=payment_html_str,
+                ),
                 "assistant_message": checkout_reply,
             }
 

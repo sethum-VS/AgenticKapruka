@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, cast
 
-from app.templating import render_checkout_review
+from app.templating import render_checkout_review, render_payment_cta
 from graphs.checkout_state import (
     CHECKOUT_STEP_ORDER,
     CheckoutState,
@@ -17,6 +17,7 @@ from graphs.checkout_state import (
 from graphs.state import CheckoutStep
 from lib.checkout.delivery import DeliveryFormValues, parse_delivery_form
 from lib.checkout.order import build_create_order_from_checkout
+from lib.checkout.payment import payment_cta_from_finalize
 from lib.checkout.recipient import RecipientFormValues, parse_recipient_form
 from lib.checkout.review import review_context_from_checkout_state
 from lib.checkout.sender import SenderFormValues, parse_sender_form
@@ -326,6 +327,19 @@ async def process_checkout_step(
         review_context = review_context_from_checkout_state(cast(CheckoutState, merged_state))
         if review_context is not None:
             updates["response_html"] = render_checkout_review(review=review_context)
+
+    if step == "finalize":
+        payment_context = payment_cta_from_finalize(
+            checkout_url=str(extra.get("checkout_url") or ""),
+            order_ref=str(extra.get("order_ref") or ""),
+            order_summary=extra.get("order_summary")
+            if isinstance(extra.get("order_summary"), dict)
+            else None,
+            expires_at=str(extra.get("expires_at") or ""),
+            currency=str(state.get("currency") or "LKR"),
+        )
+        if payment_context is not None:
+            updates["response_html"] = render_payment_cta(payment=payment_context)
 
     if action == "advance":
         nxt = next_checkout_step(current)

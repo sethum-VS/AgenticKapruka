@@ -119,6 +119,11 @@ async def test_finalize_step_returns_checkout_url_with_mocked_mcp(
     assert result.get("order_ref") == _CREATE_ORDER_JSON["order_ref"]
     assert result.get("expires_at") == _CREATE_ORDER_JSON["expires_at"]
 
+    payment_html = result.get("response_html") or ""
+    assert 'data-testid="checkout-payment-cta"' in payment_html
+    assert _CREATE_ORDER_JSON["order_ref"] in payment_html
+    assert "Rs. 9,350" in payment_html
+
     mcp_client.call_tool.assert_awaited_once()
     assert mcp_client.call_tool.await_args.args[0] == CREATE_ORDER_TOOL
 
@@ -145,6 +150,19 @@ async def test_run_checkout_graph_passes_checkout_url_in_tool_results(
         icing_text=_SAMPLE_CART_ITEM["icing_text"],
     )
 
+    from app.templating import render_payment_cta
+    from lib.checkout.payment import payment_cta_from_finalize
+
+    payment_context = payment_cta_from_finalize(
+        checkout_url=_CREATE_ORDER_JSON["checkout_url"],
+        order_ref=_CREATE_ORDER_JSON["order_ref"],
+        order_summary=_CREATE_ORDER_JSON["summary"],
+        expires_at=_CREATE_ORDER_JSON["expires_at"],
+        currency="LKR",
+    )
+    assert payment_context is not None
+    payment_html = render_payment_cta(payment=payment_context)
+
     finalize_result = {
         **_full_finalize_state(),
         "step_valid": {**_full_finalize_state()["step_valid"], "finalize": True},
@@ -152,6 +170,7 @@ async def test_run_checkout_graph_passes_checkout_url_in_tool_results(
         "order_ref": _CREATE_ORDER_JSON["order_ref"],
         "expires_at": _CREATE_ORDER_JSON["expires_at"],
         "order_summary": _CREATE_ORDER_JSON["summary"],
+        "response_html": payment_html,
     }
 
     state: AgentState = {
@@ -178,5 +197,7 @@ async def test_run_checkout_graph_passes_checkout_url_in_tool_results(
     payload = result["tool_results"][CHECKOUT_TOOL_KEY]
     assert payload["checkout_url"] == _CREATE_ORDER_JSON["checkout_url"]
     assert payload["order_ref"] == _CREATE_ORDER_JSON["order_ref"]
+    assert 'data-testid="checkout-payment-cta"' in payload["payment_cta_html"]
+    assert payload["review_html"] is None
     assert result["checkout_state"] == "finalize"
     assert result["model_tier"] == "pro"

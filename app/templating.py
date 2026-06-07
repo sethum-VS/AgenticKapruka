@@ -13,6 +13,7 @@ import jinja2
 from fastapi.templating import Jinja2Templates
 
 from lib.checkout.delivery import DeliveryFormValues
+from lib.checkout.payment import PaymentCtaContext
 from lib.checkout.recipient import RecipientFormValues
 from lib.checkout.review import CheckoutReviewContext
 from lib.checkout.sender import SenderFormValues
@@ -285,6 +286,13 @@ def render_checkout_review(*, review: CheckoutReviewContext) -> str:
     templates = get_templates()
     template = templates.env.get_template("checkout/review.html")
     return template.render(review=review)
+
+
+def render_payment_cta(*, payment: PaymentCtaContext) -> str:
+    """Render templates/checkout/payment_cta.html click-to-pay countdown CTA."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/payment_cta.html")
+    return template.render(payment=payment)
 
 
 def render_currency_selector(*, currency: str = "LKR") -> str:

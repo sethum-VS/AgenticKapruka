@@ -562,3 +562,12 @@ Next: PRD-070 kapruka_create_order integration.
 - Tests: `test_checkout_order.py`, `test_redis_order.py`, `tests/integration/test_checkout_finalize.py` (mocked MCP + Redis persistence).
 Files: lib/checkout/order.py, lib/redis/order.py, graphs/{state,checkout_state}.py, graphs/nodes/{checkout_steps,run_checkout_graph,generate_response}.py, tests/{unit/test_checkout_order,unit/test_redis_order,integration/test_checkout_finalize}.py, tests/unit/{test_checkout_graph,test_checkout_review}.py, prd.json
 Next: PRD-071 Click-to-pay countdown UI component.
+
+## PRD-071 — Click-to-pay countdown UI component
+- Added `lib/checkout/payment.py`: `PaymentCtaContext`, `payment_cta_from_finalize`, and countdown helpers (`parse_expires_at_iso`, `format_countdown_mm_ss`, `is_countdown_warning`).
+- Added `templates/checkout/payment_cta.html`: order_ref, grand_total, primary CTA (`target="_blank"`), Alpine `paymentCountdown` MM:SS timer with under-10-min warning and expired state.
+- Added `static/js/payment-countdown.js`; loaded from `templates/chat/index.html` before deferred Alpine.
+- `checkout_steps` renders payment CTA on finalize; `run_checkout_graph` exposes `payment_cta_html`; `generate_response` embeds CTA in `message_assistant.html` `checkout_payment_html` slot.
+- Tests: `test_payment_cta.py`, `test_payment_countdown_js.py`, `test_payment_cta_browser.py` (warning + expired); integration finalize asserts payment partial.
+Files: lib/checkout/payment.py, templates/checkout/payment_cta.html, static/js/payment-countdown.js, app/templating.py, graphs/nodes/{checkout_steps,run_checkout_graph,generate_response}.py, templates/chat/{message_assistant,index}.html, tests/unit/{test_payment_cta,test_payment_countdown_js,test_payment_cta_browser}.py, tests/integration/test_checkout_finalize.py, prd.json
+Next: PRD-072 Order tracking chat flow.
