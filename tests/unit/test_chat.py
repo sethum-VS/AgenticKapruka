@@ -159,6 +159,61 @@ async def test_chat_stream_returns_sse_event_stream(chat_stream_env: RedisClient
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_reuses_session_cookie_on_follow_up(
+    chat_stream_env: RedisClient,
+) -> None:
+    """Second POST with returned cookie does not emit another Set-Cookie."""
+    application = create_app()
+    application.state.redis = chat_stream_env
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.post(
+            "/chat/stream",
+            data={"message": "Hello"},
+            headers={"HX-Request": "true"},
+        )
+        cookie_header = first.headers.get("set-cookie", "")
+        assert "ak_session=" in cookie_header
+        session_cookie = cookie_header.split("ak_session=", maxsplit=1)[1].split(";", maxsplit=1)[0]
+
+        second = await client.post(
+            "/chat/stream",
+            data={"message": "Follow up"},
+            headers={"HX-Request": "true", "Cookie": f"ak_session={session_cookie}"},
+        )
+
+    assert second.status_code == 200
+    assert "set-cookie" not in second.headers
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_setup_failure_surfaces_error(
+    chat_stream_env: RedisClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Graph setup failures yield a user-visible SSE error fragment."""
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        msg = "graph compile failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr("app.routes.chat.get_compiled_chat_graph", boom)
+    application = create_app()
+    application.state.redis = chat_stream_env
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/chat/stream",
+            data={"message": "Hello"},
+            headers={"HX-Request": "true"},
+        )
+
+    assert response.status_code == 200
+    assert 'role="alert"' in response.text
+    assert "Something went wrong" in response.text
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_rejects_empty_message(chat_stream_env: RedisClient) -> None:
     """POST /chat/stream rejects blank messages."""
     application = create_app()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from google import genai
 from langchain_core.runnables import RunnableConfig
@@ -20,11 +21,21 @@ from lib.zep.client import ZepClient
 logger = logging.getLogger(__name__)
 
 
+def _trust_forwarded_for(request: Request) -> bool:
+    """Honor X-Forwarded-For only behind a trusted reverse proxy."""
+    if os.getenv("APP_ENV", "development").lower() == "production":
+        return True
+    if request.client is not None:
+        return request.client.host in ("127.0.0.1", "::1")
+    return False
+
+
 def client_ip_from_request(request: Request) -> str:
     """Best-effort client IP for Kapruka rate limiting."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", maxsplit=1)[0].strip()
+    if _trust_forwarded_for(request):
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",", maxsplit=1)[0].strip()
     if request.client is not None:
         return request.client.host
     return "127.0.0.1"

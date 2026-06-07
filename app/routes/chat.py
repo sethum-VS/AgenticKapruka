@@ -17,7 +17,8 @@ from lib.chat.deps import (
     get_compiled_chat_graph,
     resolve_turn_state,
 )
-from lib.chat.session import SESSION_COOKIE_NAME, get_session_id
+from lib.chat.session import SESSION_COOKIE_NAME, cookie_params, resolve_chat_thread_id
+from lib.chat.sse import format_sse_event
 from lib.chat.streaming import iter_chat_sse_events
 from lib.redis.client import RedisClient
 from lib.zep.session import get_or_create_session
@@ -27,6 +28,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 RedisDep = Annotated[RedisClient, Depends(get_redis)]
+
+_STREAM_SETUP_ERROR_HTML = (
+    '<div class="flex justify-start">'
+    '<div class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 '
+    'text-sm text-red-800" role="alert">'
+    "Something went wrong. Please try again.</div></div>"
+)
 
 
 def _render_user_turn_html(message: str) -> str:
@@ -42,22 +50,22 @@ async def _chat_event_stream(
     request: Request,
     redis_client: RedisClient,
     message: str,
+    thread_id: str,
 ) -> AsyncIterator[str]:
     """Run the shopping graph and yield SSE HTML events."""
-    session_id = get_session_id(request)
     deps = await build_shopping_graph_deps(request, redis_client)
     graph = await get_compiled_chat_graph(redis_client, deps=deps)
 
-    zep_thread_id: str | None = session_id
+    zep_thread_id: str | None = thread_id
     zep_client = deps.zep_client
     if zep_client is not None:
-        zep_thread_id = await get_or_create_session(redis_client, zep_client, session_id)
+        zep_thread_id = await get_or_create_session(redis_client, zep_client, thread_id)
 
-    config = cast(RunnableConfig, {"configurable": {"thread_id": session_id}})
+    config = cast(RunnableConfig, {"configurable": {"thread_id": thread_id}})
     state = await resolve_turn_state(
         graph,
         message=message,
-        session_id=session_id,
+        session_id=thread_id,
         zep_thread_id=zep_thread_id,
         config=config,
     )
@@ -94,8 +102,7 @@ async def chat_stream(
     if not stripped:
         raise HTTPException(status_code=422, detail="Message cannot be empty")
 
-    session_id = get_session_id(request)
-    set_cookie = SESSION_COOKIE_NAME not in request.cookies
+    thread_id, new_cookie = resolve_chat_thread_id(request)
 
     async def event_generator() -> AsyncIterator[str]:
         try:
@@ -103,10 +110,12 @@ async def chat_stream(
                 request=request,
                 redis_client=redis_client,
                 message=stripped,
+                thread_id=thread_id,
             ):
                 yield payload
         except Exception:
-            logger.exception("chat stream failed for session %s", session_id)
+            logger.exception("chat stream failed for session %s", thread_id)
+            yield format_sse_event(_STREAM_SETUP_ERROR_HTML)
 
     headers = {
         "Cache-Control": "no-cache",
@@ -118,12 +127,6 @@ async def chat_stream(
         media_type="text/event-stream",
         headers=headers,
     )
-    if set_cookie:
-        response.set_cookie(
-            SESSION_COOKIE_NAME,
-            session_id,
-            httponly=True,
-            samesite="lax",
-            max_age=7 * 24 * 60 * 60,
-        )
+    if new_cookie is not None:
+        response.set_cookie(SESSION_COOKIE_NAME, new_cookie, **cookie_params())
     return response
