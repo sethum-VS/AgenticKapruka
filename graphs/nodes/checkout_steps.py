@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any, cast
 
-from app.templating import render_checkout_review, render_payment_cta
 from graphs.checkout_state import (
     CHECKOUT_STEP_ORDER,
     CheckoutState,
@@ -326,6 +325,8 @@ async def process_checkout_step(
         merged_state.update(extra)
         review_context = review_context_from_checkout_state(cast(CheckoutState, merged_state))
         if review_context is not None:
+            from app.templating import render_checkout_review
+
             updates["response_html"] = render_checkout_review(review=review_context)
 
     if step == "finalize":
@@ -339,6 +340,8 @@ async def process_checkout_step(
             currency=str(state.get("currency") or "LKR"),
         )
         if payment_context is not None:
+            from app.templating import render_payment_cta
+
             updates["response_html"] = render_payment_cta(payment=payment_context)
 
     if action == "advance":

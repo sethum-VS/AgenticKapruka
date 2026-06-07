@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
-
-from graphs.checkout_state import CheckoutState
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +44,9 @@ class CheckoutReviewContext:
         return sum(int(item.get("quantity") or 1) for item in self.cart_items)
 
 
-def review_context_from_checkout_state(state: CheckoutState) -> CheckoutReviewContext | None:
+def review_context_from_checkout_state(
+    state: Mapping[str, Any],
+) -> CheckoutReviewContext | None:
     """Build review context when checkout state has enough data for the summary."""
     cart_items = list(state.get("cart_items") or [])
     if not cart_items:

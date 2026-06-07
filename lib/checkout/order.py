@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
-from graphs.checkout_state import CheckoutState
 from lib.kapruka.types import CartItem, Delivery, Recipient, Sender
 
 
@@ -21,7 +21,7 @@ def stored_cart_to_mcp_cart(cart_items: list[dict[str, Any]]) -> list[CartItem]:
 
 
 def build_create_order_from_checkout(
-    state: CheckoutState,
+    state: Mapping[str, Any],
     cart_items: list[dict[str, Any]],
 ) -> tuple[Recipient, Delivery, Sender, list[CartItem], str | None, str]:
     """Assemble create_order arguments from checkout state and cart rows."""

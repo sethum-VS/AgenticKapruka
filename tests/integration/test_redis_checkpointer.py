@@ -20,7 +20,8 @@ from graphs.shopping_graph import (
 )
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
-from lib.kapruka.types import SearchProductsOutput
+from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
+from lib.kapruka.types import SearchProductsOutput, TrackOrderOutput
 from lib.redis.checkpointer import get_checkpointer
 from lib.redis.client import RedisClient
 
@@ -32,6 +33,34 @@ _SEARCH_OUTPUT = SearchProductsOutput(
     results=[],
     next_cursor=None,
     applied_filters={"q": "birthday cake", "limit": 10, "in_stock_only": False},
+)
+
+_TRACK_OUTPUT = TrackOrderOutput.model_validate(
+    {
+        "order_number": "VIMP34456CB2",
+        "pnref": "12345678901",
+        "status": "shipped",
+        "status_display": "Out for Delivery",
+        "order_date": "June 5, 2026",
+        "delivery_date": "June 7, 2026",
+        "shipped_date": "June 6, 2026",
+        "amount": "15500.00",
+        "payment_method": "Visa",
+        "comments": None,
+        "recipient": {
+            "name": "Ada Lovelace",
+            "phone": "0771234567",
+            "address": "123 Galle Road",
+            "city": "Colombo 03",
+        },
+        "greeting_message": None,
+        "special_instructions": None,
+        "progress": [{"step": "shipped", "timestamp": "June 6, 2026 08:00 AM"}],
+        "live_tracking_available": False,
+        "has_delivery_video": False,
+        "has_delivery_photo": False,
+        "items": [],
+    },
 )
 
 
@@ -114,6 +143,7 @@ async def test_tracking_turn_clears_stale_tool_results_from_prior_discovery(
     """Follow-up tracking must not retain discovery MCP payloads from checkpoint."""
     mock_service = AsyncMock(spec=KaprukaService)
     mock_service.search_products.return_value = _SEARCH_OUTPUT
+    mock_service.track_order.return_value = _TRACK_OUTPUT
 
     mock_client = MagicMock()
     discovery_intent = MagicMock()
@@ -126,17 +156,11 @@ async def test_tracking_turn_clears_stale_tool_results_from_prior_discovery(
     tracking_intent = MagicMock()
     tracking_intent.parsed = IntentClassification(intent="tracking")
     tracking_intent.text = '{"intent": "tracking"}'
-    tracking_reply = MagicMock()
-    tracking_reply.parsed = AssistantReply(
-        message="Please share your Kapruka order number so I can look up delivery status.",
-    )
-    tracking_reply.text = tracking_reply.parsed.model_dump_json()
 
     mock_client.models.generate_content.side_effect = [
         discovery_intent,
         discovery_reply,
         tracking_intent,
-        tracking_reply,
     ]
 
     deps = ShoppingGraphDeps(
@@ -162,14 +186,10 @@ async def test_tracking_turn_clears_stale_tool_results_from_prior_discovery(
         config,
     )
     assert second["intent"] == "tracking"
-    assert second.get("tool_results") == {}
-
-    tracking_response_call = mock_client.models.generate_content.call_args_list[3]
-    tracking_prompt = tracking_response_call.kwargs.get("contents")
-    if tracking_prompt is None and len(tracking_response_call.args) > 1:
-        tracking_prompt = tracking_response_call.args[1]
-    assert "Chocolate Birthday Cake" not in str(tracking_prompt)
-    assert '"results"' not in str(tracking_prompt)
+    second_results = second.get("tool_results") or {}
+    assert TRACK_ORDER_TOOL in second_results
+    assert SEARCH_PRODUCTS_TOOL not in second_results
+    assert mock_client.models.generate_content.call_count == 3
 
 
 @pytest.mark.asyncio
