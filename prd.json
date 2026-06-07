@@ -297,7 +297,7 @@
       "Wire htmx:afterSwap event listener to call scrollToBottom",
       "Verify in browser that new messages auto-scroll into view"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-026",

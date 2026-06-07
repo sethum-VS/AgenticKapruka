@@ -60,6 +60,10 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'name="message"' in html
     assert 'id="chat-loading"' in html
     assert "htmx-indicator" in html
+    assert 'x-data="chatHelpers()"' in html
+    assert 'x-ref="messages"' in html
+    assert 'x-ref="input"' in html
+    assert "/static/js/chat-helpers.js" in html
 
 
 @pytest.mark.asyncio
@@ -115,3 +119,5 @@ async def test_chat_index_returns_200_html_with_empty_state() -> None:
     assert "Gift ideas under Rs. 5,000" in html
     assert 'id="chat-form"' in html
     assert 'hx-post="/chat/stream"' in html
+    assert 'x-data="chatHelpers()"' in html
+    assert "/static/js/chat-helpers.js" in html

@@ -2,8 +2,12 @@
 
 {% block title %}{{ title | default("Chat — AgenticKapruka") }}{% endblock %}
 
+{% block head_extra %}
+<script src="/static/js/chat-helpers.js"></script>
+{% endblock %}
+
 {% block body %}
-<div class="flex min-h-screen flex-col">
+<div class="flex min-h-screen flex-col" x-data="chatHelpers()">
   <header class="border-b border-commerce-parchment bg-white/80 backdrop-blur-sm">
     <div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-3 sm:px-6">
       <div class="flex items-center gap-3">
@@ -19,10 +23,11 @@
     </div>
   </header>
 
-  <main class="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-6 sm:px-6">
+  <main class="mx-auto flex w-full max-w-3xl min-h-0 flex-1 flex-col px-4 py-6 sm:px-6">
     <div
       id="chat-messages"
-      class="flex flex-1 flex-col gap-4 overflow-y-auto"
+      x-ref="messages"
+      class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto"
       role="log"
       aria-live="polite"
       aria-label="Chat messages"
@@ -89,6 +94,7 @@
           <label for="chat-message" class="sr-only">Message</label>
           <textarea
             id="chat-message"
+            x-ref="input"
             name="message"
             rows="2"
             required

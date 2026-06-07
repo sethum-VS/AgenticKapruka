@@ -184,3 +184,11 @@ Next: PRD-024 HTMX chat input form (hx-post /chat/stream).
 - Unit tests: form HTMX attributes in GET /chat HTML; POST returns swappable bubble; whitespace-only message rejected with 422.
 Files: templates/chat/{index,message_user}.html, app/routes/chat.py, tests/unit/test_chat.py, prd.json
 Next: PRD-025 Alpine.js focus and scroll helpers.
+
+## PRD-025 — Alpine.js focus and scroll helpers
+- Added `static/js/chat-helpers.js`: Alpine `chatHelpers` component with `scrollToBottom()` (sets `#chat-messages` scrollTop) and `focusInput()` (refocuses `#chat-message` textarea).
+- Wired `htmx:afterSwap` on `#chat-messages` swaps to scroll; `htmx:afterRequest` on successful `#chat-form` submit to refocus input.
+- Updated `templates/chat/index.html`: `x-data="chatHelpers()"` on viewport wrapper, `x-ref="messages"` / `x-ref="input"`, `min-h-0` flex fixes for scrollable message list; script loaded in `head_extra` before deferred Alpine.
+- Unit tests: DOM attribute assertions in `test_chat.py`, JS source checks in `test_chat_helpers_js.py`; Playwright browser harness verifies scroll-to-bottom and input focus on HTMX events.
+Files: static/js/chat-helpers.js, templates/chat/index.html, tests/unit/{test_chat,test_chat_helpers_js,test_chat_helpers_browser}.py, prd.json
+Next: PRD-026 AgentState TypedDict schema (graphs/state.py).
