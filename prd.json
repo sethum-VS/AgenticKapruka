@@ -633,7 +633,7 @@
       "Render gray 'Out of Stock' overlay when in_stock false",
       "Include partial in product_card and verify both states render correctly"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-054",

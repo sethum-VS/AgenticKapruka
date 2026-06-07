@@ -410,3 +410,11 @@ Next: PRD-052 Category filter chips partial.
 - Tests: `test_category_chips.py` (HTMX attrs, active variant, URL encoding, hybrid_context extraction, partials route); `test_category_chips_browser.py` Playwright harness via routed `http://localhost/` (HTMX 2 requires real document URL, not `about:blank` from `set_content`) — chip click swaps `#results` without navigation.
 Files: templates/components/category_chips.html, app/templating.py, app/routes/partials.py, static/css/input.css, tailwind.config.js, tests/fixtures/hybrid_context/sample_categories.json, tests/unit/{test_category_chips,test_category_chips_browser}.py, prd.json
 Next: PRD-053 Stock badge overlay component.
+
+## PRD-053 — Stock badge overlay component
+- Added `templates/components/stock_badge.html`: green "In Stock" badge (`data-stock-level`), amber "Low Stock" when `stock_level=low`, gray full-image overlay for out-of-stock with `data-stock-level` metadata.
+- Refactored `product_card.html` to `{% include %}` stock_badge via `{% with in_stock, stock_level %}`; added `render_stock_badge()` in `app/templating.py`.
+- Fixtures gained `stock_level`; snapshot updated with `data-stock-level="high"`.
+- Tests: `tests/unit/test_stock_badge.py` (partial isolation + product_card integration for both stock states).
+Files: templates/components/{stock_badge,product_card}.html, app/templating.py, tests/unit/test_stock_badge.py, tests/fixtures/products/{sample_in_stock,sample_out_of_stock}.json, tests/fixtures/snapshots/product_card_in_stock.html, prd.json
+Next: PRD-054 Alpine lazy-load image animations.

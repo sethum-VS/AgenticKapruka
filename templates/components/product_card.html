@@ -1,4 +1,4 @@
-{# Product card for carousel and search results. Expects product dict: id, name, price, image_url, in_stock, url #}
+{# Product card for carousel and search results. Expects product dict: id, name, price, image_url, in_stock, stock_level, url #}
 {% if product.price is mapping %}
   {% set price_amount = product.price.amount %}
   {% set price_currency = product.price.currency %}
@@ -35,24 +35,9 @@
       No image
     </div>
     {% endif %}
-    {% if product.in_stock %}
-    <span
-      class="absolute left-2 top-2 rounded-full bg-emerald-600/90 px-2 py-0.5 text-xs font-medium text-white shadow-sm"
-      data-testid="stock-badge"
-    >
-      In Stock
-    </span>
-    {% else %}
-    <span
-      class="absolute inset-0 flex items-center justify-center bg-commerce-ink/40"
-      data-testid="stock-overlay"
-      aria-hidden="true"
-    >
-      <span class="rounded-full bg-commerce-muted/90 px-2 py-0.5 text-xs font-medium text-white">
-        Out of Stock
-      </span>
-    </span>
-    {% endif %}
+    {% with in_stock=product.in_stock, stock_level=product.stock_level | default('high') %}
+      {% include "components/stock_badge.html" %}
+    {% endwith %}
   </a>
   <div class="flex flex-1 flex-col gap-2 p-3">
     <h3 class="line-clamp-2 text-sm font-medium leading-snug text-commerce-ink">

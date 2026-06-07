@@ -7,5 +7,6 @@
   },
   "image_url": "https://cdn.kapruka.com/flowers/red-roses.jpg",
   "in_stock": false,
+  "stock_level": "out",
   "url": "https://www.kapruka.com/flowers/red-roses"
 }

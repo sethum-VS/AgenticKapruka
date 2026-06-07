@@ -5,5 +5,6 @@
   "currency": "LKR",
   "image_url": "https://cdn.kapruka.com/cakes/chocolate-fudge.jpg",
   "in_stock": true,
+  "stock_level": "high",
   "url": "https://www.kapruka.com/cakes/chocolate-fudge"
 }

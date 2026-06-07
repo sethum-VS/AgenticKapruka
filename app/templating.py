@@ -47,6 +47,13 @@ def get_templates() -> Jinja2Templates:
     return _create_templates()
 
 
+def render_stock_badge(*, in_stock: bool, stock_level: str = "high") -> str:
+    """Render templates/components/stock_badge.html for product image overlays."""
+    templates = get_templates()
+    template = templates.env.get_template("components/stock_badge.html")
+    return template.render(in_stock=in_stock, stock_level=stock_level)
+
+
 def render_product_card(product: dict[str, Any]) -> str:
     """Render templates/components/product_card.html for carousel and search results."""
     templates = get_templates()

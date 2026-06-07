@@ -1,0 +1,32 @@
+{# Stock badge overlay for product images. Expects in_stock (bool) and optional stock_level. #}
+{% set level = stock_level | default('high') %}
+{% if in_stock %}
+  {% if level == 'low' %}
+  <span
+    class="absolute left-2 top-2 rounded-full bg-amber-500/90 px-2 py-0.5 text-xs font-medium text-white shadow-sm"
+    data-testid="stock-badge"
+    data-stock-level="low"
+  >
+    Low Stock
+  </span>
+  {% else %}
+  <span
+    class="absolute left-2 top-2 rounded-full bg-emerald-600/90 px-2 py-0.5 text-xs font-medium text-white shadow-sm"
+    data-testid="stock-badge"
+    data-stock-level="{{ level }}"
+  >
+    In Stock
+  </span>
+  {% endif %}
+{% else %}
+<span
+  class="absolute inset-0 flex items-center justify-center bg-commerce-ink/40"
+  data-testid="stock-overlay"
+  data-stock-level="{{ level }}"
+  aria-hidden="true"
+>
+  <span class="rounded-full bg-commerce-muted/90 px-2 py-0.5 text-xs font-medium text-white">
+    Out of Stock
+  </span>
+</span>
+{% endif %}
