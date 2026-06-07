@@ -19,3 +19,11 @@ Next: PRD-002 FastAPI application factory (app/main.py create_app).
 - Verified: uvicorn app.main:app, curl -L / → 200 via /chat.
 Files: app/main.py, app/lifespan.py, app/routes/{chat,cart,checkout,health,partials}.py, tests/unit/test_main.py
 Next: PRD-003 Pydantic Settings (app/config.py).
+
+## PRD-003 — Pydantic Settings and environment validation
+- Added `app/config.py` with pydantic-settings `Settings` loading REDIS_URL, NEO4J_URI/USER/PASSWORD, ZEP_API_KEY, GOOGLE_API_KEY, GCP_PROJECT_ID/LOCATION, KAPRUKA_MCP_URL, SESSION_SECRET.
+- Field validators: URL schemes for redis/neo4j/mcp; non-empty strip for production secrets; SESSION_SECRET min 32 chars.
+- `get_settings()` via `@lru_cache` singleton; explicit `pydantic-settings` dep in pyproject.toml.
+- Unit tests: `test_settings_loads_from_env` plus rejection cases for short session secret and empty API key.
+Files: app/config.py, tests/unit/test_settings.py, pyproject.toml
+Next: PRD-004 .env.example and .gitignore for secrets.

@@ -33,7 +33,7 @@
       "Add get_settings() lru_cache singleton",
       "Write pytest test_settings_loads_from_env verifying all fields parse correctly"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-004",
