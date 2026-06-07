@@ -155,3 +155,17 @@ Next: PRD-020 Wrapper for kapruka_create_order (lib/kapruka/tools/create_order.p
 - Unit tests: full response field parsing (order_ref, checkout_url, expires_at, summary totals), forced JSON format, cache bypass, cart/qty/gift_message/icing_text validation short-circuit, empty_cart → KaprukaValidationError.
 Files: lib/kapruka/tools/create_order.py, lib/kapruka/tools/__init__.py, lib/kapruka/__init__.py, tests/unit/test_create_order.py, prd.json
 Next: PRD-021 Wrapper for kapruka_track_order (lib/kapruka/tools/track_order.py).
+
+## PRD-021 — Wrapper for kapruka_track_order
+- Added `lib/kapruka/tools/track_order.py`: async `track_order(client, *, order_number)` builds validated `TrackOrderInput`, forces `response_format=json`, calls MCP `kapruka_track_order`, parses via `parse_mcp_error` + `TrackOrderOutput.model_validate`.
+- Reused PRD-016 `TrackOrderOutput` (status, status_display, delivery_date ETA, progress events, recipient, items) rather than introducing a duplicate TrackOrderResponse alias.
+- Unit tests: full response field parsing (status, progress timeline, delivery_date), forced response_format, order_number min-length validation, order_not_found → KaprukaNotFoundError.
+Files: lib/kapruka/tools/track_order.py, lib/kapruka/tools/__init__.py, lib/kapruka/__init__.py, tests/unit/test_track_order.py, prd.json
+Next: PRD-022 KaprukaService facade with cache and rate limiting (lib/kapruka/service.py).
+
+## PRD-022 — KaprukaService facade with cache and rate limiting
+- Added `lib/kapruka/service.py` with `KaprukaService(redis_client, mcp_client)`: methods for all 7 MCP tools, each accepting `client_ip` for per-IP sliding-window limits via `check_rate_limit`.
+- Read tools use `_cached_read`: cache lookup before MCP, `set_cached` (30-min TTL) on miss; `create_order` rate-limited only, never cached (delegates to PRD-020 wrapper).
+- Integration tests (`tests/integration/test_kapruka_service.py`): second identical `search_products` skips MCP (TTL ≤ 1800s); repeated `create_order` always hits MCP with no Redis cache keys.
+Files: lib/kapruka/service.py, lib/kapruka/__init__.py, tests/integration/test_kapruka_service.py, prd.json
+Next: PRD-023 Chat viewport Jinja template with empty state (templates/chat/index.html).

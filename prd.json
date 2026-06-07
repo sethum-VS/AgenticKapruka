@@ -249,7 +249,7 @@
       "Define TrackOrderResponse model with status, events, and delivery ETA fields",
       "Write unit test with mocked tracking JSON response"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-022",
@@ -261,7 +261,7 @@
       "Wire check_rate_limit before every call; apply cache on read tools only",
       "Write integration test verifying 30-min cache hit and create_order bypasses cache"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-023",
