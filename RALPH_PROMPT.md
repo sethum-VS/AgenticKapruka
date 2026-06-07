@@ -58,6 +58,10 @@ Rules:
    ```
    One commit per PRD item. Use the actual PRD id and title.
 
+## Sprint 5 — Ops & CI/CD (PRD-077+)
+
+Include a task to write an infrastructure-as-code bash script utilizing the GitHub CLI (gh) to programmatically configure repository secrets (`gh secret set`) and scaffold a complete `.github/workflows/main.yml` CI/CD pipeline that triggers the gcloud Cloud Run deployment automatically on push to main. (See **PRD-085**.)
+
 ## Completion
 
 When **all** items in `prd.json` have `passes: true`, output exactly:

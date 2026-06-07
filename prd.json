@@ -1006,5 +1006,17 @@
       "Test: add to cart and verify cart drawer shows item; mock create_order in test env"
     ],
     "passes": false
+  },
+  {
+    "id": "PRD-085",
+    "category": "ops",
+    "title": "IaC bash script for GitHub Actions secrets and Cloud Run CI/CD",
+    "description": "Write an infrastructure-as-code bash script utilizing the GitHub CLI (gh) to programmatically configure repository secrets (gh secret set) and scaffold a complete .github/workflows/main.yml CI/CD pipeline that triggers the gcloud Cloud Run deployment automatically on push to main.",
+    "steps": [
+      "Create scripts/setup_github_cicd.sh using gh secret set for deploy secrets (GCP service account key, GCP_PROJECT_ID, GCP_REGION, etc.)",
+      "Script scaffolds .github/workflows/main.yml with quality gates and a deploy job that builds, pushes to Artifact Registry, and runs gcloud run deploy on push to main",
+      "Document script prerequisites (gh auth, gcloud) in docs/DEPLOY.md and verify workflow YAML syntax"
+    ],
+    "passes": false
   }
 ]
