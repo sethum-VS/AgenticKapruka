@@ -403,17 +403,10 @@ Files: templates/components/product_carousel.html, app/templating.py, tests/unit
 Next: PRD-052 Category filter chips partial.
 
 ## PRD-052 — Category filter chips partial
-- Added `templates/components/category_chips.html`: HTMX filter chips (`hx-get /partials/search`, `hx-target="#results"`, `hx-swap="innerHTML"`, `hx-trigger="click"`) with `chip-active` / `chip-filter` Tailwind variants and `aria-pressed`.
+- Added `templates/components/category_chips.html`: HTMX filter chips from `hybrid_context.categories` with `hx-get /partials/search?category={name}`, `hx-target="#results"`, `hx-swap="innerHTML"`, `hx-trigger="click"`; `chip-active` / `chip-filter` Tailwind variants and `aria-pressed` for active state.
 - Extended `app/templating.py`: `urlencode` Jinja filter, `categories_for_chips(hybrid_context)`, `render_category_chips()`.
 - Added `GET /partials/search` stub in `app/routes/partials.py` returning HTML results fragment (live MCP search deferred to PRD-055).
 - Chip component styles in `static/css/input.css`; safelisted in `tailwind.config.js`.
-- Tests: `test_category_chips.py` (HTMX attrs, active variant, URL encoding, hybrid_context extraction, partials route); `test_category_chips_browser.py` Playwright harness via routed `page.goto` verifies chip click swaps #results without navigation.
+- Tests: `test_category_chips.py` (HTMX attrs, active variant, URL encoding, hybrid_context extraction, partials route); `test_category_chips_browser.py` Playwright harness via routed `http://localhost/` (HTMX 2 requires real document URL, not `about:blank` from `set_content`) — chip click swaps `#results` without navigation.
 Files: templates/components/category_chips.html, app/templating.py, app/routes/partials.py, static/css/input.css, tailwind.config.js, tests/fixtures/hybrid_context/sample_categories.json, tests/unit/{test_category_chips,test_category_chips_browser}.py, prd.json
-Next: PRD-053 Stock badge overlay component.
-
-## PRD-052 — Category filter chips partial
-- Added `templates/components/category_chips.html`: HTMX filter chips from `hybrid_context.categories` with `hx-get /partials/search?category={name}`, `hx-target="#results"`, `hx-swap="innerHTML"`; `chip-active` / `chip-filter` Tailwind variants and `aria-pressed` for active state.
-- Added `render_category_chips` + `urlencode` Jinja filter in `app/templating.py`; `chip-filter` / `chip-active` component classes in `static/css/input.css` with safelist entries.
-- Tests: `tests/unit/test_category_chips.py` (HTMX attrs, active variant, URL encoding); `tests/unit/test_category_chips_browser.py` Playwright harness via routed `http://localhost/` (HTMX 2 requires real document URL, not `about:blank` from `set_content`).
-Files: templates/components/category_chips.html, app/templating.py, static/css/input.css, tailwind.config.js, tests/unit/test_category_chips*.py, tests/fixtures/hybrid_context/sample_categories.json, prd.json
 Next: PRD-053 Stock badge overlay component.

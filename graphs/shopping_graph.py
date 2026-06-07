@@ -22,6 +22,7 @@ from graphs.nodes.retrieve_hybrid_context import (
 from graphs.nodes.zep_memory_write import zep_memory_write
 from graphs.state import AgentState
 from lib.kapruka.service import KaprukaService
+from lib.neo4j.client import Neo4jClient
 from lib.redis.checkpointer import get_checkpointer
 from lib.redis.client import RedisClient
 from lib.zep.client import ZepClient
@@ -34,6 +35,7 @@ class ShoppingGraphDeps:
     kapruka_service: KaprukaService | None = None
     client_ip: str | None = None
     genai_client: genai.Client | None = None
+    neo4j_client: Neo4jClient | None = None
     zep_client: ZepClient | None = None
 
 
@@ -47,6 +49,7 @@ def build_shopping_graph(
     genai_client = resolved.genai_client
     kapruka_service = resolved.kapruka_service
     client_ip = resolved.client_ip
+    neo4j_client = resolved.neo4j_client
     zep_client = resolved.zep_client
 
     async def _load_zep_memory(state: AgentState) -> dict[str, Any]:
@@ -56,7 +59,11 @@ def build_shopping_graph(
         return await analyze_intent(state, genai_client=genai_client)
 
     async def _retrieve_hybrid_context(state: AgentState) -> dict[str, Any]:
-        return await retrieve_hybrid_context(state, zep_client=zep_client)
+        return await retrieve_hybrid_context(
+            state,
+            zep_client=zep_client,
+            neo4j_client=neo4j_client,
+        )
 
     async def _call_mcp_tools(state: AgentState) -> dict[str, Any]:
         return await call_mcp_tools(
