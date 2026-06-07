@@ -753,7 +753,7 @@
       "POST selected date and city to check_delivery endpoint returning availability partial",
       "Write test verifying past date rejected with user-friendly error partial"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-064",

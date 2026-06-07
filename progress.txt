@@ -487,3 +487,13 @@ Next: PRD-062 Delivery city debounced autocomplete.
 - Tests: `test_delivery_city.py` (HTMX debounce attrs, li partial); `test_delivery_city_flow.py` integration (`q=Col` → Colombo HTML, short query skips MCP).
 Files: templates/checkout/{delivery_city,delivery_city_suggestions}.html, app/{routes/partials,templating}.py, tests/unit/test_delivery_city.py, tests/integration/test_delivery_city_flow.py, prd.json
 Next: PRD-063 Colombo timezone delivery date picker.
+
+## PRD-063 — Colombo timezone delivery date picker
+- Added `lib/utils/timezone.py`: `colombo_today` / `colombo_today_iso` via `zoneinfo.ZoneInfo("Asia/Colombo")`; `is_past_colombo_date` for server-side past-date gate before MCP.
+- Added `templates/checkout/delivery_date.html`: date input `min` from Colombo today, `hx-post /checkout/check-delivery` on change with city via `hx-include`; status target `#delivery-date-status`.
+- Added `delivery_date_status.html` (available/unavailable + rate/reason) and `delivery_date_error.html` (user-friendly validation alerts).
+- Implemented `POST /checkout/check-delivery` in `app/routes/checkout.py`: rejects past dates and invalid input with error partial; calls `KaprukaService.check_delivery` for valid requests.
+- `render_delivery_date` / `render_delivery_date_status` / `render_delivery_date_error` in `app/templating.py`.
+- Tests: `test_delivery_date.py` (zoneinfo, HTMX attrs, partials); `test_delivery_date_flow.py` integration (past date → error HTML, no MCP; valid date → availability partial).
+Files: lib/utils/{timezone,__init__}.py, templates/checkout/{delivery_date,delivery_date_status,delivery_date_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_delivery_date.py, tests/integration/test_delivery_date_flow.py, prd.json
+Next: PRD-064 Delivery address and instructions form.

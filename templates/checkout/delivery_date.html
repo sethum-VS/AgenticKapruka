@@ -1,0 +1,39 @@
+{# Delivery date picker — min date is today in Asia/Colombo; validates via Kapruka MCP. #}
+<div class="flex flex-col gap-3" data-testid="delivery-date-field">
+  <div class="flex flex-col gap-1">
+    <label for="delivery-city-value" class="text-sm font-medium text-commerce-ink">Delivery city</label>
+    <input
+      id="delivery-city-value"
+      name="city"
+      type="text"
+      required
+      placeholder="e.g. Colombo 03"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      data-testid="delivery-date-city-input"
+    />
+  </div>
+  <div class="flex flex-col gap-1">
+    <label for="delivery-date" class="text-sm font-medium text-commerce-ink">Delivery date</label>
+    <input
+      id="delivery-date"
+      name="delivery_date"
+      type="date"
+      required
+      min="{{ min_date }}"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      hx-post="/checkout/check-delivery"
+      hx-trigger="change"
+      hx-target="#delivery-date-status"
+      hx-swap="innerHTML"
+      hx-include="#delivery-city-value"
+      data-testid="delivery-date-input"
+    />
+    <p class="text-xs text-commerce-muted">Dates use Sri Lanka time (Asia/Colombo).</p>
+  </div>
+  <div
+    id="delivery-date-status"
+    class="empty:hidden"
+    data-testid="delivery-date-status"
+    aria-live="polite"
+  ></div>
+</div>

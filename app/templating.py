@@ -12,8 +12,10 @@ from urllib.parse import quote
 import jinja2
 from fastapi.templating import Jinja2Templates
 
+from lib.kapruka.types import CheckDeliveryOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import SUPPORTED_CURRENCIES, format_currency
+from lib.utils.timezone import colombo_today_iso
 
 SUPPORTED_CURRENCY_CODES: tuple[str, ...] = tuple(sorted(SUPPORTED_CURRENCIES))
 
@@ -134,6 +136,27 @@ def render_delivery_city_suggestions(cities: list[str]) -> str:
     templates = get_templates()
     template = templates.env.get_template("checkout/delivery_city_suggestions.html")
     return template.render(cities=cities)
+
+
+def render_delivery_date(*, min_date: str | None = None) -> str:
+    """Render templates/checkout/delivery_date.html with Colombo min date."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_date.html")
+    return template.render(min_date=min_date or colombo_today_iso())
+
+
+def render_delivery_date_status(*, result: CheckDeliveryOutput) -> str:
+    """Render delivery availability partial after kapruka_check_delivery."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_date_status.html")
+    return template.render(result=result)
+
+
+def render_delivery_date_error(*, title: str, message: str) -> str:
+    """Render user-friendly delivery date validation error partial."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_date_error.html")
+    return template.render(title=title, message=message)
 
 
 def render_currency_selector(*, currency: str = "LKR") -> str:
