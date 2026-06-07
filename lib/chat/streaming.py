@@ -28,7 +28,7 @@ def _render_streaming_assistant(message: str, element_id: str, *, oob: bool) -> 
         f'<div id="{element_id}" class="flex justify-start"{oob_attr}>'
         f'<div class="max-w-[85%] rounded-2xl rounded-bl-md border border-commerce-parchment '
         f'bg-white px-4 py-3 text-sm leading-relaxed text-commerce-ink shadow-sm" '
-        f'role="article" aria-label="Assistant message">'
+        f'role="assistant" aria-label="Assistant message">'
         f'<p class="whitespace-pre-wrap">{escaped}</p>'
         f"</div></div>"
     )

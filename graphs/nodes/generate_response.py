@@ -111,11 +111,11 @@ def _generate_reply_sync(
     return _parse_reply_response(response)
 
 
-def render_assistant_html(message: str) -> str:
+def render_assistant_html(message: str, *, products_html: str | None = None) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
     template = templates.env.get_template("chat/message_assistant.html")
-    return template.render(message=message)
+    return template.render(message=message, products_html=products_html)
 
 
 async def generate_response(

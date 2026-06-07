@@ -465,7 +465,7 @@
       "Support optional products block for inline carousel injection",
       "Render partial in isolation test verifying HTML structure"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-040",

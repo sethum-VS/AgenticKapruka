@@ -297,6 +297,14 @@ Next: PRD-038 HTMX SSE extension wiring (sse-connect/sse-swap on chat form).
 Files: templates/chat/index.html, static/js/chat-sse.js, tests/unit/{test_chat,test_chat_sse_js,test_chat_sse_browser}.py, prd.json
 Next: PRD-039 Assistant message Jinja partial (products carousel slot).
 
+## PRD-039 — Assistant message Jinja partial
+- Enhanced `templates/chat/message_assistant.html`: `role="assistant"`, `data-role="assistant-message"`, `.prose-assistant` wrapper, optional `products_html` slot (`data-slot="product-carousel"`) for inline carousel injection via `| safe`.
+- Added `.prose-assistant` component styles in `static/css/input.css` (lists, links, whitespace) without `@tailwindcss/typography`; safelisted chat bubble utilities in `tailwind.config.js`.
+- Extended `render_assistant_html(message, *, products_html=None)` in `generate_response.py`; aligned streaming partial `role="assistant"` in `lib/chat/streaming.py`.
+- Isolation tests: `tests/unit/test_message_assistant.py` (structure, products block, XSS escape, safe carousel HTML); updated `test_generate_response.py` assertions.
+Files: templates/chat/message_assistant.html, static/css/input.css, tailwind.config.js, graphs/nodes/generate_response.py, lib/chat/streaming.py, tests/unit/{test_message_assistant,test_generate_response}.py, prd.json
+Next: PRD-041 Neo4j ontology Cypher schema (PRD-040 already passes).
+
 ## PRD-040 — Chat route integration test
 - Added `tests/integration/test_chat_flow.py`: httpx `AsyncClient` POSTs `show me birthday cakes` to `/chat/stream`, collects SSE body, asserts `role="assistant"`, `data-role="assistant-message"`, user message present, no error alert markup.
 - Mocks `build_shopping_graph_deps` with `ShoppingGraphDeps` (mocked `KaprukaService` + Gemini); real `get_compiled_chat_graph` + full shopping StateGraph run.

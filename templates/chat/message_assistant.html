@@ -1,9 +1,21 @@
-<div class="flex justify-start">
+<div class="flex justify-start" data-role="assistant-message">
   <div
-    class="max-w-[85%] rounded-2xl rounded-bl-md border border-commerce-parchment bg-white px-4 py-3 text-sm leading-relaxed text-commerce-ink shadow-sm"
-    role="article"
+    class="max-w-[85%] rounded-2xl rounded-bl-md border border-commerce-parchment bg-white px-4 py-3 shadow-sm"
+    role="assistant"
     aria-label="Assistant message"
   >
-    <p class="whitespace-pre-wrap">{{ message }}</p>
+    <div class="prose-assistant">
+      <p>{{ message }}</p>
+    </div>
+    {% if products_html %}
+    <div
+      class="assistant-products mt-3 border-t border-commerce-parchment/60 pt-3"
+      data-slot="product-carousel"
+      role="region"
+      aria-label="Suggested products"
+    >
+      {{ products_html | safe }}
+    </div>
+    {% endif %}
   </div>
 </div>
