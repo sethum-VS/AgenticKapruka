@@ -201,7 +201,7 @@
       "Force response_format json in MCP params",
       "Write unit test with mocked MCP returning sample JSON verifying parsed ProductResult list"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-018",
@@ -213,7 +213,7 @@
       "Implement list_categories(depth) returning nested CategoryTree model",
       "Write unit tests with fixture JSON for both tools"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-019",
@@ -225,7 +225,7 @@
       "Implement check_delivery validating YYYY-MM-DD date format and returning availability bool",
       "Write unit tests covering city_not_deliverable and date_not_deliverable error parsing"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-020",
@@ -237,7 +237,7 @@
       "Validate cart 1-30 items, quantity 1-99, gift_message max 300, icing_text cakes only max 120",
       "Write unit test verifying parsed CreateOrderResponse fields match MCP JSON schema"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-021",
@@ -249,7 +249,7 @@
       "Define TrackOrderResponse model with status, events, and delivery ETA fields",
       "Write unit test with mocked tracking JSON response"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-022",
@@ -261,7 +261,7 @@
       "Wire check_rate_limit before every call; apply cache on read tools only",
       "Write integration test verifying 30-min cache hit and create_order bypasses cache"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-023",
@@ -273,7 +273,7 @@
       "Add empty state placeholder with suggested prompts for gift discovery",
       "Verify GET /chat renders 200 HTML with empty state visible"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-024",
@@ -285,7 +285,7 @@
       "Configure hx-trigger submit and hx-indicator for loading spinner",
       "Manual test: submit message triggers POST without full page reload"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-025",
@@ -297,7 +297,7 @@
       "Wire htmx:afterSwap event listener to call scrollToBottom",
       "Verify in browser that new messages auto-scroll into view"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-026",
@@ -309,7 +309,7 @@
       "Add reducer annotations for messages list using operator.add",
       "Write unit test instantiating minimal AgentState dict passes type check"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-027",

@@ -127,3 +127,75 @@ Next: PRD-016 Shared Pydantic types for MCP tools (lib/kapruka/types.py).
 - Unit tests: gift_message 300-char boundary + 301 rejection; icing_text 120-char boundary + 121 rejection; cart size bounds.
 Files: lib/kapruka/types.py, lib/kapruka/__init__.py, tests/unit/test_kapruka_types.py
 Next: PRD-017 Wrapper for kapruka_search_products (lib/kapruka/tools/search_products.py).
+
+## PRD-017 — Wrapper for kapruka_search_products
+- Added `lib/kapruka/tools/search_products.py`: async `search_products(client, *, q, category, min_price, max_price, in_stock_only, sort, limit, cursor, currency)` builds validated `SearchProductsInput`, forces `response_format=json`, calls MCP `kapruka_search_products`, parses via `parse_mcp_error` + `SearchProductsOutput.model_validate`.
+- Handles plain-text `No products found for …` MCP responses as `KaprukaError(no_products_found)` before JSON parse.
+- Unit tests: mocked JSON → typed `ProductResult` list, forced response_format, no-products error, input validation short-circuit.
+Files: lib/kapruka/tools/{__init__,search_products}.py, lib/kapruka/__init__.py, tests/unit/test_search_products.py
+Next: PRD-018 Wrapper for kapruka_get_product and kapruka_list_categories.
+
+## PRD-018 — Wrapper for kapruka_get_product and kapruka_list_categories
+- Added `lib/kapruka/tools/get_product.py`: async `get_product(client, *, product_id, currency, type)` builds validated `GetProductInput`, forces `response_format=json`, calls MCP `kapruka_get_product`, parses via `parse_mcp_error` + `GetProductOutput.model_validate`.
+- Added `lib/kapruka/tools/list_categories.py`: async `list_categories(client, *, depth)` builds `ListCategoriesInput`, forces JSON, returns nested `ListCategoriesOutput` with `CategoryNode` children.
+- Unit tests: fixture JSON for product detail (variants, shipping, category path) and nested category tree (depth=2); forced response_format; input validation short-circuit; product_not_found → KaprukaNotFoundError.
+Files: lib/kapruka/tools/{get_product,list_categories}.py, lib/kapruka/{__init__,tools/__init__}.py, tests/unit/{test_get_product,test_list_categories}.py, prd.json
+Next: PRD-019 Wrapper for delivery city and check_delivery tools (lib/kapruka/tools/delivery.py).
+
+## PRD-019 — Wrapper for delivery city and check_delivery tools
+- Added `lib/kapruka/tools/delivery.py`: async `list_delivery_cities(client, *, query, limit)` returns `list[str]` of canonical city names from `ListDeliveryCitiesOutput`; async `check_delivery(client, *, city, delivery_date, product_id)` validates via `CheckDeliveryInput` (YYYY-MM-DD) and returns typed `CheckDeliveryOutput` with `available` bool plus rate/reason/next_available_date.
+- Both wrappers force `response_format=json`, call MCP via `parse_mcp_error` + Pydantic validate; `city_not_deliverable` and `date_not_deliverable` map to `KaprukaValidationError`.
+- Unit tests: city name extraction, forced JSON format, limit/date validation short-circuit, available/unavailable payloads, both deliverability error codes.
+Files: lib/kapruka/tools/delivery.py, lib/kapruka/tools/__init__.py, lib/kapruka/__init__.py, tests/unit/test_delivery.py, prd.json
+Next: PRD-020 Wrapper for kapruka_create_order (lib/kapruka/tools/create_order.py).
+
+## PRD-020 — Wrapper for kapruka_create_order
+- Added `lib/kapruka/tools/create_order.py`: async `create_order(client, *, cart, recipient, delivery, sender, gift_message, currency)` builds validated `CreateOrderInput`, forces `response_format=json`, asserts `is_cacheable_tool` is False (write path never read-cached), calls MCP `kapruka_create_order`, parses via `parse_mcp_error` + `CreateOrderResponse.model_validate`.
+- Pre-MCP validation: `_validate_cart_icing_text` rejects icing_text on non-cake SKUs (CAKE* prefix); cart/qty/gift_message bounds enforced by Pydantic models from PRD-016.
+- Unit tests: full response field parsing (order_ref, checkout_url, expires_at, summary totals), forced JSON format, cache bypass, cart/qty/gift_message/icing_text validation short-circuit, empty_cart → KaprukaValidationError.
+Files: lib/kapruka/tools/create_order.py, lib/kapruka/tools/__init__.py, lib/kapruka/__init__.py, tests/unit/test_create_order.py, prd.json
+Next: PRD-021 Wrapper for kapruka_track_order (lib/kapruka/tools/track_order.py).
+
+## PRD-021 — Wrapper for kapruka_track_order
+- Added `lib/kapruka/tools/track_order.py`: async `track_order(client, *, order_number)` builds validated `TrackOrderInput`, forces `response_format=json`, calls MCP `kapruka_track_order`, parses via `parse_mcp_error` + `TrackOrderOutput.model_validate`.
+- Reused PRD-016 `TrackOrderOutput` (status, status_display, delivery_date ETA, progress events, recipient, items) rather than introducing a duplicate TrackOrderResponse alias.
+- Unit tests: full response field parsing (status, progress timeline, delivery_date), forced response_format, order_number min-length validation, order_not_found → KaprukaNotFoundError.
+Files: lib/kapruka/tools/track_order.py, lib/kapruka/tools/__init__.py, lib/kapruka/__init__.py, tests/unit/test_track_order.py, prd.json
+Next: PRD-022 KaprukaService facade with cache and rate limiting (lib/kapruka/service.py).
+
+## PRD-022 — KaprukaService facade with cache and rate limiting
+- Added `lib/kapruka/service.py` with `KaprukaService(redis_client, mcp_client)`: methods for all 7 MCP tools, each accepting `client_ip` for per-IP sliding-window limits via `check_rate_limit`.
+- Read tools use `_cached_read`: cache lookup before MCP, `set_cached` (30-min TTL) on miss; `create_order` rate-limited only, never cached (delegates to PRD-020 wrapper).
+- Integration tests (`tests/integration/test_kapruka_service.py`): second identical `search_products` skips MCP (TTL ≤ 1800s); repeated `create_order` always hits MCP with no Redis cache keys.
+Files: lib/kapruka/service.py, lib/kapruka/__init__.py, tests/integration/test_kapruka_service.py, prd.json
+Next: PRD-023 Chat viewport Jinja template with empty state (templates/chat/index.html).
+
+## PRD-023 — Chat viewport Jinja template with empty state
+- Created `templates/chat/index.html` extending `base.html`: full-viewport flex column, header with Kapruka branding, `#chat-messages` scroll container, `#chat-empty-state` welcome card with four gift-discovery suggested prompts.
+- Warm commerce Tailwind styling: `card-commerce`, `kapruka-600` accent, `commerce-cream`/`commerce-parchment` palette; no HTMX form yet (PRD-024).
+- Updated `app/routes/chat.py` to render `TemplateResponse` for GET `/chat` instead of JSON stub.
+- Unit tests: `tests/unit/test_chat.py` (template isolation + GET /chat 200 HTML with empty state); removed obsolete JSON stub test from `test_main.py`.
+Files: templates/chat/index.html, app/routes/chat.py, tests/unit/test_chat.py, tests/unit/test_main.py, prd.json
+Next: PRD-024 HTMX chat input form (hx-post /chat/stream).
+
+## PRD-024 — HTMX chat input form
+- Added sticky footer chat form to `templates/chat/index.html`: textarea `name=message`, submit button, `hx-post="/chat/stream"`, `hx-ext="sse"`, `hx-target="#chat-messages"`, `hx-swap="beforeend"`, `hx-trigger="submit"`, `hx-indicator="#chat-loading"` with spinner.
+- Created `templates/chat/message_user.html` user bubble partial; POST `/chat/stream` stub returns user HTML + OOB delete of `#chat-empty-state` (full SSE streaming deferred to PRD-037).
+- Unit tests: form HTMX attributes in GET /chat HTML; POST returns swappable bubble; whitespace-only message rejected with 422.
+Files: templates/chat/{index,message_user}.html, app/routes/chat.py, tests/unit/test_chat.py, prd.json
+Next: PRD-025 Alpine.js focus and scroll helpers.
+
+## PRD-025 — Alpine.js focus and scroll helpers
+- Added `static/js/chat-helpers.js`: Alpine `chatHelpers` component with `scrollToBottom()` (sets `#chat-messages` scrollTop) and `focusInput()` (refocuses `#chat-message` textarea).
+- Wired `htmx:afterSwap` on `#chat-messages` swaps to scroll; `htmx:afterRequest` on successful `#chat-form` submit to refocus input.
+- Updated `templates/chat/index.html`: `x-data="chatHelpers()"` on viewport wrapper, `x-ref="messages"` / `x-ref="input"`, `min-h-0` flex fixes for scrollable message list; script loaded in `head_extra` before deferred Alpine.
+- Unit tests: DOM attribute assertions in `test_chat.py`, JS source checks in `test_chat_helpers_js.py`; Playwright browser harness verifies scroll-to-bottom and input focus on HTMX events.
+Files: static/js/chat-helpers.js, templates/chat/index.html, tests/unit/{test_chat,test_chat_helpers_js,test_chat_helpers_browser}.py, prd.json
+Next: PRD-026 AgentState TypedDict schema (graphs/state.py).
+
+## PRD-026 — AgentState TypedDict schema
+- Added `graphs/state.py` with `AgentState` TypedDict: `messages` (Annotated reducer via `operator.add` on `list[BaseMessage]`), optional orchestration fields for intent, hybrid_context, tool_calls/results, tool_call_count, model_tier, session_id, zep_thread_id, currency, checkout_state, response_html.
+- Literal aliases: `Intent`, `ModelTier`, `CheckoutStep`, `CurrencyCode` aligned with downstream PRD-028/032/067 routing and MCP currency codes.
+- Unit tests: minimal dict type-check, all 12 field keys + messages reducer metadata, fully populated state assignment.
+Files: graphs/{state,__init__}.py, tests/unit/test_agent_state.py, prd.json
+Next: PRD-027 Redis LangGraph checkpointer (lib/redis/checkpointer.py).

@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title | default("Chat — AgenticKapruka") }}{% endblock %}
+
+{% block head_extra %}
+<script src="/static/js/chat-helpers.js"></script>
+{% endblock %}
+
+{% block body %}
+<div class="flex min-h-screen flex-col" x-data="chatHelpers()">
+  <header class="border-b border-commerce-parchment bg-white/80 backdrop-blur-sm">
+    <div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-3 sm:px-6">
+      <div class="flex items-center gap-3">
+        <span
+          class="flex h-9 w-9 items-center justify-center rounded-full bg-kapruka-600 text-sm font-semibold text-white"
+          aria-hidden="true"
+        >K</span>
+        <div>
+          <h1 class="text-base font-semibold text-commerce-ink">Kapruka Gift Assistant</h1>
+          <p class="text-xs text-commerce-muted">Discover gifts, cakes, and flowers across Sri Lanka</p>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto flex w-full max-w-3xl min-h-0 flex-1 flex-col px-4 py-6 sm:px-6">
+    <div
+      id="chat-messages"
+      x-ref="messages"
+      class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto"
+      role="log"
+      aria-live="polite"
+      aria-label="Chat messages"
+    >
+      <div
+        id="chat-empty-state"
+        class="flex flex-1 flex-col items-center justify-center px-4 py-12 text-center"
+      >
+        <div class="card-commerce max-w-md p-8">
+          <p class="mb-1 text-sm font-medium uppercase tracking-wide text-kapruka-600">
+            Welcome
+          </p>
+          <h2 class="mb-2 text-xl font-semibold text-commerce-ink">
+            What would you like to send today?
+          </h2>
+          <p class="mb-6 text-sm leading-relaxed text-commerce-muted">
+            Ask me to find birthday cakes, fresh flowers, thoughtful combos, or check delivery
+            to any city in Sri Lanka.
+          </p>
+
+          <p class="mb-3 text-xs font-medium uppercase tracking-wide text-commerce-muted">
+            Try asking
+          </p>
+          <ul class="flex flex-col gap-2 text-left" role="list">
+            <li>
+              <span class="block rounded-lg border border-commerce-parchment bg-commerce-cream px-4 py-3 text-sm text-commerce-ink">
+                Birthday cake for mom in Colombo
+              </span>
+            </li>
+            <li>
+              <span class="block rounded-lg border border-commerce-parchment bg-commerce-cream px-4 py-3 text-sm text-commerce-ink">
+                Fresh roses delivery to Galle tomorrow
+              </span>
+            </li>
+            <li>
+              <span class="block rounded-lg border border-commerce-parchment bg-commerce-cream px-4 py-3 text-sm text-commerce-ink">
+                Gift ideas under Rs. 5,000
+              </span>
+            </li>
+            <li>
+              <span class="block rounded-lg border border-commerce-parchment bg-commerce-cream px-4 py-3 text-sm text-commerce-ink">
+                Track order VIMP34456CB2
+              </span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="border-t border-commerce-parchment bg-white/80 backdrop-blur-sm">
+    <div class="mx-auto max-w-3xl px-4 py-4 sm:px-6">
+      <form
+        id="chat-form"
+        hx-post="/chat/stream"
+        hx-ext="sse"
+        hx-target="#chat-messages"
+        hx-swap="beforeend"
+        hx-trigger="submit"
+        hx-indicator="#chat-loading"
+        class="relative"
+      >
+        <div class="flex items-end gap-3">
+          <label for="chat-message" class="sr-only">Message</label>
+          <textarea
+            id="chat-message"
+            x-ref="input"
+            name="message"
+            rows="2"
+            required
+            placeholder="Ask about gifts, cakes, flowers, or delivery…"
+            class="min-h-[2.75rem] flex-1 resize-none rounded-xl border border-commerce-parchment bg-white px-4 py-3 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+          ></textarea>
+          <button type="submit" class="btn-primary shrink-0 px-5 py-3">
+            Send
+          </button>
+        </div>
+
+        <div
+          id="chat-loading"
+          class="htmx-indicator absolute -top-8 left-0 flex items-center gap-2 text-xs text-commerce-muted"
+          aria-live="polite"
+          aria-label="Sending message"
+        >
+          <svg
+            class="h-4 w-4 animate-spin text-kapruka-600"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <circle
+              class="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              stroke-width="4"
+            ></circle>
+            <path
+              class="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            ></path>
+          </svg>
+          <span>Sending…</span>
+        </div>
+      </form>
+    </div>
+  </footer>
+</div>
+{% endblock %}
