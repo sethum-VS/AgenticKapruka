@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.3.0] - 2026-06-08
+
+### Added
+
+- SSE streaming chat at `POST /chat/stream` with LangGraph `astream` updates and HTMX-compatible HTML fragments
+- HTMX SSE bridge (`chat-sse.js`) posting form data via `fetch` while `htmx-ext-sse` handles swaps
+- Neo4j ontology schema (`lib/neo4j/ontology.py`), category ingest script, and node property enrichment (slug, display_name, kapruka_id)
+- Vertex AI `text-embedding-005` client (`lib/embeddings/vertex_embeddings.py`) with batch embed support
+- Chat route integration test and assistant message partial with optional product carousel slot
+
+### Fixed
+
+- Commit missing `ontology.py` module required by ingest imports (CI/fresh-clone import failure)
+- HMAC-signed `ak_session` cookies prevent client-controlled LangGraph checkpoint thread IDs
+- Chat stream setup failures now emit a visible SSE error alert instead of an empty body
+- Rate-limit client IP ignores spoofed `X-Forwarded-For` unless behind a trusted proxy
+
 ## [0.0.2.0] - 2026-06-08
 
 ### Added

@@ -142,5 +142,6 @@ async def test_generate_response_parses_json_text_when_parsed_missing() -> None:
 def test_render_assistant_html_structure() -> None:
     html = render_assistant_html("Hello from Kapruka!")
     assert "Hello from Kapruka!" in html
-    assert 'role="article"' in html
+    assert 'role="assistant"' in html
+    assert "prose-assistant" in html
     assert "justify-start" in html

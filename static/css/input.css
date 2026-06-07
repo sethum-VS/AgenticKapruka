@@ -24,4 +24,33 @@
   .card-commerce {
     @apply rounded-xl border border-commerce-parchment bg-white shadow-sm;
   }
+
+  /* Assistant bubble typography (standalone Tailwind — no @tailwindcss/typography plugin). */
+  .prose-assistant {
+    @apply max-w-none text-sm leading-relaxed text-commerce-ink;
+  }
+
+  .prose-assistant :where(p) {
+    @apply whitespace-pre-wrap;
+  }
+
+  .prose-assistant :where(ul, ol) {
+    @apply my-2 pl-5;
+  }
+
+  .prose-assistant :where(ul) {
+    @apply list-disc;
+  }
+
+  .prose-assistant :where(ol) {
+    @apply list-decimal;
+  }
+
+  .prose-assistant :where(a) {
+    @apply font-medium text-kapruka-600 underline decoration-kapruka-600/30 underline-offset-2;
+  }
+
+  .prose-assistant :where(strong) {
+    @apply font-semibold text-commerce-ink;
+  }
 }

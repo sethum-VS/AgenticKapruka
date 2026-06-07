@@ -441,7 +441,7 @@
       "Yield SSE events with data field containing HTML fragments per token or chunk",
       "Write httpx async test verifying Content-Type text/event-stream and event stream format"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-038",
@@ -453,7 +453,7 @@
       "Set sse-connect and sse-swap on chat form or dedicated SSE listener element",
       "Manual browser test verifying streamed tokens appear incrementally in chat"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-039",
@@ -465,7 +465,7 @@
       "Support optional products block for inline carousel injection",
       "Render partial in isolation test verifying HTML structure"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-040",
@@ -477,7 +477,7 @@
       "POST message='show me birthday cakes' and collect SSE stream",
       "Assert response contains assistant role markup and no unhandled 500 errors"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-041",
@@ -489,7 +489,7 @@
       "Define relationship types and property schemas in ontology.py",
       "Run migration script against test Neo4j verifying constraints created"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-042",
@@ -501,7 +501,7 @@
       "Map taxonomy to triplet structure and execute MERGE Cypher batches",
       "Run script and verify node counts with MATCH (n) RETURN labels(n), count(*)"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-043",
@@ -513,7 +513,7 @@
       "Store source kapruka_id on each node for traceability",
       "Verify sample Birthday occasion node has display_name and slug properties"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-044",
@@ -525,7 +525,7 @@
       "Configure GCP_PROJECT_ID and GCP_LOCATION from Settings",
       "Write unit test with mocked aiplatform verifying 768-dim vector returned"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-045",

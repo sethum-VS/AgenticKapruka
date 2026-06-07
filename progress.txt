@@ -281,3 +281,73 @@ Next: PRD-036 Cross-session preference extraction.
 - Unit tests: `test_zep_preferences.py`, category preference in `test_call_mcp_tools.py`, hybrid context merge in `test_retrieve_hybrid_context.py`.
 Files: lib/zep/{preferences,client,__init__}.py, graphs/nodes/{retrieve_hybrid_context,call_mcp_tools}.py, graphs/shopping_graph.py, tests/unit/{test_zep_preferences,test_retrieve_hybrid_context,test_call_mcp_tools}.py, prd.json
 Next: PRD-037 SSE streaming chat endpoint.
+
+## PRD-037 — SSE streaming chat endpoint
+- Replaced POST `/chat/stream` HTML stub with `StreamingResponse` (`text/event-stream`) driving `graph.astream(stream_mode="updates")`.
+- Added `lib/chat/`: `sse.format_sse_event` + `chunk_text`, `streaming.iter_chat_sse_events` (user bubble → progressive assistant chunks via OOB → final `response_html`), `deps` for lazy KaprukaService/MCP + graph compile, `session` cookie (`ak_session`).
+- Route wires Redis checkpointer thread_id=session_id, Zep `get_or_create_session` when zep client present, `resolve_turn_state` for checkpoint follow-ups.
+- Unit tests: `test_chat_sse.py` (SSE framing + stream iterator), updated `test_chat.py` httpx async SSE integration with mocked graph.
+Files: app/routes/chat.py, lib/chat/{__init__,sse,streaming,deps,session}.py, tests/unit/{test_chat,test_chat_sse}.py, prd.json
+Next: PRD-038 HTMX SSE extension wiring (sse-connect/sse-swap on chat form).
+
+## PRD-038 — HTMX SSE extension wiring
+- `base.html` already ships `hx-ext="sse"` + `htmx-ext-sse@2.2.2`; chat form now uses `sse-connect="/chat/stream"` and a hidden `#chat-sse-listener` with `sse-swap="message"` targeting `#chat-messages` (`beforeend`).
+- Added `static/js/chat-sse.js`: bridges POST `/chat/stream` (SSE extension only supports GET EventSource) via fetch + `htmx.swap`, stubs `htmx.createEventSource` for the connect path, dispatches `htmx:afterSwap`/`htmx:afterRequest` for Alpine chatHelpers.
+- Playwright harness (`test_chat_sse_browser.py`) verifies incremental `message` events append into `#chat-messages`; static contract test for `chat-sse.js`.
+Files: templates/chat/index.html, static/js/chat-sse.js, tests/unit/{test_chat,test_chat_sse_js,test_chat_sse_browser}.py, prd.json
+Next: PRD-039 Assistant message Jinja partial (products carousel slot).
+
+## PRD-039 — Assistant message Jinja partial
+- Enhanced `templates/chat/message_assistant.html`: `role="assistant"`, `data-role="assistant-message"`, `.prose-assistant` wrapper, optional `products_html` slot (`data-slot="product-carousel"`) for inline carousel injection via `| safe`.
+- Added `.prose-assistant` component styles in `static/css/input.css` (lists, links, whitespace) without `@tailwindcss/typography`; safelisted chat bubble utilities in `tailwind.config.js`.
+- Extended `render_assistant_html(message, *, products_html=None)` in `generate_response.py`; aligned streaming partial `role="assistant"` in `lib/chat/streaming.py`.
+- Isolation tests: `tests/unit/test_message_assistant.py` (structure, products block, XSS escape, safe carousel HTML); updated `test_generate_response.py` assertions.
+Files: templates/chat/message_assistant.html, static/css/input.css, tailwind.config.js, graphs/nodes/generate_response.py, lib/chat/streaming.py, tests/unit/{test_message_assistant,test_generate_response}.py, prd.json
+Next: PRD-041 Neo4j ontology Cypher schema (PRD-040 already passes).
+
+## PRD-040 — Chat route integration test
+- Added `tests/integration/test_chat_flow.py`: httpx `AsyncClient` POSTs `show me birthday cakes` to `/chat/stream`, collects SSE body, asserts `role="assistant"`, `data-role="assistant-message"`, user message present, no error alert markup.
+- Mocks `build_shopping_graph_deps` with `ShoppingGraphDeps` (mocked `KaprukaService` + Gemini); real `get_compiled_chat_graph` + full shopping StateGraph run.
+- Patches `AsyncRedisSaver.asetup` for fakeredis (same FT._LIST workaround as `test_redis_checkpointer.py`).
+Files: tests/integration/test_chat_flow.py, prd.json
+Next: PRD-041 Neo4j ontology Cypher schema.
+
+## PRD-041 — Neo4j ontology Cypher schema
+- Added `lib/neo4j/ontology.py`: labels (Occasion, Category, ProductType), relationships (OCCASION_TO_CATEGORY, CATEGORY_TO_PRODUCT_TYPE), unique `id` constraints per label via `CREATE CONSTRAINT … IF NOT EXISTS`, Pydantic property schemas (`OntologyNodeProperties`, relationship weight models).
+- `apply_ontology_schema` / `verify_ontology_schema` / `list_ontology_constraints` for migration + SHOW CONSTRAINTS verification.
+- Added `scripts/migrate_ontology.py` CLI applying schema against Settings Neo4j URI and printing verified constraints.
+- Unit tests (`tests/unit/test_neo4j_ontology.py`): recording mock driver verifies all constraint Cypher runs and `verify_ontology_schema` passes post-migration.
+- Exported ontology helpers from `lib/neo4j/__init__.py` for PRD-042 ingest script.
+Files: lib/neo4j/{ontology,__init__}.py, scripts/migrate_ontology.py, tests/unit/test_neo4j_ontology.py, prd.json
+Next: PRD-042 Category ingestion script (scripts/ingest_categories.py).
+
+## PRD-042 — Category ingestion script
+- Added `lib/neo4j/ingest_categories.py`: maps Kapruka tree L0→Category, L1→Occasion, L2→ProductType (synthesizes ProductType from L0+L1 when grandchildren absent); batched UNWIND MERGE for nodes and OCCASION_TO_CATEGORY / CATEGORY_TO_PRODUCT_TYPE edges; `count_ontology_nodes_by_label` for verification.
+- `INGEST_CATEGORY_DEPTH=2` — MCP `kapruka_list_categories` caps depth at 2 (PRD step cites 3; triplets complete via synthesized ProductType ids on two-level branches).
+- Added `scripts/ingest_categories.py` CLI: KaprukaService fetch → apply ontology schema → ingest → print label counts.
+- Unit tests (`tests/unit/test_ingest_categories.py`): taxonomy mapping, batched MERGE, full ingest + COUNT BY LABEL on recording mock driver.
+Files: lib/neo4j/{ingest_categories,__init__}.py, scripts/ingest_categories.py, tests/unit/test_ingest_categories.py, prd.json
+Next: PRD-043 Ontology node property enrichment.
+
+## PRD-043 — Ontology node property enrichment
+- Extended `lib/neo4j/ingest_categories.py`: `collect_node_enrichments` derives slug, display_name, description, and kapruka_id (URL path segment) per Category/Occasion/ProductType; MERGE Cypher SETs properties on all node types during ingest.
+- `kapruka_id_from_url` extracts trailing browse path segment; contextual descriptions built per label for embedding (PRD-045).
+- Added `fetch_ontology_node_properties` for post-ingest verification queries.
+- Unit tests: enrichment mapping, kapruka_id extraction, Birthday occasion slug/display_name/kapruka_id assertion via mock store + fetch.
+Files: lib/neo4j/ingest_categories.py, tests/unit/test_ingest_categories.py, prd.json
+Next: PRD-044 Vertex AI text-embedding-005 client.
+
+## PRD-044 — Vertex AI text-embedding-005 client
+- Added `lib/embeddings/vertex_embeddings.py`: `embed_texts(texts)` async wrapper around Vertex `TextEmbeddingModel` (`text-embedding-005`, 768 dims); `vertexai.init` uses `gcp_project_id` / `gcp_location` from Settings; blocking SDK call via `asyncio.to_thread`; optional `model` injection for tests.
+- Exported `EMBEDDING_MODEL`, `EMBEDDING_DIMENSION`, `embed_texts` from `lib/embeddings/__init__.py`.
+- Unit tests (`tests/unit/test_vertex_embeddings.py`): mocked model asserts 768-dim vector, batch support, empty-list short-circuit, Settings-driven `vertexai.init` + `from_pretrained`.
+Files: lib/embeddings/{__init__,vertex_embeddings}.py, tests/unit/test_vertex_embeddings.py, prd.json
+Next: PRD-045 Batch embed ontology nodes.
+
+## Review hardening — signed chat sessions (post PRD-037–044)
+- `lib/chat/session.py`: HMAC-signed `ak_session` cookie bound to `SESSION_SECRET`; rejects client-forged thread IDs (fixes checkpoint IDOR/session fixation).
+- `app/routes/chat.py`: yield SSE error fragment on pre-stream failures; `Secure` cookie when `APP_ENV=production`.
+- `lib/chat/deps.py`: honor `X-Forwarded-For` only behind trusted proxy (production or localhost peer).
+- Tests: `test_chat_session.py`, `test_chat_deps.py`, setup-failure + cookie reuse in `test_chat.py`.
+Files: lib/chat/session.py, app/routes/chat.py, lib/chat/deps.py, tests/unit/{test_chat_session,test_chat_deps,test_chat}.py
+Next: PRD-045 Batch embed ontology nodes.
