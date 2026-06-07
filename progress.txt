@@ -336,3 +336,18 @@ Next: PRD-043 Ontology node property enrichment.
 - Unit tests: enrichment mapping, kapruka_id extraction, Birthday occasion slug/display_name/kapruka_id assertion via mock store + fetch.
 Files: lib/neo4j/ingest_categories.py, tests/unit/test_ingest_categories.py, prd.json
 Next: PRD-044 Vertex AI text-embedding-005 client.
+
+## PRD-044 — Vertex AI text-embedding-005 client
+- Added `lib/embeddings/vertex_embeddings.py`: `embed_texts(texts)` async wrapper around Vertex `TextEmbeddingModel` (`text-embedding-005`, 768 dims); `vertexai.init` uses `gcp_project_id` / `gcp_location` from Settings; blocking SDK call via `asyncio.to_thread`; optional `model` injection for tests.
+- Exported `EMBEDDING_MODEL`, `EMBEDDING_DIMENSION`, `embed_texts` from `lib/embeddings/__init__.py`.
+- Unit tests (`tests/unit/test_vertex_embeddings.py`): mocked model asserts 768-dim vector, batch support, empty-list short-circuit, Settings-driven `vertexai.init` + `from_pretrained`.
+Files: lib/embeddings/{__init__,vertex_embeddings}.py, tests/unit/test_vertex_embeddings.py, prd.json
+Next: PRD-045 Batch embed ontology nodes.
+
+## Review hardening — signed chat sessions (post PRD-037–044)
+- `lib/chat/session.py`: HMAC-signed `ak_session` cookie bound to `SESSION_SECRET`; rejects client-forged thread IDs (fixes checkpoint IDOR/session fixation).
+- `app/routes/chat.py`: yield SSE error fragment on pre-stream failures; `Secure` cookie when `APP_ENV=production`.
+- `lib/chat/deps.py`: honor `X-Forwarded-For` only behind trusted proxy (production or localhost peer).
+- Tests: `test_chat_session.py`, `test_chat_deps.py`, setup-failure + cookie reuse in `test_chat.py`.
+Files: lib/chat/session.py, app/routes/chat.py, lib/chat/deps.py, tests/unit/{test_chat_session,test_chat_deps,test_chat}.py
+Next: PRD-045 Batch embed ontology nodes.

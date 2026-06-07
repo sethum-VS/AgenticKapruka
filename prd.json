@@ -525,7 +525,7 @@
       "Configure GCP_PROJECT_ID and GCP_LOCATION from Settings",
       "Write unit test with mocked aiplatform verifying 768-dim vector returned"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-045",
