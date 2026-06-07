@@ -66,3 +66,11 @@ Next: PRD-008 Async Redis client wrapper (lib/redis/client.py).
 - Lifespan wiring deferred to PRD-011 (`get_redis` dependency); client wrapper is standalone.
 Files: lib/redis/__init__.py, lib/redis/client.py, tests/unit/test_redis_client.py, pyproject.toml
 Next: PRD-009 Sliding-window rate limiter (lib/redis/rate_limit.py).
+
+## PRD-009 — Sliding-window rate limiter per client IP
+- Added `lib/redis/rate_limit.py`: atomic sliding-window via Redis sorted sets + Lua script; 60 req/min global (`rate:{ip}:global`) and 30 `kapruka_create_order`/hour (`rate:{ip}:create_order`).
+- `check_rate_limit(redis_client, ip, tool_name)` raises `RateLimitExceeded` with `retry_after_seconds`; `retry_after_header()` maps to HTTP `Retry-After`.
+- All MCP tools share the global bucket; create_order also increments its dedicated hourly bucket.
+- Unit tests: 60th allowed, 61st raises + httpx ASGI 429 with Retry-After, separate keys, create_order 31st block, shared global across read tools.
+Files: lib/redis/rate_limit.py, lib/redis/__init__.py, tests/unit/test_rate_limit.py
+Next: PRD-010 Read-only MCP response cache (lib/redis/cache.py).

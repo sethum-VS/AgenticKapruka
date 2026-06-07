@@ -105,7 +105,7 @@
       "Use separate Redis keys rate:{ip}:global and rate:{ip}:create_order",
       "Write pytest simulating 61st global request returns 429 with Retry-After header value"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-010",
