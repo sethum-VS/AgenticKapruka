@@ -81,7 +81,7 @@
       "Verify GET /static/css/app.css returns 200 with text/css content-type",
       "Confirm base.html links to /static/css/app.css"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-008",
