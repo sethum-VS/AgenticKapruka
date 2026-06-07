@@ -17,6 +17,19 @@ PROGRESS_FILE="$PROJECT_ROOT/progress.txt"
 PROMPT_FILE="$PROJECT_ROOT/RALPH_PROMPT.md"
 AGENTS_FILE="$PROJECT_ROOT/AGENTS.md"
 
+require_jq() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for Ralph (prd.json). Install: brew install jq" >&2
+    exit 1
+  fi
+}
+
+warn_unknown_args() {
+  if [[ ${#REMAINING_ARGS[@]} -gt 0 ]]; then
+    echo "Warning: ignoring unknown arguments: ${REMAINING_ARGS[*]}" >&2
+  fi
+}
+
 cursor_agent_bin() {
   if command -v cursor-agent >/dev/null 2>&1; then
     command -v cursor-agent
@@ -41,6 +54,10 @@ parse_ralph_args() {
         shift
         ;;
       --model)
+        if [[ $# -lt 2 || -z "${2:-}" ]]; then
+          echo "Error: --model requires a value." >&2
+          exit 1
+        fi
         RALPH_MODEL="$2"
         shift 2
         ;;
@@ -74,9 +91,6 @@ ensure_branch() {
 }
 
 all_prd_pass() {
-  if ! command -v jq >/dev/null 2>&1; then
-    return 1
-  fi
   [[ "$(jq '[.[] | select(.passes == false)] | length' "$PRD_FILE")" -eq 0 ]]
 }
 
@@ -273,13 +287,10 @@ run_ralph_iteration() {
 
   if [[ -n "$RALPH_INTERACTIVE" ]]; then
     echo "Launching Cursor Agent interactive UI — quit the session when the PRD item is done." >&2
-    _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt"
-    agent_exit=$?
-  elif [[ "$RALPH_STREAM" == "1" ]]; then
     _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"
     agent_exit="${PIPESTATUS[0]}"
   else
-    # Stream plain text live — do NOT use command substitution (buffers until agent exits).
+    # Stream live via tee — do NOT use command substitution (buffers until agent exits).
     _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"
     agent_exit="${PIPESTATUS[0]}"
   fi
