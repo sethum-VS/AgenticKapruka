@@ -169,3 +169,11 @@ Next: PRD-022 KaprukaService facade with cache and rate limiting (lib/kapruka/se
 - Integration tests (`tests/integration/test_kapruka_service.py`): second identical `search_products` skips MCP (TTL ≤ 1800s); repeated `create_order` always hits MCP with no Redis cache keys.
 Files: lib/kapruka/service.py, lib/kapruka/__init__.py, tests/integration/test_kapruka_service.py, prd.json
 Next: PRD-023 Chat viewport Jinja template with empty state (templates/chat/index.html).
+
+## PRD-023 — Chat viewport Jinja template with empty state
+- Created `templates/chat/index.html` extending `base.html`: full-viewport flex column, header with Kapruka branding, `#chat-messages` scroll container, `#chat-empty-state` welcome card with four gift-discovery suggested prompts.
+- Warm commerce Tailwind styling: `card-commerce`, `kapruka-600` accent, `commerce-cream`/`commerce-parchment` palette; no HTMX form yet (PRD-024).
+- Updated `app/routes/chat.py` to render `TemplateResponse` for GET `/chat` instead of JSON stub.
+- Unit tests: `tests/unit/test_chat.py` (template isolation + GET /chat 200 HTML with empty state); removed obsolete JSON stub test from `test_main.py`.
+Files: templates/chat/index.html, app/routes/chat.py, tests/unit/test_chat.py, tests/unit/test_main.py, prd.json
+Next: PRD-024 HTMX chat input form (hx-post /chat/stream).

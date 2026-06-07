@@ -273,7 +273,7 @@
       "Add empty state placeholder with suggested prompts for gift discovery",
       "Verify GET /chat renders 200 HTML with empty state visible"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-024",
