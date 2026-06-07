@@ -166,3 +166,47 @@ def test_select_tool_calls_tracking_returns_empty_without_explicit_calls() -> No
         "intent": "tracking",
     }
     assert select_tool_calls(state) == []
+
+
+def test_select_tool_calls_applies_category_preference_from_hybrid_context() -> None:
+    """Discovery search should include category hint from Zep preferences."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="something nice for her")],
+        "intent": "discovery",
+        "hybrid_context": {
+            "preferences": {"favorite_category": "Birthday"},
+            "hints": {"category": "Birthday"},
+        },
+    }
+
+    selected = select_tool_calls(state)
+
+    assert len(selected) == 1
+    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
+    assert selected[0]["args"]["q"] == "something nice for her"
+    assert selected[0]["args"]["category"] == "Birthday"
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tools_applies_category_preference_in_search() -> None:
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = _SEARCH_OUTPUT
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="something nice for her")],
+        "intent": "discovery",
+        "session_id": "sess-mcp-pref-001",
+        "hybrid_context": {
+            "preferences": {"favorite_category": "Birthday", "currency": "USD"},
+            "hints": {"category": "Birthday", "currency": "USD"},
+        },
+    }
+
+    await call_mcp_tools(state, kapruka_service=mock_service, client_ip=_CLIENT_IP)
+
+    mock_service.search_products.assert_awaited_once_with(
+        _CLIENT_IP,
+        q="something nice for her",
+        currency="USD",
+        category="Birthday",
+    )

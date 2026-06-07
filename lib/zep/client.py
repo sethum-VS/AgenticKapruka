@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from zep_python.client import AsyncZep
 from zep_python.types import Session, SessionListResponse
 from zep_python.types.memory import Memory
 from zep_python.types.message import Message
+from zep_python.types.session_search_response import SessionSearchResponse
 from zep_python.types.success_response import SuccessResponse
+
+SearchScope = Literal["messages", "summary", "facts"]
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +118,22 @@ class ZepClient:
     ) -> Memory:
         """Return memory (summary, messages, facts) for a session thread."""
         return await self.sdk.memory.get(session_id, lastn=lastn)
+
+    async def search_session_memory(
+        self,
+        *,
+        session_ids: Sequence[str] | None = None,
+        text: str | None = None,
+        search_scope: SearchScope = "facts",
+        limit: int | None = 10,
+    ) -> SessionSearchResponse:
+        """Semantic search across Zep session memory (facts, messages, or summary)."""
+        return await self.sdk.memory.search_sessions(
+            session_ids=session_ids,
+            text=text,
+            search_scope=search_scope,
+            limit=limit,
+        )
 
     async def add_messages(
         self,

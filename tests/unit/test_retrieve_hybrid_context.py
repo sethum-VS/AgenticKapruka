@@ -1,9 +1,10 @@
-"""Unit tests for graphs.nodes.retrieve_hybrid_context stub."""
+"""Unit tests for graphs.nodes.retrieve_hybrid_context."""
 
 from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -25,8 +26,8 @@ def test_retrieve_hybrid_context_module_has_no_neo4j_dependency() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retrieve_hybrid_context_returns_empty_dict() -> None:
-    """Stub returns empty hybrid_context without external services."""
+async def test_retrieve_hybrid_context_returns_empty_without_zep() -> None:
+    """No Zep client or facts yields empty hybrid_context."""
     state: AgentState = {
         "messages": [HumanMessage(content="birthday cake for mom")],
         "intent": "discovery",
@@ -36,6 +37,55 @@ async def test_retrieve_hybrid_context_returns_empty_dict() -> None:
     result = await retrieve_hybrid_context(state)
 
     assert result == {"hybrid_context": {}}
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_merges_preferences_from_memory_facts() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="show me gifts")],
+        "intent": "discovery",
+        "session_id": "sess-hybrid-002",
+        "zep_memory_facts": ["User prefers Birthday cakes"],
+    }
+
+    result = await retrieve_hybrid_context(state)
+
+    assert result["hybrid_context"]["preferences"]["favorite_category"] == "Birthday"
+    assert result["hybrid_context"]["hints"]["category"] == "Birthday"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_injects_currency_from_preferences() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="show me gifts")],
+        "intent": "discovery",
+        "session_id": "sess-hybrid-003",
+        "zep_memory_facts": ["User shops in USD"],
+    }
+
+    result = await retrieve_hybrid_context(state)
+
+    assert result["currency"] == "USD"
+    assert result["hybrid_context"]["hints"]["currency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_calls_extract_preferences_with_zep_client() -> None:
+    zep_client = AsyncMock()
+    with patch(
+        "graphs.nodes.retrieve_hybrid_context.extract_preferences",
+        new=AsyncMock(return_value={"favorite_category": "Flowers"}),
+    ) as mock_extract:
+        state: AgentState = {
+            "messages": [],
+            "intent": "discovery",
+            "zep_thread_id": "thread-hybrid-004",
+        }
+
+        result = await retrieve_hybrid_context(state, zep_client=zep_client)
+
+    mock_extract.assert_awaited_once_with(zep_client, "thread-hybrid-004")
+    assert result["hybrid_context"]["hints"]["category"] == "Flowers"
 
 
 @pytest.mark.parametrize(

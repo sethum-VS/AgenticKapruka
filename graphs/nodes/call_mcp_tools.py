@@ -37,7 +37,13 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
 
     intent = state.get("intent")
     user_message = _extract_latest_user_message(state.get("messages") or []).strip()
-    currency = state.get("currency") or "LKR"
+    hybrid_context = state.get("hybrid_context") or {}
+    hints = hybrid_context.get("hints") or {}
+    preferences = hybrid_context.get("preferences") or {}
+    currency = (
+        state.get("currency") or hints.get("currency") or preferences.get("currency") or "LKR"
+    )
+    category_hint = hints.get("category") or preferences.get("favorite_category")
 
     if intent == "discovery":
         product_id = _extract_product_id(user_message)
@@ -49,10 +55,13 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
                 },
             ]
         if len(user_message) >= 3:
+            search_args: dict[str, Any] = {"q": user_message, "currency": currency}
+            if category_hint:
+                search_args["category"] = category_hint
             return [
                 {
                     "name": SEARCH_PRODUCTS_TOOL,
-                    "args": {"q": user_message, "currency": currency},
+                    "args": search_args,
                 },
             ]
         return []

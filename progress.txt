@@ -271,3 +271,13 @@ Next: PRD-035 Zep memory read and write in graph loop.
 - Integration tests (`tests/integration/test_zep_memory_graph.py`): mocked Zep HTTP verifies GET facts loaded and POST messages persisted after full graph turn.
 Files: lib/zep/{memory,client,__init__}.py, graphs/{state,shopping_graph}.py, graphs/nodes/{load_zep_memory,zep_memory_write,analyze_intent,generate_response,__init__}.py, tests/unit/test_zep_memory.py, tests/integration/test_zep_memory_graph.py, tests/integration/test_shopping_graph.py, tests/unit/test_agent_state.py, prd.json
 Next: PRD-036 Cross-session preference extraction.
+
+## PRD-036 — Cross-session preference extraction
+- Added `lib/zep/preferences.py`: `extract_preferences(zep_client, zep_thread_id)` uses Zep `search_session_memory` (facts scope) with get_memory fallback; `parse_preferences_from_facts` extracts favorite_category, past_occasion, currency; `merge_preferences_into_hybrid_context` builds MCP hints.
+- Extended `ZepClient` with `search_session_memory` wrapping SDK `search_sessions`.
+- Updated `retrieve_hybrid_context` to call extract_preferences (or parse loaded zep_memory_facts) and inject currency into AgentState when unset.
+- Updated `call_mcp_tools.select_tool_calls` to apply category/currency hints from hybrid_context on discovery search.
+- Wired `zep_client` into retrieve_hybrid_context node in shopping graph.
+- Unit tests: `test_zep_preferences.py`, category preference in `test_call_mcp_tools.py`, hybrid context merge in `test_retrieve_hybrid_context.py`.
+Files: lib/zep/{preferences,client,__init__}.py, graphs/nodes/{retrieve_hybrid_context,call_mcp_tools}.py, graphs/shopping_graph.py, tests/unit/{test_zep_preferences,test_retrieve_hybrid_context,test_call_mcp_tools}.py, prd.json
+Next: PRD-037 SSE streaming chat endpoint.

@@ -55,6 +55,9 @@ def build_shopping_graph(
     async def _analyze_intent(state: AgentState) -> dict[str, Any]:
         return await analyze_intent(state, genai_client=genai_client)
 
+    async def _retrieve_hybrid_context(state: AgentState) -> dict[str, Any]:
+        return await retrieve_hybrid_context(state, zep_client=zep_client)
+
     async def _call_mcp_tools(state: AgentState) -> dict[str, Any]:
         return await call_mcp_tools(
             state,
@@ -71,7 +74,7 @@ def build_shopping_graph(
     graph = StateGraph(AgentState)
     graph.add_node("load_zep_memory", _load_zep_memory)
     graph.add_node("analyze_intent", _analyze_intent)
-    graph.add_node("retrieve_hybrid_context", retrieve_hybrid_context)
+    graph.add_node("retrieve_hybrid_context", _retrieve_hybrid_context)
     graph.add_node("call_mcp_tools", _call_mcp_tools)
     graph.add_node("generate_response", _generate_response)
     graph.add_node("zep_memory_write", _zep_memory_write)

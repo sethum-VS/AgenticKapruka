@@ -429,7 +429,7 @@
       "Merge preferences into hybrid_context hints before MCP search",
       "Write unit test with mocked Zep facts verifying category preference applied"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-037",
