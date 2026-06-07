@@ -58,3 +58,11 @@ Next: PRD-007 Static assets mount (FastAPI StaticFiles at /static).
 - Unit tests: `test_static_css_returns_200_with_text_css`; templating test asserts CSS link in base.html.
 Files: app/main.py, templates/base.html, tests/conftest.py, tests/unit/test_main.py, tests/unit/test_templating.py
 Next: PRD-008 Async Redis client wrapper (lib/redis/client.py).
+
+## PRD-008 — Async Redis client wrapper
+- Added `lib/redis/client.py` with `RedisClient`: `connect()` via `redis.asyncio.from_url` (pool max_connections=10, socket_keepalive, health_check_interval, retry_on_timeout), `ping()` with one reconnect attempt on connection/timeout errors, idempotent `close()`, and `client` property for downstream cache/rate-limit modules.
+- Dev dep `fakeredis[lua]` for in-memory integration tests without Docker Redis.
+- Unit tests: fakeredis ping success, connect/close idempotency, connect() pool kwargs via monkeypatched from_url.
+- Lifespan wiring deferred to PRD-011 (`get_redis` dependency); client wrapper is standalone.
+Files: lib/redis/__init__.py, lib/redis/client.py, tests/unit/test_redis_client.py, pyproject.toml
+Next: PRD-009 Sliding-window rate limiter (lib/redis/rate_limit.py).

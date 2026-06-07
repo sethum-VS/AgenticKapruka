@@ -93,7 +93,7 @@
       "Implement async ping() returning bool and async close() for lifespan",
       "Write integration test with fakeredis or docker redis verifying ping succeeds"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-009",
