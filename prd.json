@@ -333,7 +333,7 @@
       "Use structured output or JSON mode for intent classification",
       "Write unit test with mocked genai client verifying discovery intent for 'birthday cake for mom'"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-029",

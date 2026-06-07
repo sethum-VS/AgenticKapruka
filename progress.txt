@@ -207,3 +207,11 @@ Next: PRD-027 Redis LangGraph checkpointer (lib/redis/checkpointer.py).
 - Integration tests (`tests/integration/test_redis_checkpointer.py`): fakeredis + patched `asetup` (no RediSearch in fakeredis); asserts `tool_call_count` and `messages` persist across two `ainvoke` calls with same `thread_id`, and thread isolation.
 Files: lib/redis/{checkpointer,__init__}.py, graphs/{shopping_graph,__init__}.py, pyproject.toml, tests/integration/test_redis_checkpointer.py, prd.json
 Next: PRD-028 analyze_intent LangGraph node (graphs/nodes/analyze_intent.py).
+
+## PRD-028 — analyze_intent LangGraph node
+- Added `graphs/nodes/analyze_intent.py`: async `analyze_intent(state)` extracts latest `HumanMessage`, calls Gemini 2.5 Flash via google-genai with `response_mime_type=application/json` and Pydantic `IntentClassification` schema; sync SDK wrapped in `asyncio.to_thread`.
+- Injectable `genai_client` for tests; `create_genai_client()` reads `GOOGLE_API_KEY` from Settings; empty/whitespace messages short-circuit to `general` without LLM call.
+- Unit tests: discovery for "birthday cake for mom" (mocked genai), empty/no-message general default, JSON text fallback when `parsed` absent.
+- Shopping graph still uses bootstrap stub until PRD-033 wires all nodes.
+Files: graphs/nodes/{__init__,analyze_intent}.py, tests/unit/test_analyze_intent.py, prd.json
+Next: PRD-029 retrieve_hybrid_context stub node (graphs/nodes/retrieve_hybrid_context.py).
