@@ -873,7 +873,7 @@
       "Include error code and human-readable message in partial",
       "Write test verifying KaprukaValidationError returns 400 HTML not JSON"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-074",

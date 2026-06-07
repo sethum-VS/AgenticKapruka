@@ -581,3 +581,11 @@ Next: PRD-072 Order tracking chat flow.
 - Tests: `test_tracking_status.py` (extraction, timeline HTML, MCP invoke, generate_response embed); updated `test_call_mcp_tools.py` tracking cases.
 Files: lib/checkout/tracking.py, templates/checkout/tracking_status.html, templates/chat/message_assistant.html, graphs/nodes/{call_mcp_tools,generate_response}.py, app/templating.py, tests/unit/{test_tracking_status,test_call_mcp_tools}.py, prd.json
 Next: PRD-073 Exception middleware for MCP errors.
+
+## PRD-073 — Exception middleware for MCP errors
+- Added `app/middleware/errors.py`: `register_exception_handlers` maps KaprukaValidationError→400, KaprukaNotFoundError→404, KaprukaRateLimitError/RateLimitExceeded→429 (Retry-After), KaprukaError→502, Exception→500 generic HTML via `templates/partials/error_banner.html`.
+- HTMX clients (`HX-Request: true`) receive HTML partials with `data-error-code`; JSON clients get `{error_code, message}`. Friendly message map for known MCP codes; lazy template import avoids startup circular import.
+- `render_error_banner()` in `app/templating.py`; wired in `create_app()` after routes/static mount.
+- Tests: `tests/unit/test_error_middleware.py` (400 HTML not JSON for validation, 429/404/502 paths, generic 500 without leak).
+Files: app/middleware/{__init__,errors}.py, app/{main,templating}.py, templates/partials/error_banner.html, tests/unit/test_error_middleware.py, prd.json
+Next: PRD-074 429 rate limit alert banner with countdown.

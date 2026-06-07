@@ -302,6 +302,18 @@ def render_tracking_status(*, tracking: TrackOrderOutput) -> str:
     return template.render(tracking=tracking)
 
 
+def render_error_banner(
+    *,
+    error_code: str,
+    message: str,
+    title: str = "Unable to complete request",
+) -> str:
+    """Render templates/partials/error_banner.html for HTMX error swaps."""
+    templates = get_templates()
+    template = templates.env.get_template("partials/error_banner.html")
+    return template.render(error_code=error_code, message=message, title=title)
+
+
 def render_currency_selector(*, currency: str = "LKR") -> str:
     """Render templates/components/currency_selector.html for the site header."""
     templates = get_templates()

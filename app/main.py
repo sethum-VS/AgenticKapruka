@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.lifespan import lifespan
+from app.middleware.errors import register_exception_handlers
 from app.routes import cart, chat, checkout, health, partials, session
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -35,6 +36,8 @@ def create_app() -> FastAPI:
         return RedirectResponse(url="/chat", status_code=307)
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    register_exception_handlers(app)
 
     return app
 
