@@ -21,7 +21,7 @@
       "Wire lifespan async context manager for Redis/Neo4j/Zep connection startup and shutdown",
       "Run uvicorn app.main:app --reload and verify GET / returns 200 or redirect to chat"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-003",

@@ -10,3 +10,12 @@ Session: 2026-06-07 | Branch: ralph/sprint-1
 - Added empty app/, lib/, graphs/ package stubs matching hatch wheel packages for editable install and mypy targets.
 Files: pyproject.toml, app/__init__.py, lib/__init__.py, graphs/__init__.py
 Next: PRD-002 FastAPI application factory (app/main.py create_app).
+
+## PRD-002 — FastAPI application factory
+- Implemented `create_app()` in app/main.py with module-level `app` for uvicorn; no CORSMiddleware (same-origin HTMX).
+- Lifespan in app/lifespan.py sets app.state.redis/neo4j/zep to None on startup with graceful close on shutdown; real clients land in PRD-008/012/013.
+- Route stubs: health (/health), chat, cart, checkout, partials; GET / returns 307 redirect to /chat.
+- Unit tests: root redirect, /chat stub, /health stub (tests/unit/test_main.py).
+- Verified: uvicorn app.main:app, curl -L / → 200 via /chat.
+Files: app/main.py, app/lifespan.py, app/routes/{chat,cart,checkout,health,partials}.py, tests/unit/test_main.py
+Next: PRD-003 Pydantic Settings (app/config.py).
