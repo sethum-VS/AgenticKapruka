@@ -609,7 +609,7 @@
       "Include prev/next Alpine buttons for keyboard-accessible navigation",
       "Verify carousel renders 3+ cards without layout overflow on mobile viewport"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-052",

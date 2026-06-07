@@ -393,3 +393,11 @@ Next: PRD-050 Product card Jinja partial.
 - Tests: `tests/unit/test_product_card.py` with JSON fixtures (`tests/fixtures/products/`) and HTML snapshot (`tests/fixtures/snapshots/product_card_in_stock.html`); out-of-stock overlay + disabled button coverage.
 Files: templates/components/product_card.html, app/templating.py, tests/unit/test_product_card.py, tests/fixtures/{products,snapshots}/*
 Next: PRD-051 Horizontal product carousel partial.
+
+## PRD-051 — Horizontal product carousel partial
+- Added `templates/components/product_carousel.html`: horizontal `flex overflow-x-auto` track with `snap-x snap-mandatory`, `overscroll-x-contain`, and `min-w-0` outer wrapper; embeds `product_card` partials in `snap-start shrink-0` wrappers.
+- Alpine.js prev/next buttons (`scrollCarousel`) with arrow-key handlers on focusable region for keyboard navigation.
+- Added `render_product_carousel` in `app/templating.py`; third fixture product for 3-card carousel tests.
+- Tests: `tests/unit/test_product_carousel.py` (structure, Alpine nav, mobile containment classes); `tests/unit/test_product_carousel_browser.py` Playwright mobile viewport (375px) asserts no page horizontal overflow while track scrolls internally.
+Files: templates/components/product_carousel.html, app/templating.py, tests/unit/test_product_carousel.py, tests/unit/test_product_carousel_browser.py, tests/fixtures/products/sample_vanilla_cake.json, prd.json
+Next: PRD-052 Category filter chips partial.

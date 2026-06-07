@@ -47,6 +47,13 @@ def render_product_card(product: dict[str, Any]) -> str:
     return template.render(product=product)
 
 
+def render_product_carousel(products: list[dict[str, Any]]) -> str:
+    """Render templates/components/product_carousel.html with product_card partials."""
+    templates = get_templates()
+    template = templates.env.get_template("components/product_carousel.html")
+    return template.render(products=products)
+
+
 def normalize_html_snapshot(html: str) -> str:
     """Collapse insignificant whitespace for stable snapshot comparisons."""
     collapsed = re.sub(r">\s+<", "><", html.strip())
