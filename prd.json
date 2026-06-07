@@ -141,7 +141,7 @@
       "Implement health_check() running RETURN 1 AS ok",
       "Write integration test with testcontainers neo4j or mock driver verifying health_check"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-013",

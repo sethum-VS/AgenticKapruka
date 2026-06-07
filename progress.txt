@@ -88,3 +88,10 @@ Next: PRD-011 FastAPI dependency injection for Redis (app/dependencies.py).
 - Unit tests: route DI resolves with fakeredis-injected client, 503 when state.redis is None, lifespan assigns connected client to app.state.
 Files: app/dependencies.py, app/lifespan.py, tests/unit/test_dependencies.py
 Next: PRD-012 Neo4j async driver wrapper (lib/neo4j/client.py).
+
+## PRD-012 — Neo4j async driver wrapper
+- Added `lib/neo4j/client.py` with `Neo4jClient`: `connect(uri, user, password)` via `AsyncGraphDatabase.driver` + `verify_connectivity()`, async `execute(cypher, params)` returning record dicts via `result.data()`, `health_check()` running `RETURN 1 AS ok`, idempotent `close()`.
+- Pool config: connection_timeout=30s, max_connection_lifetime=3600s; mirrors RedisClient injectable-driver pattern for tests.
+- Unit tests with mock AsyncDriver/session (no Docker testcontainers): health_check, execute param binding, connect verify + close idempotency.
+Files: lib/neo4j/__init__.py, lib/neo4j/client.py, tests/unit/test_neo4j_client.py
+Next: PRD-013 Zep Cloud client wrapper (lib/zep/client.py).
