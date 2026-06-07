@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.6.0] - 2026-06-08
+
+### Added
+
+- Full checkout flow: delivery, recipient, and sender HTMX forms with server-side Pydantic validation (PRD-064–066)
+- Checkout LangGraph sub-graph with step gates from cart through review and finalize (PRD-067–068)
+- Order review step using Gemini 2.5 Pro for final confirmation (PRD-069)
+- `kapruka_create_order` integration with Redis pending-order persistence (PRD-070)
+- Click-to-pay CTA with Alpine.js payment countdown timer (PRD-071)
+- Order tracking chat flow with `kapruka_track_order` and status timeline partial (PRD-072)
+- Exception middleware mapping Kapruka MCP errors to HTMX-friendly error banners (PRD-073)
+
+### Fixed
+
+- Circular import between `app.templating` and checkout graph that blocked app startup
+- Integration tests updated for PRD-072 tracking MCP behavior
+
 ## [0.0.5.0] - 2026-06-08
 
 ### Added
