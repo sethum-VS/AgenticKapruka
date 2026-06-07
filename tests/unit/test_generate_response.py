@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -85,8 +85,7 @@ async def test_generate_response_html_contains_product_names_from_tool_results()
         "session_id": "sess-gen-001",
     }
 
-    with patch("graphs.nodes.generate_response.FLASH_MODEL", "gemini-2.5-flash"):
-        result = await generate_response(state, genai_client=mock_client)
+    result = await generate_response(state, genai_client=mock_client)
 
     assert "response_html" in result
     html = result["response_html"]

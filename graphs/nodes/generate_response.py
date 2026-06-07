@@ -12,13 +12,11 @@ from google.genai import types
 from pydantic import BaseModel, ValidationError
 
 from app.templating import get_templates
+from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message, create_genai_client
-from graphs.state import AgentState, ModelTier
+from graphs.state import AgentState
 
 logger = logging.getLogger(__name__)
-
-FLASH_MODEL = "gemini-2.5-flash"
-PRO_MODEL = "gemini-2.5-pro"
 
 SYSTEM_INSTRUCTION = """You are the Kapruka gift shopping assistant.
 
@@ -36,14 +34,6 @@ class AssistantReply(BaseModel):
     """Structured Gemini response for the assistant message body."""
 
     message: str
-
-
-def _select_model(state: AgentState) -> str:
-    """Pick Gemini model from state tier; full router lands in PRD-032."""
-    tier: ModelTier | None = state.get("model_tier")
-    if tier == "pro":
-        return PRO_MODEL
-    return FLASH_MODEL
 
 
 def _format_tool_results_context(tool_results: dict[str, Any] | None) -> str:
@@ -129,7 +119,7 @@ async def generate_response(
         return {"response_html": render_assistant_html(fallback)}
 
     client = genai_client or create_genai_client()
-    model = _select_model(state)
+    model = select_model(state)
     user_prompt = _build_user_prompt(user_message, tool_results)
 
     reply_text = await asyncio.to_thread(

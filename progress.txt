@@ -237,3 +237,11 @@ Next: PRD-031 generate_response LangGraph node (graphs/nodes/generate_response.p
 - Unit tests: product names from mocked tool_results appear in response_html, empty message skip, JSON text fallback parsing, template structure.
 Files: graphs/nodes/{generate_response,__init__}.py, templates/chat/message_assistant.html, tests/unit/test_generate_response.py, prd.json
 Next: PRD-032 Model router Flash to Pro escalation (graphs/model_router.py).
+
+## PRD-032 — Model router Flash to Pro escalation
+- Added `graphs/model_router.py`: `select_model(state)` returns `gemini-2.5-flash` or `gemini-2.5-pro`; `select_model_tier(state)` mirrors tier logic for PRD-069 checkout review wiring.
+- Escalation rules: explicit `model_tier=pro`, `checkout_state=review`, or `tool_call_count > 3` (4th tool call onward) → Pro; otherwise Flash.
+- Wired `generate_response` to use central `select_model()` instead of local stub; exported from `graphs/__init__.py`.
+- Unit tests: default flash, review escalation, threshold boundary (3=flash, 4=pro), explicit pro tier.
+Files: graphs/{model_router,__init__}.py, graphs/nodes/generate_response.py, tests/unit/{test_model_router,test_generate_response}.py, prd.json
+Next: PRD-033 Compile main shopping StateGraph (graphs/shopping_graph.py).

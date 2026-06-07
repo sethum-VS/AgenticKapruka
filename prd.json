@@ -381,7 +381,7 @@
       "Escalate to pro when state.checkout_state == 'review' or tool_call_count > 3",
       "Write unit test verifying pro selected after 4th tool call"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-033",
