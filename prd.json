@@ -489,7 +489,7 @@
       "Define relationship types and property schemas in ontology.py",
       "Run migration script against test Neo4j verifying constraints created"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-042",
@@ -501,7 +501,7 @@
       "Map taxonomy to triplet structure and execute MERGE Cypher batches",
       "Run script and verify node counts with MATCH (n) RETURN labels(n), count(*)"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-043",

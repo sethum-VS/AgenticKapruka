@@ -311,3 +311,20 @@ Next: PRD-041 Neo4j ontology Cypher schema (PRD-040 already passes).
 - Patches `AsyncRedisSaver.asetup` for fakeredis (same FT._LIST workaround as `test_redis_checkpointer.py`).
 Files: tests/integration/test_chat_flow.py, prd.json
 Next: PRD-041 Neo4j ontology Cypher schema.
+
+## PRD-041 — Neo4j ontology Cypher schema
+- Added `lib/neo4j/ontology.py`: labels (Occasion, Category, ProductType), relationships (OCCASION_TO_CATEGORY, CATEGORY_TO_PRODUCT_TYPE), unique `id` constraints per label via `CREATE CONSTRAINT … IF NOT EXISTS`, Pydantic property schemas (`OntologyNodeProperties`, relationship weight models).
+- `apply_ontology_schema` / `verify_ontology_schema` / `list_ontology_constraints` for migration + SHOW CONSTRAINTS verification.
+- Added `scripts/migrate_ontology.py` CLI applying schema against Settings Neo4j URI and printing verified constraints.
+- Unit tests (`tests/unit/test_neo4j_ontology.py`): recording mock driver verifies all constraint Cypher runs and `verify_ontology_schema` passes post-migration.
+- Exported ontology helpers from `lib/neo4j/__init__.py` for PRD-042 ingest script.
+Files: lib/neo4j/{ontology,__init__}.py, scripts/migrate_ontology.py, tests/unit/test_neo4j_ontology.py, prd.json
+Next: PRD-042 Category ingestion script (scripts/ingest_categories.py).
+
+## PRD-042 — Category ingestion script
+- Added `lib/neo4j/ingest_categories.py`: maps Kapruka tree L0→Category, L1→Occasion, L2→ProductType (synthesizes ProductType from L0+L1 when grandchildren absent); batched UNWIND MERGE for nodes and OCCASION_TO_CATEGORY / CATEGORY_TO_PRODUCT_TYPE edges; `count_ontology_nodes_by_label` for verification.
+- `INGEST_CATEGORY_DEPTH=2` — MCP `kapruka_list_categories` caps depth at 2 (PRD step cites 3; triplets complete via synthesized ProductType ids on two-level branches).
+- Added `scripts/ingest_categories.py` CLI: KaprukaService fetch → apply ontology schema → ingest → print label counts.
+- Unit tests (`tests/unit/test_ingest_categories.py`): taxonomy mapping, batched MERGE, full ingest + COUNT BY LABEL on recording mock driver.
+Files: lib/neo4j/{ingest_categories,__init__}.py, scripts/ingest_categories.py, tests/unit/test_ingest_categories.py, prd.json
+Next: PRD-043 Ontology node property enrichment.
