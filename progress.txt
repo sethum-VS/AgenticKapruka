@@ -95,3 +95,10 @@ Next: PRD-012 Neo4j async driver wrapper (lib/neo4j/client.py).
 - Unit tests with mock AsyncDriver/session (no Docker testcontainers): health_check, execute param binding, connect verify + close idempotency.
 Files: lib/neo4j/__init__.py, lib/neo4j/client.py, tests/unit/test_neo4j_client.py
 Next: PRD-013 Zep Cloud client wrapper (lib/zep/client.py).
+
+## PRD-013 — Zep Cloud client wrapper
+- Added `lib/zep/client.py` with `ZepClient`: wraps `zep_python.client.AsyncZep`, explicit `base_url=https://api.getzep.com` (SDK default is broken when base_url omitted), `list_sessions`, `create_session` (maps to memory.add_session), `health_check` via list_sessions(page_size=1), idempotent `close()` on underlying httpx client.
+- Injectable `httpx.AsyncClient` for tests; mirrors Neo4jClient/RedisClient connect + close pattern; lifespan wiring deferred (same as Neo4j PRD-012).
+- Unit tests with httpx MockTransport: API key Authorization header, health_check success/failure, list_sessions, create_session, close idempotency.
+Files: lib/zep/__init__.py, lib/zep/client.py, tests/unit/test_zep_client.py
+Next: PRD-014 MCP HTTP JSON-RPC client (lib/kapruka/mcp_client.py).

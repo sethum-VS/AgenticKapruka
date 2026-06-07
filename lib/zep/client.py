@@ -1,0 +1,113 @@
+"""Async Zep Cloud client wrapper with session management and health checks."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import httpx
+from zep_python.client import AsyncZep
+from zep_python.types import Session, SessionListResponse
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_ZEP_BASE_URL = "https://api.getzep.com"
+_DEFAULT_TIMEOUT = 30.0
+
+
+class ZepClient:
+    """Wrap zep-python AsyncZep with session helpers and API key health checks."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        client: AsyncZep | None = None,
+        base_url: str = _DEFAULT_ZEP_BASE_URL,
+        request_timeout: float = _DEFAULT_TIMEOUT,
+    ) -> None:
+        self._api_key = api_key
+        self._base_url = base_url
+        self._request_timeout = request_timeout
+        self._client = client
+
+    @classmethod
+    async def connect(
+        cls,
+        api_key: str,
+        *,
+        base_url: str = _DEFAULT_ZEP_BASE_URL,
+        request_timeout: float = _DEFAULT_TIMEOUT,
+        httpx_client: httpx.AsyncClient | None = None,
+    ) -> ZepClient:
+        """Create a connected client for Zep Cloud."""
+        instance = cls(api_key, base_url=base_url, request_timeout=request_timeout)
+        instance._client = AsyncZep(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=request_timeout,
+            httpx_client=httpx_client,
+        )
+        return instance
+
+    @property
+    def sdk(self) -> AsyncZep:
+        """Underlying zep-python AsyncZep client for memory and user modules."""
+        if self._client is None:
+            msg = "ZepClient is not connected; call connect() first"
+            raise RuntimeError(msg)
+        return self._client
+
+    async def list_sessions(
+        self,
+        *,
+        page_number: int = 1,
+        page_size: int = 10,
+        order_by: str | None = None,
+        asc: bool | None = None,
+    ) -> SessionListResponse:
+        """List memory sessions with optional pagination."""
+        return await self.sdk.memory.list_sessions(
+            page_number=page_number,
+            page_size=page_size,
+            order_by=order_by,
+            asc=asc,
+        )
+
+    async def create_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Session:
+        """Create a new Zep memory session."""
+        if user_id is None and metadata is None:
+            return await self.sdk.memory.add_session(session_id=session_id)
+        if metadata is None:
+            return await self.sdk.memory.add_session(session_id=session_id, user_id=user_id)
+        if user_id is None:
+            return await self.sdk.memory.add_session(session_id=session_id, metadata=metadata)
+        return await self.sdk.memory.add_session(
+            session_id=session_id,
+            user_id=user_id,
+            metadata=metadata,
+        )
+
+    async def health_check(self) -> bool:
+        """Return True when Zep Cloud accepts the configured API key."""
+        try:
+            await self.sdk.memory.list_sessions(page_size=1, page_number=1)
+        except Exception as exc:
+            logger.warning("Zep health check failed: %s", exc)
+            return False
+        return True
+
+    async def close(self) -> None:
+        """Close the underlying httpx client; safe to call multiple times."""
+        if self._client is None:
+            return
+        httpx_client = self._client._client_wrapper.httpx_client.httpx_client
+        await httpx_client.aclose()
+        self._client = None
+        logger.debug("Zep client closed")
