@@ -281,3 +281,11 @@ Next: PRD-036 Cross-session preference extraction.
 - Unit tests: `test_zep_preferences.py`, category preference in `test_call_mcp_tools.py`, hybrid context merge in `test_retrieve_hybrid_context.py`.
 Files: lib/zep/{preferences,client,__init__}.py, graphs/nodes/{retrieve_hybrid_context,call_mcp_tools}.py, graphs/shopping_graph.py, tests/unit/{test_zep_preferences,test_retrieve_hybrid_context,test_call_mcp_tools}.py, prd.json
 Next: PRD-037 SSE streaming chat endpoint.
+
+## PRD-037 — SSE streaming chat endpoint
+- Replaced POST `/chat/stream` HTML stub with `StreamingResponse` (`text/event-stream`) driving `graph.astream(stream_mode="updates")`.
+- Added `lib/chat/`: `sse.format_sse_event` + `chunk_text`, `streaming.iter_chat_sse_events` (user bubble → progressive assistant chunks via OOB → final `response_html`), `deps` for lazy KaprukaService/MCP + graph compile, `session` cookie (`ak_session`).
+- Route wires Redis checkpointer thread_id=session_id, Zep `get_or_create_session` when zep client present, `resolve_turn_state` for checkpoint follow-ups.
+- Unit tests: `test_chat_sse.py` (SSE framing + stream iterator), updated `test_chat.py` httpx async SSE integration with mocked graph.
+Files: app/routes/chat.py, lib/chat/{__init__,sse,streaming,deps,session}.py, tests/unit/{test_chat,test_chat_sse}.py, prd.json
+Next: PRD-038 HTMX SSE extension wiring (sse-connect/sse-swap on chat form).

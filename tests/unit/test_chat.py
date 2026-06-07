@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import fakeredis.aioredis
 import pytest
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
+from tests.unit.test_settings import _VALID_ENV, _apply_env
 
+from app.config import get_settings
 from app.main import create_app
 from app.templating import _create_templates, get_templates
+from graphs.nodes.generate_response import render_assistant_html
+from graphs.shopping_graph import ShoppingGraphDeps
+from lib.redis.client import RedisClient
 
 
 @pytest.fixture(autouse=True)
@@ -66,10 +75,63 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert "/static/js/chat-helpers.js" in html
 
 
+def _mock_streaming_graph() -> MagicMock:
+    """Graph mock that emits a single generate_response astream update."""
+    assistant_html = render_assistant_html("Here are some birthday cake options.")
+    mock_graph = MagicMock()
+
+    async def fake_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | None = None,
+    ) -> Any:
+        yield {
+            "generate_response": {
+                "response_html": assistant_html,
+                "assistant_message": "Here are some birthday cake options.",
+            },
+        }
+
+    mock_graph.astream = fake_astream
+    mock_graph.aget_state = AsyncMock(return_value=MagicMock(values=None))
+    return mock_graph
+
+
+@pytest.fixture
+def chat_stream_env(monkeypatch: pytest.MonkeyPatch) -> RedisClient:
+    """App env with fakeredis and mocked LangGraph for /chat/stream tests."""
+    get_settings.cache_clear()
+    _apply_env(monkeypatch, _VALID_ENV)
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    redis_client = RedisClient("redis://localhost:6379/0", client=fake)
+
+    mock_graph = _mock_streaming_graph()
+
+    async def mock_get_compiled_chat_graph(
+        redis: RedisClient,
+        *,
+        deps: ShoppingGraphDeps | None = None,
+    ) -> MagicMock:
+        return mock_graph
+
+    async def mock_build_deps(request: object, redis: RedisClient) -> ShoppingGraphDeps:
+        return ShoppingGraphDeps(
+            kapruka_service=AsyncMock(),
+            client_ip="127.0.0.1",
+            genai_client=MagicMock(),
+            zep_client=None,
+        )
+
+    monkeypatch.setattr("app.routes.chat.get_compiled_chat_graph", mock_get_compiled_chat_graph)
+    monkeypatch.setattr("app.routes.chat.build_shopping_graph_deps", mock_build_deps)
+    return redis_client
+
+
 @pytest.mark.asyncio
-async def test_chat_stream_post_returns_user_bubble_html() -> None:
-    """POST /chat/stream returns HTMX-swappable user message HTML."""
+async def test_chat_stream_returns_sse_event_stream(chat_stream_env: RedisClient) -> None:
+    """POST /chat/stream returns text/event-stream with valid SSE framing."""
     application = create_app()
+    application.state.redis = chat_stream_env
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
@@ -79,18 +141,24 @@ async def test_chat_stream_post_returns_user_bubble_html() -> None:
         )
 
     assert response.status_code == 200
-    assert "text/html" in response.headers["content-type"]
-    html = response.text
-    assert "Birthday cake for mom" in html
-    assert 'hx-swap-oob="delete"' in html
-    assert 'id="chat-empty-state"' in html
-    assert 'aria-label="Your message"' in html
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "event: message\n" in body
+    assert "data:" in body
+    assert body.count("\n\n") >= 2
+    assert "Birthday cake for mom" in body
+    assert 'hx-swap-oob="delete"' in body
+    assert 'id="chat-empty-state"' in body
+    assert 'aria-label="Your message"' in body
+    assert "birthday cake options" in body.lower()
+    assert "ak_session" in response.headers.get("set-cookie", "")
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_rejects_empty_message() -> None:
+async def test_chat_stream_rejects_empty_message(chat_stream_env: RedisClient) -> None:
     """POST /chat/stream rejects blank messages."""
     application = create_app()
+    application.state.redis = chat_stream_env
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(

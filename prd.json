@@ -441,7 +441,7 @@
       "Yield SSE events with data field containing HTML fragments per token or chunk",
       "Write httpx async test verifying Content-Type text/event-stream and event stream format"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-038",
