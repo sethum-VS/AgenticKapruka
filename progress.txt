@@ -289,3 +289,10 @@ Next: PRD-037 SSE streaming chat endpoint.
 - Unit tests: `test_chat_sse.py` (SSE framing + stream iterator), updated `test_chat.py` httpx async SSE integration with mocked graph.
 Files: app/routes/chat.py, lib/chat/{__init__,sse,streaming,deps,session}.py, tests/unit/{test_chat,test_chat_sse}.py, prd.json
 Next: PRD-038 HTMX SSE extension wiring (sse-connect/sse-swap on chat form).
+
+## PRD-040 — Chat route integration test
+- Added `tests/integration/test_chat_flow.py`: httpx `AsyncClient` POSTs `show me birthday cakes` to `/chat/stream`, collects SSE body, asserts `role="assistant"`, `data-role="assistant-message"`, user message present, no error alert markup.
+- Mocks `build_shopping_graph_deps` with `ShoppingGraphDeps` (mocked `KaprukaService` + Gemini); real `get_compiled_chat_graph` + full shopping StateGraph run.
+- Patches `AsyncRedisSaver.asetup` for fakeredis (same FT._LIST workaround as `test_redis_checkpointer.py`).
+Files: tests/integration/test_chat_flow.py, prd.json
+Next: PRD-041 Neo4j ontology Cypher schema.

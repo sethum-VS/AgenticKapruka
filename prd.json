@@ -477,7 +477,7 @@
       "POST message='show me birthday cakes' and collect SSE stream",
       "Assert response contains assistant role markup and no unhandled 500 errors"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-041",
