@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.checkout_graph import CheckoutGraphDeps, get_checkout_graph
-from graphs.checkout_state import initial_checkout_state
-from graphs.state import AgentState
+from graphs.checkout_state import CheckoutState, initial_checkout_state
+from graphs.nodes.analyze_intent import _extract_latest_user_message
+from graphs.state import AgentState, CheckoutStep
+from lib.checkout.chat_parser import (
+    apply_chat_message_to_checkout,
+    prepare_checkout_invoke_state,
+    should_chain_finalize,
+)
+from lib.checkout.review import review_context_from_checkout_state
 from lib.kapruka.service import KaprukaService
 from lib.redis.cart import get_cart
+from lib.redis.checkout import get_checkout_session, save_checkout_session
 from lib.redis.client import RedisClient
 
 logger = logging.getLogger(__name__)
@@ -27,6 +35,50 @@ async def load_cart_items_for_checkout(
     return [row.model_dump() for row in rows]
 
 
+def _merge_persisted_into_checkout(
+    checkout_input: CheckoutState,
+    persisted: dict[str, Any],
+) -> CheckoutState:
+    """Overlay Redis checkout session onto freshly hydrated cart state."""
+    merged = dict(checkout_input)
+    for key, value in persisted.items():
+        if value is not None:
+            merged[key] = value
+    return cast(CheckoutState, merged)
+
+
+def _maybe_render_review_html(state: CheckoutState) -> str | None:
+    """Render review partial when all pre-review steps are valid."""
+    if state.get("current_step") != "review":
+        return None
+    context = review_context_from_checkout_state(state)
+    if context is None:
+        return None
+    from app.templating import render_checkout_review
+
+    return render_checkout_review(review=context)
+
+
+async def _invoke_checkout_graph(
+    graph: Any,
+    state: CheckoutState,
+) -> dict[str, Any]:
+    """Run checkout sub-graph, chaining finalize when review advances."""
+    merged = dict(state)
+    result = cast(dict[str, Any], await graph.ainvoke(merged))
+    prev_step = cast(CheckoutStep, merged.get("current_step") or "cart")
+    merged = {**merged, **result}
+
+    new_step = cast(CheckoutStep, merged.get("current_step") or prev_step)
+    if should_chain_finalize(prev_step, new_step, merged):
+        merged["action"] = "advance"
+        merged["target_step"] = "finalize"
+        result = cast(dict[str, Any], await graph.ainvoke(merged))
+        merged = {**merged, **result}
+
+    return merged
+
+
 async def run_checkout_graph(
     state: AgentState,
     *,
@@ -34,7 +86,7 @@ async def run_checkout_graph(
     kapruka_service: KaprukaService | None = None,
     client_ip: str | None = None,
 ) -> dict[str, Any]:
-    """LangGraph node: run checkout sub-graph with Redis cart hydration."""
+    """LangGraph node: run checkout sub-graph with Redis cart and session hydration."""
     session_id = state.get("session_id") or ""
     currency = state.get("currency")
 
@@ -45,16 +97,31 @@ async def run_checkout_graph(
         cart_items=cart_items,
     )
 
+    if redis_client is not None and session_id:
+        persisted = await get_checkout_session(redis_client, session_id)
+        checkout_input = _merge_persisted_into_checkout(checkout_input, persisted)
+
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if user_message.strip():
+        checkout_input = apply_chat_message_to_checkout(checkout_input, user_message)
+
+    checkout_input = prepare_checkout_invoke_state(checkout_input)
+
     deps = CheckoutGraphDeps(
         redis_client=redis_client,
         kapruka_service=kapruka_service,
         client_ip=client_ip or "127.0.0.1",
     )
     graph = get_checkout_graph(deps=deps)
-    result = await graph.ainvoke(checkout_input)
+    result = await _invoke_checkout_graph(graph, checkout_input)
 
     current_step = result.get("current_step")
-    resolved_cart_items: list[dict[str, Any]] = list(result.get("cart_items") or [])
+    resolved_cart_items: list[dict[str, Any]] = list(result.get("cart_items") or cart_items)
+    review_html = (
+        result.get("response_html")
+        if current_step == "review"
+        else _maybe_render_review_html(cast(CheckoutState, result))
+    )
     payload: dict[str, Any] = {
         "current_step": current_step,
         "cart_items": resolved_cart_items,
@@ -70,13 +137,21 @@ async def run_checkout_graph(
         "sender_name": result.get("sender_name"),
         "sender_anonymous": result.get("sender_anonymous"),
         "gift_message": result.get("gift_message"),
-        "review_html": result.get("response_html") if current_step == "review" else None,
+        "review_html": review_html if current_step == "review" else None,
         "payment_cta_html": result.get("response_html") if current_step == "finalize" else None,
         "checkout_url": result.get("checkout_url"),
         "order_ref": result.get("order_ref"),
         "expires_at": result.get("expires_at"),
         "order_summary": result.get("order_summary"),
     }
+
+    if redis_client is not None and session_id:
+        persist_state = cast(CheckoutState, {**result, "cart_items": resolved_cart_items})
+        await save_checkout_session(redis_client, session_id, persist_state)
+        if current_step == "finalize" and result.get("checkout_url"):
+            from lib.redis.checkout import clear_checkout_session
+
+            await clear_checkout_session(redis_client, session_id)
 
     logger.info(
         "run_checkout_graph: session=%s step=%s cart_lines=%d",

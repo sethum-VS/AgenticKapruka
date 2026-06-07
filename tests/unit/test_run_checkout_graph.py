@@ -40,7 +40,7 @@ async def test_run_checkout_graph_hydrates_redis_cart(redis_client: RedisClient)
 
     result = await run_checkout_graph(state, redis_client=redis_client)
 
-    assert result["checkout_state"] == "cart"
+    assert result["checkout_state"] == "delivery_city"
     payload = result["tool_results"][CHECKOUT_TOOL_KEY]
     assert payload["step_valid"]["cart"] is True
     assert len(payload["cart_items"]) == 1
@@ -61,3 +61,41 @@ async def test_run_checkout_graph_empty_cart_reports_validation(redis_client: Re
     payload = result["tool_results"][CHECKOUT_TOOL_KEY]
     assert payload["cart_items"] == []
     assert "cart" in (payload.get("validation_errors") or {})
+
+
+@pytest.mark.asyncio
+async def test_run_checkout_graph_advances_with_persisted_state(redis_client: RedisClient) -> None:
+    """Second checkout turn parses delivery city from chat and advances."""
+    from lib.redis.checkout import save_checkout_session
+
+    await add_item(
+        redis_client,
+        _SESSION_ID,
+        product_id="cake00ka002034",
+        name="Chocolate Birthday Cake",
+        price_amount=4500.0,
+        quantity=1,
+    )
+    cart_state = {
+        "session_id": _SESSION_ID,
+        "current_step": "delivery_city",
+        "step_valid": {"cart": True},
+        "currency": "LKR",
+    }
+    await save_checkout_session(redis_client, _SESSION_ID, cart_state)  # type: ignore[arg-type]
+
+    from langchain_core.messages import HumanMessage
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="Colombo 03")],
+        "session_id": _SESSION_ID,
+        "intent": "checkout",
+        "currency": "LKR",
+    }
+
+    result = await run_checkout_graph(state, redis_client=redis_client)
+
+    assert result["checkout_state"] == "delivery_date"
+    payload = result["tool_results"][CHECKOUT_TOOL_KEY]
+    assert payload["delivery_city"] == "Colombo 03"
+    assert payload["step_valid"].get("delivery_city") is True

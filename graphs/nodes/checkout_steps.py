@@ -24,7 +24,7 @@ from lib.kapruka.errors import KaprukaError
 from lib.kapruka.service import KaprukaService
 from lib.redis.cart import get_cart
 from lib.redis.client import RedisClient
-from lib.redis.order import store_pending_order
+from lib.redis.order import get_pending_order, store_pending_order
 from lib.utils.timezone import is_past_colombo_date
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -133,10 +133,24 @@ async def execute_finalize_step(
         return False, {"finalize": "Checkout is temporarily unavailable. Please try again."}, {}
 
     session_id = state.get("session_id", "")
-    items: list[dict[str, Any]] = list(state.get("cart_items") or [])
-    if redis_client is not None and session_id and not items:
+    items: list[dict[str, Any]] = []
+    if redis_client is not None and session_id:
+        pending = await get_pending_order(redis_client, session_id)
+        if pending is not None:
+            return (
+                False,
+                {
+                    "finalize": (
+                        "You already have a pending Kapruka order for this session. "
+                        "Complete payment or wait for the link to expire before placing another."
+                    ),
+                },
+                {},
+            )
         cart_rows = await get_cart(redis_client, session_id)
         items = [row.model_dump() for row in cart_rows]
+    else:
+        items = list(state.get("cart_items") or [])
 
     try:
         recipient, delivery, sender, cart, gift_message, currency = (
@@ -156,7 +170,9 @@ async def execute_finalize_step(
             currency=currency,
         )
     except KaprukaError as exc:
-        return False, {"finalize": exc.message}, {}
+        from app.middleware.errors import human_readable_message
+
+        return False, {"finalize": human_readable_message(exc)}, {}
 
     extra: dict[str, Any] = {
         "checkout_url": response.checkout_url,

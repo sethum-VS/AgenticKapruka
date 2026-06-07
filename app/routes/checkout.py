@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 
 from app.dependencies import get_redis
@@ -20,7 +20,6 @@ from lib.chat.deps import client_ip_from_request, ensure_kapruka_service
 from lib.checkout.delivery import DeliveryFormValues, parse_delivery_form
 from lib.checkout.recipient import RecipientFormValues, parse_recipient_form
 from lib.checkout.sender import SenderFormValues, parse_sender_form
-from lib.kapruka.errors import KaprukaError
 from lib.kapruka.types import CheckDeliveryOutput
 from lib.redis.client import RedisClient
 from lib.utils.timezone import colombo_today_iso, is_past_colombo_date
@@ -71,14 +70,11 @@ async def check_delivery_date(
         )
 
     service = await ensure_kapruka_service(request, redis_client)
-    try:
-        result: CheckDeliveryOutput = await service.check_delivery(
-            client_ip_from_request(request),
-            city=city_value,
-            delivery_date=date_value,
-        )
-    except KaprukaError as exc:
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+    result: CheckDeliveryOutput = await service.check_delivery(
+        client_ip_from_request(request),
+        city=city_value,
+        delivery_date=date_value,
+    )
 
     return HTMLResponse(render_delivery_date_status(result=result))
 

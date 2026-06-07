@@ -103,6 +103,16 @@ async def test_finalize_step_returns_checkout_url_with_mocked_mcp(
     mcp_client: MCPHttpClient,
 ) -> None:
     """Finalize node calls create_order and exposes checkout_url in graph state."""
+    await add_item(
+        redis_client,
+        _SESSION_ID,
+        product_id=_SAMPLE_CART_ITEM["product_id"],
+        name=_SAMPLE_CART_ITEM["name"],
+        price_amount=_SAMPLE_CART_ITEM["price_amount"],
+        price_currency=_SAMPLE_CART_ITEM["price_currency"],
+        quantity=_SAMPLE_CART_ITEM["quantity"],
+        icing_text=_SAMPLE_CART_ITEM["icing_text"],
+    )
     graph = build_checkout_graph(
         deps=CheckoutGraphDeps(
             redis_client=redis_client,

@@ -4,7 +4,8 @@
   class="flex flex-col gap-4 rounded-xl border border-commerce-parchment bg-commerce-parchment/30 p-4"
   data-testid="checkout-payment-cta"
   aria-label="Complete payment"
-  x-data="paymentCountdown('{{ payment.expires_at }}')"
+  data-expires-at="{{ payment.expires_at }}"
+  x-data="paymentCountdown($el.dataset.expiresAt)"
 >
   <header class="flex flex-col gap-1 border-b border-commerce-parchment pb-3">
     <h3 class="text-sm font-semibold text-commerce-ink">Complete your payment</h3>

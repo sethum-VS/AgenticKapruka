@@ -74,7 +74,7 @@ async def test_checkout_flow_starts_from_cart_with_redis_items(
     result = await graph.ainvoke(state)
 
     assert result["intent"] == "checkout"
-    assert result["checkout_state"] == "cart"
+    assert result["checkout_state"] == "delivery_city"
     checkout_payload = (result.get("tool_results") or {}).get(CHECKOUT_TOOL_KEY)
     assert isinstance(checkout_payload, dict)
     assert checkout_payload.get("step_valid", {}).get("cart") is True
@@ -83,7 +83,7 @@ async def test_checkout_flow_starts_from_cart_with_redis_items(
     assert len(cart_items) == 1
     assert cart_items[0]["product_id"] == _SAMPLE_ITEM["product_id"]
     assert cart_items[0]["quantity"] == _SAMPLE_ITEM["quantity"]
-    assert "check out your 2 cart items" in (result.get("assistant_message") or "").lower()
+    assert "checkout" in (result.get("assistant_message") or "").lower()
 
 
 @pytest.mark.asyncio
@@ -115,7 +115,7 @@ async def test_proceed_checkout_message_routes_without_gemini_classification(
     )
 
     assert result["intent"] == "checkout"
-    assert result["checkout_state"] == "cart"
+    assert result["checkout_state"] == "delivery_city"
     genai_client.models.generate_content.assert_not_called()
 
 
