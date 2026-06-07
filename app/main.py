@@ -9,7 +9,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.lifespan import lifespan
-from app.routes import cart, chat, checkout, health, partials
+from app.routes import cart, chat, checkout, health, partials, session
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -28,6 +28,7 @@ def create_app() -> FastAPI:
     app.include_router(cart.router, prefix="/cart", tags=["cart"])
     app.include_router(checkout.router, prefix="/checkout", tags=["checkout"])
     app.include_router(partials.router, prefix="/partials", tags=["partials"])
+    app.include_router(session.router, prefix="/session", tags=["session"])
 
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:

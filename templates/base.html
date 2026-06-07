@@ -9,9 +9,16 @@
   </head>
   <body class="min-h-screen bg-commerce-cream text-commerce-ink" hx-ext="sse">
     {% block body %}
-    <main id="app">
+    <div class="flex min-h-screen flex-col">
+      <header class="border-b border-commerce-parchment bg-white/80 backdrop-blur-sm">
+        <div class="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          {% block header_start %}{% endblock %}
+          {% include "components/currency_selector.html" %}
+        </div>
+      </header>
       {% block content %}{% endblock %}
-    </main>
+      {% block footer %}{% endblock %}
+    </div>
     {% endblock %}
 
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>

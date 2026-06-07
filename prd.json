@@ -717,7 +717,7 @@
       "Each action returns updated partial without full page reload",
       "Integration test POST /cart/add returns HTML with product name"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-061",

@@ -1,0 +1,84 @@
+{# HTMX-swappable cart panel — root id must match hx-target="#cart-panel" on product cards. #}
+{% set item_count = items | sum(attribute='quantity') %}
+<section
+  id="cart-panel"
+  data-testid="cart-panel"
+  data-item-count="{{ item_count }}"
+  class="flex flex-col gap-3"
+  aria-label="Shopping cart"
+>
+  {% if items %}
+  <ul class="flex flex-col gap-3" data-testid="cart-items">
+    {% for item in items %}
+    <li
+      class="flex flex-col gap-2 rounded-lg border border-commerce-parchment bg-white p-3"
+      data-product-id="{{ item.product_id }}"
+      data-testid="cart-line-item"
+    >
+      <div class="flex items-start justify-between gap-2">
+        <p class="text-sm font-medium leading-snug text-commerce-ink">{{ item.name }}</p>
+        <button
+          type="button"
+          class="shrink-0 text-xs font-medium text-commerce-muted hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-kapruka-500/30"
+          hx-post="/cart/remove"
+          hx-vals='{"product_id": "{{ item.product_id }}"}'
+          hx-target="#cart-panel"
+          hx-swap="outerHTML"
+          aria-label="Remove {{ item.name }} from cart"
+          data-testid="cart-remove"
+        >
+          Remove
+        </button>
+      </div>
+      {% if item.icing_text %}
+      <p class="text-xs text-commerce-muted">Icing: {{ item.icing_text }}</p>
+      {% endif %}
+      <div class="flex items-center justify-between gap-3">
+        <div
+          class="inline-flex items-center rounded-lg border border-commerce-parchment"
+          role="group"
+          aria-label="Quantity for {{ item.name }}"
+          data-testid="cart-quantity-stepper"
+        >
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center text-sm font-medium text-commerce-ink hover:bg-commerce-parchment disabled:cursor-not-allowed disabled:opacity-40"
+            hx-post="/cart/update"
+            hx-vals='{"product_id": "{{ item.product_id }}", "quantity": {{ item.quantity - 1 }}}'
+            hx-target="#cart-panel"
+            hx-swap="outerHTML"
+            {% if item.quantity <= 1 %}disabled aria-disabled="true"{% endif %}
+            aria-label="Decrease quantity"
+            data-testid="cart-qty-decrease"
+          >
+            −
+          </button>
+          <span
+            class="min-w-[2rem] px-2 text-center text-sm font-medium tabular-nums"
+            data-testid="cart-qty-value"
+          >{{ item.quantity }}</span>
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center text-sm font-medium text-commerce-ink hover:bg-commerce-parchment disabled:cursor-not-allowed disabled:opacity-40"
+            hx-post="/cart/update"
+            hx-vals='{"product_id": "{{ item.product_id }}", "quantity": {{ item.quantity + 1 }}}'
+            hx-target="#cart-panel"
+            hx-swap="outerHTML"
+            {% if item.quantity >= 99 %}disabled aria-disabled="true"{% endif %}
+            aria-label="Increase quantity"
+            data-testid="cart-qty-increase"
+          >
+            +
+          </button>
+        </div>
+        <p class="text-sm font-semibold text-kapruka-700" data-testid="cart-line-total">
+          {{ (item.price_amount * item.quantity) | format_currency(item.price_currency) }}
+        </p>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-sm text-commerce-muted" data-testid="cart-empty">Your cart is empty.</p>
+  {% endif %}
+</section>

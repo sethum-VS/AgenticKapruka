@@ -462,3 +462,11 @@ Next: PRD-059 Redis server-side cart state.
 - Tests: `tests/unit/test_redis_cart.py` (CRUD, merge, limit, quantity bounds, clear).
 Files: lib/redis/{cart,__init__}.py, tests/unit/test_redis_cart.py, prd.json
 Next: PRD-060 Cart HTMX partial swaps.
+
+## PRD-060 — Cart HTMX partial swaps
+- Added `templates/checkout/cart_partial.html`: `#cart-panel` root with line items, quantity stepper (+/− via `/cart/update`), remove buttons (`/cart/remove`), line totals via `format_currency`, empty state, `data-item-count` for badge wiring in PRD-061.
+- Implemented `app/routes/cart.py`: `POST /cart/add` fetches product via KaprukaService + session currency, persists to Redis cart, returns partial; `/cart/remove` and `/cart/update` (qty&lt;1 removes) also return refreshed partial with session cookie on first visit.
+- Added `render_cart_partial()` in `app/templating.py`.
+- Tests: `tests/unit/test_cart_partial.py` (HTMX attrs, stepper bounds, empty state); `tests/integration/test_cart_flow.py` (add returns product name HTML, update/remove swap partial + Redis state).
+Files: templates/checkout/cart_partial.html, app/routes/cart.py, app/templating.py, tests/unit/test_cart_partial.py, tests/integration/test_cart_flow.py, prd.json
+Next: PRD-061 Alpine cart drawer.

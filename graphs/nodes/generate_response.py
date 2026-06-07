@@ -11,10 +11,11 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
-from app.templating import get_templates
+from app.templating import get_templates, render_product_carousel
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message, create_genai_client
 from graphs.state import AgentState
+from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,34 @@ def _generate_reply_sync(
     return _parse_reply_response(response)
 
 
+def extract_search_products(tool_results: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return product dicts from kapruka_search_products tool_results, if any."""
+    if not tool_results:
+        return []
+
+    search_payload = tool_results.get(SEARCH_PRODUCTS_TOOL)
+    if not isinstance(search_payload, dict):
+        return []
+
+    raw_results = search_payload.get("results")
+    if not isinstance(raw_results, list):
+        return []
+
+    products: list[dict[str, Any]] = []
+    for item in raw_results:
+        if isinstance(item, dict) and item.get("id") and item.get("name"):
+            products.append(item)
+    return products
+
+
+def build_products_carousel_html(tool_results: dict[str, Any] | None) -> str | None:
+    """Render product carousel partial when search_products returned results."""
+    products = extract_search_products(tool_results)
+    if not products:
+        return None
+    return render_product_carousel(products)
+
+
 def render_assistant_html(message: str, *, products_html: str | None = None) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
@@ -151,8 +180,14 @@ async def generate_response(
     if not reply_text:
         reply_text = "I could not generate a response. Please try again."
 
-    logger.info("generate_response: rendered assistant reply (%d chars)", len(reply_text))
+    products_html = build_products_carousel_html(tool_results)
+
+    logger.info(
+        "generate_response: rendered assistant reply (%d chars, carousel=%s)",
+        len(reply_text),
+        bool(products_html),
+    )
     return {
-        "response_html": render_assistant_html(reply_text),
+        "response_html": render_assistant_html(reply_text, products_html=products_html),
         "assistant_message": reply_text,
     }

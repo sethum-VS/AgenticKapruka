@@ -12,7 +12,10 @@ from urllib.parse import quote
 import jinja2
 from fastapi.templating import Jinja2Templates
 
-from lib.utils.currency import format_currency
+from lib.redis.cart import StoredCartItem
+from lib.utils.currency import SUPPORTED_CURRENCIES, format_currency
+
+SUPPORTED_CURRENCY_CODES: tuple[str, ...] = tuple(sorted(SUPPORTED_CURRENCIES))
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -91,6 +94,27 @@ def render_category_chips(
     templates = get_templates()
     template = templates.env.get_template("components/category_chips.html")
     return template.render(categories=categories, active_category=active_category)
+
+
+def render_cart_partial(
+    *,
+    items: list[StoredCartItem],
+    currency: str = "LKR",
+) -> str:
+    """Render templates/checkout/cart_partial.html for HTMX outerHTML swaps."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/cart_partial.html")
+    return template.render(items=items, currency=currency)
+
+
+def render_currency_selector(*, currency: str = "LKR") -> str:
+    """Render templates/components/currency_selector.html for the site header."""
+    templates = get_templates()
+    template = templates.env.get_template("components/currency_selector.html")
+    return template.render(
+        currency=currency,
+        supported_currencies=SUPPORTED_CURRENCY_CODES,
+    )
 
 
 def normalize_html_snapshot(html: str) -> str:

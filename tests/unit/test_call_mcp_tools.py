@@ -102,6 +102,33 @@ async def test_call_mcp_tools_general_invokes_list_categories() -> None:
 
 
 @pytest.mark.asyncio
+async def test_call_mcp_tools_injects_session_currency_into_explicit_tool_calls() -> None:
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = _SEARCH_OUTPUT
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom")],
+        "intent": "discovery",
+        "currency": "USD",
+        "tool_calls": [
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"q": "birthday cake for mom"},
+            },
+        ],
+        "session_id": "sess-mcp-currency-001",
+    }
+
+    await call_mcp_tools(state, kapruka_service=mock_service, client_ip=_CLIENT_IP)
+
+    mock_service.search_products.assert_awaited_once_with(
+        _CLIENT_IP,
+        q="birthday cake for mom",
+        currency="USD",
+    )
+
+
+@pytest.mark.asyncio
 async def test_call_mcp_tools_explicit_tool_calls_override_intent() -> None:
     mock_service = AsyncMock(spec=KaprukaService)
     mock_service.get_product.return_value = _GET_PRODUCT_OUTPUT

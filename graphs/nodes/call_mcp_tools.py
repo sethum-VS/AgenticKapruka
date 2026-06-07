@@ -30,20 +30,43 @@ def _extract_product_id(user_message: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _resolve_currency(state: AgentState) -> str:
+    """Session currency wins; fall back to Zep hints then LKR."""
+    hybrid_context = state.get("hybrid_context") or {}
+    hints = hybrid_context.get("hints") or {}
+    preferences = hybrid_context.get("preferences") or {}
+    return state.get("currency") or hints.get("currency") or preferences.get("currency") or "LKR"
+
+
+def _inject_currency_args(name: str, args: dict[str, Any], currency: str) -> dict[str, Any]:
+    """Ensure price-bearing MCP tools receive the session currency."""
+    if name in {SEARCH_PRODUCTS_TOOL, GET_PRODUCT_TOOL} and "currency" not in args:
+        return {**args, "currency": currency}
+    return args
+
+
 def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
     """Choose MCP tool invocations from explicit LLM tool_calls or routing intent."""
     explicit = state.get("tool_calls")
     if explicit:
-        return [call for call in explicit if call.get("name") in _SUPPORTED_TOOLS]
+        currency = _resolve_currency(state)
+        return [
+            {
+                "name": call["name"],
+                "args": _inject_currency_args(
+                    call["name"],
+                    dict(call.get("args") or {}),
+                    currency,
+                ),
+            }
+            for call in explicit
+            if call.get("name") in _SUPPORTED_TOOLS
+        ]
 
     intent = state.get("intent")
     user_message = _extract_latest_user_message(state.get("messages") or []).strip()
     hybrid_context = state.get("hybrid_context") or {}
-    hints = hybrid_context.get("hints") or {}
-    preferences = hybrid_context.get("preferences") or {}
-    currency = (
-        state.get("currency") or hints.get("currency") or preferences.get("currency") or "LKR"
-    )
+    currency = _resolve_currency(state)
 
     if intent == "discovery":
         product_id = _extract_product_id(user_message)
@@ -118,9 +141,11 @@ async def call_mcp_tools(
     tool_results: dict[str, Any] = {}
     invocations = 0
 
+    currency = _resolve_currency(state)
+
     for call in selected:
         name = call["name"]
-        args = dict(call.get("args") or {})
+        args = _inject_currency_args(name, dict(call.get("args") or {}), currency)
         logger.info("call_mcp_tools: invoking %s", name)
         raw = await _invoke_tool(kapruka_service, rate_limit_key, name, args)
         tool_results[name] = _serialize_tool_result(raw)

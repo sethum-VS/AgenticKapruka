@@ -67,3 +67,41 @@ async def test_resolve_turn_state_uses_checkpoint_on_follow_up() -> None:
     )
 
     assert state["messages"][-1].content == "second turn"
+
+
+@pytest.mark.asyncio
+async def test_resolve_turn_state_seeds_currency_on_first_turn() -> None:
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(return_value=MagicMock(values={}))
+    config: RunnableConfig = {"configurable": {"thread_id": "thread-new"}}
+
+    state = await resolve_turn_state(
+        graph,
+        message="first turn",
+        session_id="thread-new",
+        zep_thread_id="thread-new",
+        config=config,
+        currency="USD",
+    )
+
+    assert state["currency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_resolve_turn_state_refreshes_currency_on_follow_up() -> None:
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(
+        return_value=MagicMock(values={"messages": [], "currency": "LKR"}),
+    )
+    config: RunnableConfig = {"configurable": {"thread_id": "thread-follow-up"}}
+
+    state = await resolve_turn_state(
+        graph,
+        message="second turn",
+        session_id="thread-follow-up",
+        zep_thread_id="thread-follow-up",
+        config=config,
+        currency="USD",
+    )
+
+    assert state["currency"] == "USD"
