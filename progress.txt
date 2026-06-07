@@ -418,3 +418,11 @@ Next: PRD-053 Stock badge overlay component.
 - Tests: `tests/unit/test_stock_badge.py` (partial isolation + product_card integration for both stock states).
 Files: templates/components/{stock_badge,product_card}.html, app/templating.py, tests/unit/test_stock_badge.py, tests/fixtures/products/{sample_in_stock,sample_out_of_stock}.json, tests/fixtures/snapshots/product_card_in_stock.html, prd.json
 Next: PRD-054 Alpine lazy-load image animations.
+
+## PRD-054 — Alpine lazy-load image animations
+- Added `static/js/lazy-image.js`: Alpine `lazyImage` component with `IntersectionObserver` (64px rootMargin), pulse skeleton until load, `opacity-0` → `opacity-100` transition on `@load`.
+- `product_card.html`: optional `lazy_image` flag wraps image in lazy loader (`x-if="inView"` defers `<img>` until scroll); standalone cards keep native `loading="lazy"`.
+- `product_carousel.html` passes `lazy_image=true` per card; `chat/index.html` loads lazy-image.js globally for embedded carousels.
+- Tests: `test_lazy_image_js.py`; carousel structure asserts lazy markup; Playwright scroll test stubs delayed PNGs and verifies off-screen cards defer load then fade in after `scrollLeft`.
+Files: static/js/lazy-image.js, templates/components/{product_card,product_carousel}.html, templates/chat/index.html, tests/unit/{test_lazy_image_js,test_product_carousel,test_product_carousel_browser,test_chat}.py, prd.json
+Next: PRD-055 Embed product carousel in assistant messages.

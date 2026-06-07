@@ -19,6 +19,35 @@
     aria-label="View {{ product.name }}"
   >
     {% if product.image_url %}
+    {% if lazy_image | default(false) %}
+    <div
+      class="relative h-full w-full"
+      data-testid="lazy-image"
+      x-data="lazyImage"
+      data-src="{{ product.image_url }}"
+    >
+      <div
+        class="absolute inset-0 animate-pulse bg-commerce-parchment"
+        x-show="!loaded"
+        x-transition:leave="transition ease-in duration-200"
+        x-transition:leave-start="opacity-100"
+        x-transition:leave-end="opacity-0"
+        aria-hidden="true"
+        data-testid="lazy-image-skeleton"
+      ></div>
+      <template x-if="inView">
+        <img
+          :src="src"
+          alt="{{ product.name }}"
+          @load="onLoad()"
+          class="h-full w-full object-cover opacity-0 transition-opacity duration-300 group-hover:scale-105 transition-transform duration-300"
+          :class="{ 'opacity-100': loaded }"
+          width="224"
+          height="168"
+        />
+      </template>
+    </div>
+    {% else %}
     <img
       src="{{ product.image_url }}"
       alt="{{ product.name }}"
@@ -27,6 +56,7 @@
       width="224"
       height="168"
     />
+    {% endif %}
     {% else %}
     <div
       class="flex h-full w-full items-center justify-center text-xs text-commerce-muted"

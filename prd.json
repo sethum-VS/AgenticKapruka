@@ -645,7 +645,7 @@
       "Apply to product_card img tags in carousel",
       "Verify images fade in on scroll in browser devtools throttled network"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-055",

@@ -81,6 +81,17 @@ def test_product_carousel_renders_empty_for_no_products() -> None:
     assert html.strip() == ""
 
 
+def test_product_carousel_enables_lazy_image_on_cards() -> None:
+    """Carousel product cards use Alpine lazyImage with skeleton placeholders."""
+    html = render_product_carousel(_carousel_products())
+
+    assert html.count('data-testid="lazy-image"') == 3
+    assert html.count('data-testid="lazy-image-skeleton"') == 3
+    assert 'x-data="lazyImage"' in html
+    assert 'template x-if="inView"' in html
+    assert "transition-opacity duration-300" in html
+
+
 def test_product_carousel_includes_product_card_fields() -> None:
     """Each embedded product_card exposes name, price, and add-to-cart HTMX."""
     html = render_product_carousel(_carousel_products())

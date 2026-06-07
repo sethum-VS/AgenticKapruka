@@ -77,6 +77,7 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'x-ref="input"' in html
     assert "/static/js/chat-sse.js" in html
     assert "/static/js/chat-helpers.js" in html
+    assert "/static/js/lazy-image.js" in html
 
 
 def _mock_streaming_graph() -> MagicMock:
@@ -251,3 +252,4 @@ async def test_chat_index_returns_200_html_with_empty_state() -> None:
     assert 'x-data="chatHelpers()"' in html
     assert "/static/js/chat-sse.js" in html
     assert "/static/js/chat-helpers.js" in html
+    assert "/static/js/lazy-image.js" in html
