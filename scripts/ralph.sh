@@ -54,7 +54,14 @@ echo "=== Ralph AFK loop: $ITERATIONS iterations (branch: $RALPH_BRANCH, model: 
 for ((i = 1; i <= ITERATIONS; i++)); do
   echo ""
   echo "=== Ralph iteration $i/$ITERATIONS ==="
-  run_ralph_iteration
+  if ! run_ralph_iteration; then
+    agent_exit=$?
+    if is_user_abort_exit "$agent_exit"; then
+      echo "Interrupted — stopping Ralph loop." >&2
+      exit "$agent_exit"
+    fi
+    echo "Warning: iteration $i agent exited $agent_exit — continuing loop." >&2
+  fi
 
   if is_complete; then
     echo "PRD complete, exiting."
