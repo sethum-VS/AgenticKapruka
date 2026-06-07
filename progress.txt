@@ -328,3 +328,11 @@ Next: PRD-042 Category ingestion script (scripts/ingest_categories.py).
 - Unit tests (`tests/unit/test_ingest_categories.py`): taxonomy mapping, batched MERGE, full ingest + COUNT BY LABEL on recording mock driver.
 Files: lib/neo4j/{ingest_categories,__init__}.py, scripts/ingest_categories.py, tests/unit/test_ingest_categories.py, prd.json
 Next: PRD-043 Ontology node property enrichment.
+
+## PRD-043 — Ontology node property enrichment
+- Extended `lib/neo4j/ingest_categories.py`: `collect_node_enrichments` derives slug, display_name, description, and kapruka_id (URL path segment) per Category/Occasion/ProductType; MERGE Cypher SETs properties on all node types during ingest.
+- `kapruka_id_from_url` extracts trailing browse path segment; contextual descriptions built per label for embedding (PRD-045).
+- Added `fetch_ontology_node_properties` for post-ingest verification queries.
+- Unit tests: enrichment mapping, kapruka_id extraction, Birthday occasion slug/display_name/kapruka_id assertion via mock store + fetch.
+Files: lib/neo4j/ingest_categories.py, tests/unit/test_ingest_categories.py, prd.json
+Next: PRD-044 Vertex AI text-embedding-005 client.

@@ -12,8 +12,11 @@ from lib.neo4j.client import Neo4jClient
 from lib.neo4j.ingest_categories import (
     INGEST_CATEGORY_DEPTH,
     build_triplets_from_categories,
+    collect_node_enrichments,
     count_ontology_nodes_by_label,
+    fetch_ontology_node_properties,
     ingest_category_tree,
+    kapruka_id_from_url,
     merge_category_nodes,
     merge_ontology_triplets,
     occasion_node_id,
@@ -65,6 +68,7 @@ class _IngestMockStore:
     def __init__(self) -> None:
         self.executed: list[tuple[str, dict[str, Any]]] = []
         self.nodes: dict[str, set[str]] = defaultdict(set)
+        self.node_properties: dict[str, dict[str, Any]] = {}
         self.relationships: list[tuple[str, str, str]] = []
 
     def respond(self, cypher: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
@@ -73,7 +77,7 @@ class _IngestMockStore:
                 if "occasion_id" in row:
                     self._merge_triplet(row)
                 elif "category_id" in row:
-                    self.nodes[LABEL_CATEGORY].add(row["category_id"])
+                    self._merge_category(row)
             return []
 
         if "RETURN labels(n)[0] AS label" in cypher:
@@ -83,15 +87,64 @@ class _IngestMockStore:
                 if ids
             ]
 
+        if "RETURN n.id AS id" in cypher:
+            node_id = parameters["node_id"]
+            props = self.node_properties.get(node_id)
+            return [props] if props else []
+
         return []
+
+    def _store_node(self, label: str, node_id: str, props: dict[str, Any]) -> None:
+        self.nodes[label].add(node_id)
+        self.node_properties[node_id] = {"id": node_id, **props}
+
+    def _merge_category(self, row: dict[str, Any]) -> None:
+        cat_id = row["category_id"]
+        self._store_node(
+            LABEL_CATEGORY,
+            cat_id,
+            {
+                "slug": row["slug"],
+                "display_name": row["display_name"],
+                "description": row["description"],
+                "kapruka_id": row["kapruka_id"],
+            },
+        )
 
     def _merge_triplet(self, row: dict[str, Any]) -> None:
         cat_id = row["category_id"]
         occ_id = row["occasion_id"]
         pt_id = row["product_type_id"]
-        self.nodes[LABEL_CATEGORY].add(cat_id)
-        self.nodes[LABEL_OCCASION].add(occ_id)
-        self.nodes[LABEL_PRODUCT_TYPE].add(pt_id)
+        self._store_node(
+            LABEL_CATEGORY,
+            cat_id,
+            {
+                "slug": row["category_slug"],
+                "display_name": row["category_display_name"],
+                "description": row["category_description"],
+                "kapruka_id": row["category_kapruka_id"],
+            },
+        )
+        self._store_node(
+            LABEL_OCCASION,
+            occ_id,
+            {
+                "slug": row["occasion_slug"],
+                "display_name": row["occasion_display_name"],
+                "description": row["occasion_description"],
+                "kapruka_id": row["occasion_kapruka_id"],
+            },
+        )
+        self._store_node(
+            LABEL_PRODUCT_TYPE,
+            pt_id,
+            {
+                "slug": row["product_type_slug"],
+                "display_name": row["product_type_display_name"],
+                "description": row["product_type_description"],
+                "kapruka_id": row["product_type_kapruka_id"],
+            },
+        )
         self.relationships.append((occ_id, REL_OCCASION_TO_CATEGORY, cat_id))
         self.relationships.append((cat_id, REL_CATEGORY_TO_PRODUCT_TYPE, pt_id))
 
@@ -144,6 +197,25 @@ def test_slugify_name_normalizes_display_names() -> None:
     assert slugify_name("  Tea & Coffee  ") == "tea-coffee"
 
 
+def test_kapruka_id_from_url_extracts_trailing_segment() -> None:
+    assert kapruka_id_from_url("https://www.kapruka.com/online/cakes") == "cakes"
+    assert (
+        kapruka_id_from_url("https://www.kapruka.com/online/cakes/price/kapruka_cakes")
+        == "kapruka_cakes"
+    )
+
+
+def test_collect_node_enrichments_maps_birthday_occasion() -> None:
+    enrichments = collect_node_enrichments(_SAMPLE_TREE)
+    birthday_id = occasion_node_id("Birthday")
+    birthday = enrichments[birthday_id]
+
+    assert birthday.slug == "birthday"
+    assert birthday.display_name == "Birthday"
+    assert birthday.kapruka_id == "birthday"
+    assert "Birthday" in birthday.description
+
+
 def test_build_triplets_maps_two_level_tree() -> None:
     category_only, triplets = build_triplets_from_categories(_SAMPLE_TREE)
 
@@ -191,8 +263,9 @@ async def test_merge_ontology_triplets_executes_unwind_batches() -> None:
     store = _IngestMockStore()
     client = _client_with_store(store)
     _, triplets = build_triplets_from_categories(_SAMPLE_TREE)
+    enrichments = collect_node_enrichments(_SAMPLE_TREE)
 
-    merged = await merge_ontology_triplets(client, triplets)
+    merged = await merge_ontology_triplets(client, triplets, enrichments)
 
     assert merged == 2
     unwind_calls = [cypher for cypher, _ in store.executed if cypher.startswith("UNWIND")]
@@ -207,8 +280,9 @@ async def test_merge_ontology_triplets_executes_unwind_batches() -> None:
 async def test_merge_category_nodes_merges_leaf_categories() -> None:
     store = _IngestMockStore()
     client = _client_with_store(store)
+    enrichments = collect_node_enrichments(_SAMPLE_TREE)
 
-    merged = await merge_category_nodes(client, ["category:flowers"])
+    merged = await merge_category_nodes(client, ["category:flowers"], enrichments)
 
     assert merged == 1
     assert "category:flowers" in store.nodes[LABEL_CATEGORY]
@@ -243,4 +317,26 @@ async def test_count_ontology_nodes_by_label_returns_label_counts() -> None:
     counts = await count_ontology_nodes_by_label(client)
 
     assert sum(counts.values()) == 6
+    await client.close()
+
+
+async def test_birthday_occasion_node_has_display_name_and_slug() -> None:
+    """PRD-043: enriched Occasion nodes carry slug and display_name from Kapruka metadata."""
+    store = _IngestMockStore()
+    client = _client_with_store(store)
+    await ingest_category_tree(client, _SAMPLE_TREE)
+
+    birthday_id = occasion_node_id("Birthday")
+    props = await fetch_ontology_node_properties(
+        client,
+        label=LABEL_OCCASION,
+        node_id=birthday_id,
+    )
+
+    assert props is not None
+    assert props["slug"] == "birthday"
+    assert props["display_name"] == "Birthday"
+    assert props["kapruka_id"] == "birthday"
+    assert props["description"]
+
     await client.close()

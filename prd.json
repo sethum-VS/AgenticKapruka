@@ -513,7 +513,7 @@
       "Store source kapruka_id on each node for traceability",
       "Verify sample Birthday occasion node has display_name and slug properties"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-044",
