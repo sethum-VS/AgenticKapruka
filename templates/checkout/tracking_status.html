@@ -1,0 +1,75 @@
+{# Order tracking status with progress timeline from kapruka_track_order. #}
+<section
+  id="order-tracking-status"
+  class="flex flex-col gap-4 rounded-xl border border-commerce-parchment bg-commerce-parchment/30 p-4"
+  data-testid="order-tracking-status"
+  aria-label="Order tracking"
+>
+  <header class="flex flex-col gap-2 border-b border-commerce-parchment pb-3 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h3 class="text-sm font-semibold text-commerce-ink">Order tracking</h3>
+      <p class="text-xs text-commerce-muted" data-testid="tracking-order-number">
+        Order <span class="font-medium text-commerce-ink">{{ tracking.order_number }}</span>
+      </p>
+    </div>
+    <span
+      class="inline-flex w-fit items-center rounded-full bg-kapruka-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-kapruka-700"
+      data-testid="tracking-status-display"
+    >
+      {{ tracking.status_display }}
+    </span>
+  </header>
+
+  <dl class="grid gap-2 text-sm sm:grid-cols-2">
+    <div>
+      <dt class="text-xs font-medium uppercase tracking-wide text-commerce-muted">Delivery date</dt>
+      <dd class="text-commerce-ink" data-testid="tracking-delivery-date">{{ tracking.delivery_date }}</dd>
+    </div>
+    <div>
+      <dt class="text-xs font-medium uppercase tracking-wide text-commerce-muted">Amount</dt>
+      <dd class="text-commerce-ink" data-testid="tracking-amount">Rs. {{ tracking.amount }}</dd>
+    </div>
+    <div class="sm:col-span-2">
+      <dt class="text-xs font-medium uppercase tracking-wide text-commerce-muted">Recipient</dt>
+      <dd class="text-commerce-ink" data-testid="tracking-recipient">
+        {{ tracking.recipient.name }} · {{ tracking.recipient.city }}
+      </dd>
+    </div>
+  </dl>
+
+  {% if tracking.progress %}
+  <div>
+    <h4 class="mb-2 text-xs font-semibold uppercase tracking-wide text-commerce-muted">
+      Progress
+    </h4>
+    <ol
+      class="relative space-y-3 border-l-2 border-kapruka-200 pl-4"
+      data-testid="tracking-timeline"
+      aria-label="Order progress timeline"
+    >
+      {% for event in tracking.progress %}
+      <li
+        class="relative"
+        data-step="{{ event.step }}"
+        data-testid="tracking-timeline-step"
+      >
+        <span
+          class="absolute -left-[1.3rem] top-1 h-2.5 w-2.5 rounded-full border-2 border-white bg-kapruka-500"
+          aria-hidden="true"
+        ></span>
+        <p class="text-sm font-medium capitalize text-commerce-ink">{{ event.step }}</p>
+        <time class="text-xs text-commerce-muted" datetime="{{ event.timestamp }}">
+          {{ event.timestamp }}
+        </time>
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
+  {% endif %}
+
+  {% if tracking.live_tracking_available %}
+  <p class="text-xs font-medium text-kapruka-700" data-testid="tracking-live-available">
+    Live delivery tracking is available for this order.
+  </p>
+  {% endif %}
+</section>

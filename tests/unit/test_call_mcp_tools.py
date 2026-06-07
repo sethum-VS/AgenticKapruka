@@ -13,6 +13,7 @@ from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import (
     GetProductOutput,
     ListCategoriesOutput,
@@ -20,6 +21,7 @@ from lib.kapruka.types import (
     ProductAttributes,
     ProductShipping,
     SearchProductsOutput,
+    TrackOrderOutput,
 )
 
 _CLIENT_IP = "203.0.113.42"
@@ -187,12 +189,23 @@ def test_select_tool_calls_discovery_with_product_id_prefers_get_product() -> No
     assert selected[0]["args"]["product_id"] == "cake00ka002034"
 
 
-def test_select_tool_calls_tracking_returns_empty_without_explicit_calls() -> None:
+def test_select_tool_calls_tracking_returns_empty_without_order_number() -> None:
     state: AgentState = {
         "messages": [HumanMessage(content="where is my order?")],
         "intent": "tracking",
     }
     assert select_tool_calls(state) == []
+
+
+def test_select_tool_calls_tracking_extracts_order_number() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="where is order VIMP34456CB2")],
+        "intent": "tracking",
+    }
+    selected = select_tool_calls(state)
+    assert len(selected) == 1
+    assert selected[0]["name"] == TRACK_ORDER_TOOL
+    assert selected[0]["args"]["order_number"] == "VIMP34456CB2"
 
 
 def test_select_tool_calls_applies_category_preference_from_hybrid_context() -> None:
@@ -240,9 +253,32 @@ async def test_call_mcp_tools_applies_category_preference_in_search() -> None:
 
 
 @pytest.mark.asyncio
-async def test_call_mcp_tools_clears_stale_tool_results_when_no_tools_selected() -> None:
-    """Tracking/checkout turns must not carry prior-turn MCP payloads into state."""
+async def test_call_mcp_tools_tracking_replaces_stale_discovery_results() -> None:
+    """Tracking with an order number invokes track_order and drops stale search payloads."""
     mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.track_order.return_value = TrackOrderOutput.model_validate(
+        {
+            "order_number": "VIMP34456CB2",
+            "pnref": "1",
+            "status": "confirmed",
+            "status_display": "Confirmed",
+            "order_date": "June 5, 2026",
+            "delivery_date": "June 7, 2026",
+            "amount": "1000.00",
+            "payment_method": "Visa",
+            "recipient": {
+                "name": "Test",
+                "phone": "0771234567",
+                "address": "1 Road",
+                "city": "Colombo 03",
+            },
+            "progress": [],
+            "live_tracking_available": False,
+            "has_delivery_video": False,
+            "has_delivery_photo": False,
+            "items": [],
+        }
+    )
     state: AgentState = {
         "messages": [HumanMessage(content="where is order VIMP34456CB2")],
         "intent": "tracking",
@@ -259,8 +295,37 @@ async def test_call_mcp_tools_clears_stale_tool_results_when_no_tools_selected()
         client_ip=_CLIENT_IP,
     )
 
-    assert result == {"tool_results": {}}
+    mock_service.track_order.assert_awaited_once_with(
+        _CLIENT_IP,
+        order_number="VIMP34456CB2",
+    )
+    assert set(result["tool_results"].keys()) == {TRACK_ORDER_TOOL}
+    assert SEARCH_PRODUCTS_TOOL not in result["tool_results"]
     mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tools_tracking_without_number_clears_stale_tool_results() -> None:
+    """Tracking without an order number must not carry prior-turn MCP payloads into state."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    state: AgentState = {
+        "messages": [HumanMessage(content="where is my order?")],
+        "intent": "tracking",
+        "tool_results": {
+            SEARCH_PRODUCTS_TOOL: {
+                "results": [{"id": "stale-cake", "name": "Stale Birthday Cake"}],
+            },
+        },
+    }
+
+    result = await call_mcp_tools(
+        state,
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+    )
+
+    assert result == {"tool_results": {}}
+    mock_service.track_order.assert_not_awaited()
 
 
 def test_select_tool_calls_graph_birthday_context_sets_category_filter() -> None:

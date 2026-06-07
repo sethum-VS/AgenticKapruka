@@ -571,3 +571,13 @@ Next: PRD-071 Click-to-pay countdown UI component.
 - Tests: `test_payment_cta.py`, `test_payment_countdown_js.py`, `test_payment_cta_browser.py` (warning + expired); integration finalize asserts payment partial.
 Files: lib/checkout/payment.py, templates/checkout/payment_cta.html, static/js/payment-countdown.js, app/templating.py, graphs/nodes/{checkout_steps,run_checkout_graph,generate_response}.py, templates/chat/{message_assistant,index}.html, tests/unit/{test_payment_cta,test_payment_countdown_js,test_payment_cta_browser}.py, tests/integration/test_checkout_finalize.py, prd.json
 Next: PRD-072 Order tracking chat flow.
+
+## PRD-072 — Order tracking chat flow
+- Added `lib/checkout/tracking.py`: `extract_order_number` regex for post-payment IDs (e.g. VIMP34456CB2), rejects pre-payment `ORD-*` refs; `tracking_output_from_tool_results` parses MCP payload.
+- Added `templates/checkout/tracking_status.html`: status badge, delivery/recipient summary, vertical progress timeline (`data-testid="tracking-timeline"`).
+- `call_mcp_tools`: tracking intent invokes `kapruka_track_order` when order number present; `TRACK_ORDER_TOOL` added to supported explicit tool calls.
+- `generate_response`: tracking branch renders deterministic reply + embedded tracking partial; prompts for order number without LLM when missing.
+- `message_assistant.html` gains `tracking_status_html` slot; `render_tracking_status` in `app/templating.py`.
+- Tests: `test_tracking_status.py` (extraction, timeline HTML, MCP invoke, generate_response embed); updated `test_call_mcp_tools.py` tracking cases.
+Files: lib/checkout/tracking.py, templates/checkout/tracking_status.html, templates/chat/message_assistant.html, graphs/nodes/{call_mcp_tools,generate_response}.py, app/templating.py, tests/unit/{test_tracking_status,test_call_mcp_tools}.py, prd.json
+Next: PRD-073 Exception middleware for MCP errors.

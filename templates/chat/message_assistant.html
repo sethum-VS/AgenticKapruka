@@ -37,5 +37,15 @@
       {{ checkout_payment_html | safe }}
     </div>
     {% endif %}
+    {% if tracking_status_html %}
+    <div
+      class="assistant-tracking-status mt-3 border-t border-commerce-parchment/60 pt-3"
+      data-slot="tracking-status"
+      role="region"
+      aria-label="Order tracking"
+    >
+      {{ tracking_status_html | safe }}
+    </div>
+    {% endif %}
   </div>
 </div>

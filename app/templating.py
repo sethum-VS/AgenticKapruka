@@ -17,7 +17,7 @@ from lib.checkout.payment import PaymentCtaContext
 from lib.checkout.recipient import RecipientFormValues
 from lib.checkout.review import CheckoutReviewContext
 from lib.checkout.sender import SenderFormValues
-from lib.kapruka.types import LOCATION_TYPES, CheckDeliveryOutput
+from lib.kapruka.types import LOCATION_TYPES, CheckDeliveryOutput, TrackOrderOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import SUPPORTED_CURRENCIES, format_currency
 from lib.utils.timezone import colombo_today_iso
@@ -293,6 +293,13 @@ def render_payment_cta(*, payment: PaymentCtaContext) -> str:
     templates = get_templates()
     template = templates.env.get_template("checkout/payment_cta.html")
     return template.render(payment=payment)
+
+
+def render_tracking_status(*, tracking: TrackOrderOutput) -> str:
+    """Render templates/checkout/tracking_status.html order progress partial."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/tracking_status.html")
+    return template.render(tracking=tracking)
 
 
 def render_currency_selector(*, currency: str = "LKR") -> str:

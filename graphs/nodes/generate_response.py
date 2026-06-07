@@ -11,11 +11,12 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
-from app.templating import get_templates, render_product_carousel
+from app.templating import get_templates, render_product_carousel, render_tracking_status
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message, create_genai_client
 from graphs.state import AgentState
+from lib.checkout.tracking import extract_order_number, tracking_output_from_tool_results
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.zep.memory import format_memory_facts_block
 
@@ -149,6 +150,25 @@ def extract_search_products(tool_results: dict[str, Any] | None) -> list[dict[st
     return products
 
 
+def build_tracking_status_html(tool_results: dict[str, Any] | None) -> str | None:
+    """Render tracking_status partial when kapruka_track_order returned results."""
+    tracking = tracking_output_from_tool_results(tool_results)
+    if tracking is None:
+        return None
+    return render_tracking_status(tracking=tracking)
+
+
+def _build_tracking_assistant_message(tool_results: dict[str, Any] | None) -> str | None:
+    """Synthesize a tracking reply from kapruka_track_order tool_results."""
+    tracking = tracking_output_from_tool_results(tool_results)
+    if tracking is None:
+        return None
+    return (
+        f"Here is the latest status for order {tracking.order_number}: "
+        f"{tracking.status_display}. Expected delivery on {tracking.delivery_date}."
+    )
+
+
 def build_products_carousel_html(tool_results: dict[str, Any] | None) -> str | None:
     """Render product carousel partial when search_products returned results."""
     products = extract_search_products(tool_results)
@@ -200,6 +220,7 @@ def render_assistant_html(
     products_html: str | None = None,
     checkout_review_html: str | None = None,
     checkout_payment_html: str | None = None,
+    tracking_status_html: str | None = None,
 ) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
@@ -209,6 +230,7 @@ def render_assistant_html(
         products_html=products_html,
         checkout_review_html=checkout_review_html,
         checkout_payment_html=checkout_payment_html,
+        tracking_status_html=tracking_status_html,
     )
 
 
@@ -261,6 +283,28 @@ async def generate_response(
             "response_html": render_assistant_html(fallback),
             "assistant_message": fallback,
         }
+
+    if state.get("intent") == "tracking":
+        tracking_reply = _build_tracking_assistant_message(tool_results)
+        if tracking_reply:
+            tracking_html = build_tracking_status_html(tool_results)
+            return {
+                "response_html": render_assistant_html(
+                    tracking_reply,
+                    tracking_status_html=tracking_html,
+                ),
+                "assistant_message": tracking_reply,
+            }
+        if not extract_order_number(user_message):
+            missing_number_reply = (
+                "Please share your Kapruka order number from your confirmation email. "
+                "Use the post-payment number (for example VIMP34456CB2), not the "
+                "pre-payment checkout reference that starts with ORD-."
+            )
+            return {
+                "response_html": render_assistant_html(missing_number_reply),
+                "assistant_message": missing_number_reply,
+            }
 
     if state.get("intent") == "checkout":
         checkout = _extract_checkout_payload(tool_results)

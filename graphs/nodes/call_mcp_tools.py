@@ -8,16 +8,18 @@ from typing import Any
 
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
+from lib.checkout.tracking import extract_order_number
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.neo4j.hybrid_context import build_discovery_search_args
 
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_TOOLS: frozenset[str] = frozenset(
-    {SEARCH_PRODUCTS_TOOL, GET_PRODUCT_TOOL, LIST_CATEGORIES_TOOL},
+    {SEARCH_PRODUCTS_TOOL, GET_PRODUCT_TOOL, LIST_CATEGORIES_TOOL, TRACK_ORDER_TOOL},
 )
 
 # Kapruka product IDs often embed digits (e.g. cake00ka002034, EF_PC_CHOC0V2774P00065).
@@ -94,6 +96,12 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
     if intent == "general":
         return [{"name": LIST_CATEGORIES_TOOL, "args": {"depth": 1}}]
 
+    if intent == "tracking":
+        order_number = extract_order_number(user_message)
+        if order_number:
+            return [{"name": TRACK_ORDER_TOOL, "args": {"order_number": order_number}}]
+        return []
+
     return []
 
 
@@ -117,6 +125,8 @@ async def _invoke_tool(
         return await service.get_product(client_ip, **args)
     if name == LIST_CATEGORIES_TOOL:
         return await service.list_categories(client_ip, **args)
+    if name == TRACK_ORDER_TOOL:
+        return await service.track_order(client_ip, **args)
     msg = f"Unsupported MCP tool: {name}"
     raise ValueError(msg)
 

@@ -861,7 +861,7 @@
       "Call track_order with post-payment order_number not order_ref",
       "Write unit test verifying tracking partial renders status timeline HTML"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-073",
