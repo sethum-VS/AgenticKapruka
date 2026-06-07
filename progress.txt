@@ -34,3 +34,10 @@ Next: PRD-004 .env.example and .gitignore for secrets.
 - Confirmed `.gitignore` already excludes `.env` and `.env.*` while allowing `.env.example`; placeholders only, no real secrets.
 Files: .env.example
 Next: PRD-005 Jinja2 template environment (app/templating.py).
+
+## PRD-005 — Jinja2 template environment
+- Added `app/templating.py` with cached `get_templates()` dependency, custom `jinja2.Environment` (`auto_reload` when `APP_ENV` != production), and `format_currency` filter stub for PRD-056.
+- Created `templates/base.html` shell: HTMX 2.0.4, htmx-ext-sse 2.2.2, Alpine.js 3.14.8 CDN scripts; `hx-ext="sse"` on body; title/content blocks.
+- Unit tests: filter stub, singleton dependency, `TemplateResponse` renders base.html with expected script tags.
+Files: app/templating.py, templates/base.html, tests/unit/test_templating.py
+Next: PRD-006 Tailwind CSS standalone CLI build (static/css/input.css).
