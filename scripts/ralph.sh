@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # AFK Ralph — run up to N autonomous iterations with sandbox enabled.
-# Usage: ./scripts/ralph.sh [iterations] [--model MODEL]
-# Default: 10 iterations
+# Usage:
+#   ./scripts/ralph.sh [iterations] [--model MODEL]
+#   ./scripts/ralph.sh [iterations] [--text|--no-stream] [--model MODEL]
+# Default: 10 iterations, headless JSON stream (RALPH_STREAM=1)
 
 set -euo pipefail
 
@@ -16,6 +18,10 @@ while [[ $# -gt 0 ]]; do
       echo "Error: --interactive is only supported by ralph-once.sh (single HITL session)." >&2
       echo "Run: ./scripts/ralph-once.sh --interactive" >&2
       exit 1
+      ;;
+    --text|--no-stream)
+      RALPH_STREAM=0
+      shift
       ;;
     --model)
       RALPH_MODEL="$2"
@@ -34,7 +40,7 @@ done
 
 ITERATIONS="${POSITIONAL[0]:-10}"
 if ! [[ "$ITERATIONS" =~ ^[0-9]+$ ]] || [[ "$ITERATIONS" -lt 1 ]]; then
-  echo "Usage: $0 [iterations] [--model MODEL]" >&2
+  echo "Usage: $0 [iterations] [--text|--no-stream] [--model MODEL]" >&2
   echo "  iterations must be a positive integer (default: 10)" >&2
   exit 1
 fi

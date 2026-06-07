@@ -69,7 +69,7 @@
       "Add tailwind.config.js with Kapruka-adjacent warm commerce color palette",
       "Run tailwindcss build and verify static/css/app.css is generated with utility classes"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-007",
@@ -81,7 +81,7 @@
       "Verify GET /static/css/app.css returns 200 with text/css content-type",
       "Confirm base.html links to /static/css/app.css"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-008",
@@ -93,7 +93,7 @@
       "Implement async ping() returning bool and async close() for lifespan",
       "Write integration test with fakeredis or docker redis verifying ping succeeds"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-009",
@@ -105,7 +105,7 @@
       "Use separate Redis keys rate:{ip}:global and rate:{ip}:create_order",
       "Write pytest simulating 61st global request returns 429 with Retry-After header value"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-010",
@@ -117,7 +117,7 @@
       "Canonicalize args dict with sorted keys before hashing",
       "Write pytest verifying cache hit on second identical search_products call and bypass for create_order"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-011",
@@ -129,7 +129,7 @@
       "Implement get_redis(request) dependency yielding client",
       "Write route test confirming dependency injection resolves without error"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-012",
@@ -141,7 +141,7 @@
       "Implement health_check() running RETURN 1 AS ok",
       "Write integration test with testcontainers neo4j or mock driver verifying health_check"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-013",
@@ -153,7 +153,7 @@
       "Implement health_check() verifying API key validity",
       "Write unit test with mocked HTTP verifying client initializes with ZEP_API_KEY"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-014",
@@ -165,7 +165,7 @@
       "Add retry decorator with exponential backoff max 3 attempts on 5xx/timeout",
       "Write unit test with httpx mock transport verifying tool call JSON-RPC envelope"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-015",
@@ -177,7 +177,7 @@
       "Implement parse_mcp_error(result_str) raising appropriate subclass",
       "Write pytest covering Error (429), empty_cart, and product_not_found parsing"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-016",
@@ -189,7 +189,7 @@
       "Define Delivery, Recipient, Sender, CreateOrderInput, CreateOrderResponse with field validators",
       "Write pytest validating gift_message max 300 chars and icing_text max 120 chars constraints"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-017",
@@ -1004,6 +1004,18 @@
       "Configure pytest-playwright with base_url http://localhost:8080",
       "Test: load /chat, submit search message, verify product card appears in DOM",
       "Test: add to cart and verify cart drawer shows item; mock create_order in test env"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-085",
+    "category": "ops",
+    "title": "IaC bash script for GitHub Actions secrets and Cloud Run CI/CD",
+    "description": "Write an infrastructure-as-code bash script utilizing the GitHub CLI (gh) to programmatically configure repository secrets (gh secret set) and scaffold a complete .github/workflows/main.yml CI/CD pipeline that triggers the gcloud Cloud Run deployment automatically on push to main.",
+    "steps": [
+      "Create scripts/setup_github_cicd.sh using gh secret set for deploy secrets (GCP service account key, GCP_PROJECT_ID, GCP_REGION, etc.)",
+      "Script scaffolds .github/workflows/main.yml with quality gates and a deploy job that builds, pushes to Artifact Registry, and runs gcloud run deploy on push to main",
+      "Document script prerequisites (gh auth, gcloud) in docs/DEPLOY.md and verify workflow YAML syntax"
     ],
     "passes": false
   }

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.lifespan import lifespan
 from app.routes import cart, chat, checkout, health, partials
+
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
 def create_app() -> FastAPI:
@@ -27,6 +32,8 @@ def create_app() -> FastAPI:
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
         return RedirectResponse(url="/chat", status_code=307)
+
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     return app
 

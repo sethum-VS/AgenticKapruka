@@ -4,9 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}{{ title | default("AgenticKapruka") }}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
     {% block head_extra %}{% endblock %}
   </head>
-  <body hx-ext="sse">
+  <body class="min-h-screen bg-commerce-cream text-commerce-ink" hx-ext="sse">
     {% block body %}
     <main id="app">
       {% block content %}{% endblock %}

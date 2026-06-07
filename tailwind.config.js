@@ -1,0 +1,59 @@
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: ["./templates/**/*.html", "./app/**/*.py"],
+  safelist: [
+    "btn-primary",
+    "btn-secondary",
+    "card-commerce",
+    "bg-kapruka-600",
+    "hover:bg-kapruka-700",
+    "bg-commerce-parchment",
+    "border-commerce-muted/30",
+    "rounded-lg",
+    "rounded-xl",
+    "shadow-sm",
+    "px-4",
+    "py-2",
+    "transition-colors",
+  ],
+  theme: {
+    extend: {
+      colors: {
+        kapruka: {
+          50: "#fef2f2",
+          100: "#fde8e8",
+          200: "#fbd0d0",
+          300: "#f7a8a8",
+          400: "#f07272",
+          500: "#e63946",
+          600: "#d62839",
+          700: "#b91c1c",
+          800: "#991b1b",
+          900: "#7f1d1d",
+          950: "#450a0a",
+        },
+        commerce: {
+          cream: "#faf6f1",
+          parchment: "#f3ebe0",
+          gold: "#c9a227",
+          amber: "#d4a056",
+          terracotta: "#c75b4a",
+          spice: "#8b4513",
+          ink: "#2c2416",
+          muted: "#6b5d4d",
+        },
+      },
+      fontFamily: {
+        sans: [
+          "system-ui",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "Segoe UI",
+          "Roboto",
+          "sans-serif",
+        ],
+      },
+    },
+  },
+  plugins: [],
+};

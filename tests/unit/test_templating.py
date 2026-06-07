@@ -58,3 +58,4 @@ def test_template_response_renders_base_html() -> None:
     assert "htmx-ext-sse" in html
     assert "alpinejs" in html
     assert 'hx-ext="sse"' in html
+    assert 'href="/static/css/app.css"' in html

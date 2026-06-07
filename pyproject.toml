@@ -33,6 +33,7 @@ dev = [
     "httpx>=0.28,<1",
     "playwright>=1.49,<2",
     "pytest-playwright>=0.6,<1",
+    "fakeredis[lua]>=2.26,<3",
     "ruff>=0.8,<1",
     "mypy>=1.14,<2",
 ]
@@ -78,6 +79,10 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["redis", "redis.*"]
+disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

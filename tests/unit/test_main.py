@@ -36,3 +36,14 @@ async def test_health_stub_returns_200() -> None:
         response = await client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_static_css_returns_200_with_text_css() -> None:
+    application = create_app()
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/static/css/app.css")
+    assert response.status_code == 200
+    assert "text/css" in response.headers["content-type"]
+    assert response.text

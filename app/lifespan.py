@@ -9,6 +9,9 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from app.config import get_settings
+from lib.redis.client import RedisClient
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,8 +29,9 @@ async def _close_client(client: Any, name: str) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Connect external services on startup; release resources on shutdown."""
-    # Client wrappers wired in PRD-008 (Redis), PRD-012 (Neo4j), PRD-013 (Zep).
-    app.state.redis = None
+    settings = get_settings()
+    app.state.redis = await RedisClient.connect(settings.redis_url)
+    # Neo4j and Zep wired in PRD-012 and PRD-013.
     app.state.neo4j = None
     app.state.zep = None
     logger.info("Application startup complete")
