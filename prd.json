@@ -393,7 +393,7 @@
       "Compile with checkpointer and export get_shopping_graph() factory",
       "Write integration test invoking graph end-to-end with mocked services"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-034",

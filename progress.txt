@@ -245,3 +245,12 @@ Next: PRD-032 Model router Flash to Pro escalation (graphs/model_router.py).
 - Unit tests: default flash, review escalation, threshold boundary (3=flash, 4=pro), explicit pro tier.
 Files: graphs/{model_router,__init__}.py, graphs/nodes/generate_response.py, tests/unit/{test_model_router,test_generate_response}.py, prd.json
 Next: PRD-033 Compile main shopping StateGraph (graphs/shopping_graph.py).
+
+## PRD-033 — Compile main shopping StateGraph
+- Replaced bootstrap stub in `graphs/shopping_graph.py` with full StateGraph: START → analyze_intent → conditional (`route_after_analyze_intent`) → retrieve_hybrid_context | call_mcp_tools → call_mcp_tools → generate_response → END.
+- Added `ShoppingGraphDeps` dataclass for injectable `kapruka_service`, `client_ip`, `genai_client`; node wrappers bind deps at compile time for testability and PRD-037 chat route wiring.
+- `build_shopping_graph(checkpointer=…, deps=…)` and `get_shopping_graph(redis_client, deps=…)` export compiled graph with Redis checkpointer.
+- Integration tests (`tests/integration/test_shopping_graph.py`): end-to-end discovery flow, tracking skips hybrid context, astream_events node order assertion.
+- Updated `tests/integration/test_redis_checkpointer.py` to use full graph + mocks (tool_call_count persistence still verified).
+Files: graphs/{shopping_graph,__init__}.py, tests/integration/{test_shopping_graph,test_redis_checkpointer}.py, prd.json
+Next: PRD-034 Zep session create and resume (lib/zep/session.py).
