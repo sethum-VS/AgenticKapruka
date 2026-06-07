@@ -60,7 +60,8 @@ async def create_order(
     params = order_input.model_dump(mode="json", exclude_none=True)
     params["response_format"] = "json"
 
-    assert not is_cacheable_tool(TOOL_NAME)
+    if is_cacheable_tool(TOOL_NAME):
+        raise RuntimeError(f"{TOOL_NAME} must never be read-cached")
 
     raw = await client.call_tool(TOOL_NAME, params)
     text = raw.strip()

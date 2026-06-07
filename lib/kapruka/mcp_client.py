@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_MCP_URL = "https://mcp.kapruka.com/mcp"
 MAX_RETRY_ATTEMPTS = 3
 RETRY_BASE_DELAY_SECONDS = 0.5
+# Non-idempotent write tools must not be retried on transient 5xx/timeouts.
+NON_RETRYABLE_TOOLS = frozenset({"kapruka_create_order"})
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -73,6 +75,9 @@ class MCPHttpClient:
     async def call_tool(self, name: str, params: dict[str, Any] | None = None) -> str:
         """Invoke an MCP tool and return the raw text payload."""
         arguments = {"params": params or {}}
+
+        if name in NON_RETRYABLE_TOOLS:
+            return await self._call_tool_once(name, arguments)
 
         for attempt in range(MAX_RETRY_ATTEMPTS):
             try:

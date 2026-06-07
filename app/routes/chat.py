@@ -24,7 +24,7 @@ async def chat_index(request: Request) -> Response:
 @router.post("/stream")
 async def chat_stream(
     request: Request,
-    message: str = Form(..., min_length=1),
+    message: str = Form(..., min_length=1, max_length=2000),
 ) -> Response:
     """Accept chat message and return user bubble HTML for HTMX swap.
 
