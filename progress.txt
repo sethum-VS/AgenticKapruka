@@ -199,3 +199,11 @@ Next: PRD-026 AgentState TypedDict schema (graphs/state.py).
 - Unit tests: minimal dict type-check, all 12 field keys + messages reducer metadata, fully populated state assignment.
 Files: graphs/{state,__init__}.py, tests/unit/test_agent_state.py, prd.json
 Next: PRD-027 Redis LangGraph checkpointer (lib/redis/checkpointer.py).
+
+## PRD-027 — Redis LangGraph checkpointer
+- Added `lib/redis/checkpointer.py`: `create_checkpointer(redis_client)` binds `AsyncRedisSaver` to the shared pool; `get_checkpointer` calls `asetup()` for RediSearch indices (Memorystore / Redis Stack).
+- Added `langgraph-checkpoint-redis>=0.3,<0.4` to pyproject.toml (compatible with langgraph 0.6.x / checkpoint 3.x).
+- Added `graphs/shopping_graph.py` stub: `build_shopping_graph(checkpointer=…)` + `get_shopping_graph(redis_client)` factory; `bootstrap` placeholder node until PRD-028; helpers `initial_shopping_state` / `append_message_state`.
+- Integration tests (`tests/integration/test_redis_checkpointer.py`): fakeredis + patched `asetup` (no RediSearch in fakeredis); asserts `tool_call_count` and `messages` persist across two `ainvoke` calls with same `thread_id`, and thread isolation.
+Files: lib/redis/{checkpointer,__init__}.py, graphs/{shopping_graph,__init__}.py, pyproject.toml, tests/integration/test_redis_checkpointer.py, prd.json
+Next: PRD-028 analyze_intent LangGraph node (graphs/nodes/analyze_intent.py).

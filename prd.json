@@ -321,7 +321,7 @@
       "Wire checkpointer into shopping graph compile step",
       "Write integration test verifying state persists across two graph invocations with same thread_id"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-028",
