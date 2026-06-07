@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import redis.asyncio as aioredis
 from redis.asyncio import Redis
@@ -15,6 +16,15 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_CONNECTIONS = 10
 _DEFAULT_SOCKET_CONNECT_TIMEOUT = 5.0
 _DEFAULT_HEALTH_CHECK_INTERVAL = 30
+
+
+def _redacted_redis_endpoint(url: str) -> str:
+    """Return host:port for logging without credentials from the Redis URL."""
+    parsed = urlparse(url)
+    host = parsed.hostname or "unknown"
+    if parsed.port is not None:
+        return f"{host}:{parsed.port}"
+    return host
 
 
 class RedisClient:
@@ -116,4 +126,4 @@ class RedisClient:
             Redis,
             aioredis.from_url(self._url, **self._pool_kwargs),  # type: ignore[no-untyped-call]
         )
-        logger.info("Redis client reconnected to %s", self._url)
+        logger.info("Redis client reconnected to %s", _redacted_redis_endpoint(self._url))

@@ -30,6 +30,9 @@ class ZepClient:
         self._base_url = base_url
         self._request_timeout = request_timeout
         self._client = client
+        self._injected_httpx_client: httpx.AsyncClient | None = None
+        self._httpx_client: httpx.AsyncClient | None = None
+        self._owns_httpx_client = False
 
     @classmethod
     async def connect(
@@ -42,11 +45,17 @@ class ZepClient:
     ) -> ZepClient:
         """Create a connected client for Zep Cloud."""
         instance = cls(api_key, base_url=base_url, request_timeout=request_timeout)
+        if httpx_client is not None:
+            instance._injected_httpx_client = httpx_client
+            instance._httpx_client = httpx_client
+        else:
+            instance._httpx_client = httpx.AsyncClient(timeout=request_timeout)
+            instance._owns_httpx_client = True
         instance._client = AsyncZep(
             api_key=api_key,
             base_url=base_url,
             timeout=request_timeout,
-            httpx_client=httpx_client,
+            httpx_client=instance._httpx_client,
         )
         return instance
 
@@ -104,10 +113,12 @@ class ZepClient:
         return True
 
     async def close(self) -> None:
-        """Close the underlying httpx client; safe to call multiple times."""
+        """Close the owned httpx client; safe to call multiple times."""
         if self._client is None:
             return
-        httpx_client = self._client._client_wrapper.httpx_client.httpx_client
-        await httpx_client.aclose()
+        if self._owns_httpx_client and self._httpx_client is not None:
+            await self._httpx_client.aclose()
+            self._httpx_client = None
+            self._owns_httpx_client = False
         self._client = None
         logger.debug("Zep client closed")

@@ -73,15 +73,13 @@ class MCPHttpClient:
     async def call_tool(self, name: str, params: dict[str, Any] | None = None) -> str:
         """Invoke an MCP tool and return the raw text payload."""
         arguments = {"params": params or {}}
-        last_error: BaseException | None = None
 
         for attempt in range(MAX_RETRY_ATTEMPTS):
             try:
                 return await self._call_tool_once(name, arguments)
-            except BaseException as exc:
+            except Exception as exc:
                 if not _is_retryable(exc) or attempt >= MAX_RETRY_ATTEMPTS - 1:
                     raise
-                last_error = exc
                 logger.warning(
                     "MCP call_tool %s attempt %s/%s failed: %s",
                     name,
@@ -92,10 +90,7 @@ class MCPHttpClient:
                 delay = RETRY_BASE_DELAY_SECONDS * (2**attempt)
                 await asyncio.sleep(delay)
 
-        if last_error is not None:
-            raise last_error
-        msg = "MCP call_tool failed without a captured error"
-        raise RuntimeError(msg)
+        raise AssertionError("unreachable")  # loop always returns or raises
 
     async def close(self) -> None:
         """Close the owned HTTP client; safe to call multiple times."""
