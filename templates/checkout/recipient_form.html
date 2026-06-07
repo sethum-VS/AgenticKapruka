@@ -1,0 +1,67 @@
+{# Recipient contact form — server-validated via Pydantic Recipient model. #}
+<form
+  id="recipient-form"
+  class="flex flex-col gap-4"
+  hx-post="/checkout/validate-recipient"
+  hx-target="#recipient-form"
+  hx-swap="outerHTML"
+  data-testid="recipient-form"
+>
+  <div class="flex flex-col gap-1">
+    <label for="recipient-name" class="text-sm font-medium text-commerce-ink">Recipient name</label>
+    <input
+      id="recipient-name"
+      name="name"
+      type="text"
+      required
+      minlength="1"
+      maxlength="80"
+      value="{{ values.name }}"
+      placeholder="Full name as shown on delivery"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      data-testid="recipient-name-input"
+    />
+    <div
+      id="recipient-name-error"
+      class="empty:hidden"
+      data-testid="recipient-name-error-slot"
+      aria-live="polite"
+    ></div>
+  </div>
+
+  <div class="flex flex-col gap-1">
+    <label for="recipient-phone" class="text-sm font-medium text-commerce-ink">Recipient phone</label>
+    <input
+      id="recipient-phone"
+      name="phone"
+      type="tel"
+      required
+      maxlength="30"
+      value="{{ values.phone }}"
+      placeholder="0771234567 or +94771234567"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      data-testid="recipient-phone-input"
+    />
+    <p class="text-xs text-commerce-muted">Sri Lanka mobile: local 077… or E.164 +9477…</p>
+    <div
+      id="recipient-phone-error"
+      class="empty:hidden"
+      data-testid="recipient-phone-error-slot"
+      aria-live="polite"
+    ></div>
+  </div>
+
+  {% if valid %}
+  <p class="text-sm text-green-700" data-testid="recipient-form-valid" role="status">
+    Recipient details look good.
+  </p>
+  {% endif %}
+
+  <button
+    type="submit"
+    class="rounded-lg bg-kapruka-600 px-4 py-2 text-sm font-medium text-white hover:bg-kapruka-700 focus:outline-none focus:ring-2 focus:ring-kapruka-500/40"
+    data-testid="recipient-form-submit"
+  >
+    Continue
+  </button>
+</form>

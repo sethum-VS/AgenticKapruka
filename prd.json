@@ -777,7 +777,7 @@
       "Return field-level error partials on validation failure",
       "Write pytest for valid and invalid phone numbers"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-066",

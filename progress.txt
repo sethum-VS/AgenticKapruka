@@ -506,3 +506,12 @@ Next: PRD-064 Delivery address and instructions form.
 - Tests: `test_delivery_form.py` (structure, Pydantic bounds, OOB fragments); `test_delivery_form_flow.py` integration (short address → OOB error + city/instructions preserved; valid form → success marker).
 Files: lib/checkout/{__init__,delivery}.py, templates/checkout/{delivery_form,delivery_field_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_delivery_form.py, tests/integration/test_delivery_form_flow.py, prd.json
 Next: PRD-065 Recipient name and phone validation.
+
+## PRD-065 — Recipient name and phone validation
+- Added `_SL_MOBILE_PHONE` regex and `validate_phone` field validator on `Recipient` in `lib/kapruka/types.py` (+9477XXXXXXX E.164 and 077XXXXXXX local).
+- Added `lib/checkout/recipient.py`: `RecipientFormValues` + `parse_recipient_form` via Kapruka `Recipient` model.
+- Added `templates/checkout/recipient_form.html` (name 1–80, phone tel input) and `recipient_field_error.html` (HTMX OOB fragments).
+- Implemented `POST /checkout/validate-recipient`; `render_recipient_form` / `render_recipient_field_error` / `render_recipient_form_validation_response` in `app/templating.py`.
+- Tests: `test_recipient_form.py` (parametrized valid/invalid phones, OOB fragments); `test_recipient_form_flow.py` integration (invalid phone preserves name; valid → success marker).
+Files: lib/kapruka/types.py, lib/checkout/{recipient,__init__}.py, templates/checkout/{recipient_form,recipient_field_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_recipient_form.py, tests/integration/test_recipient_form_flow.py, prd.json
+Next: PRD-066 Sender form with anonymous toggle.

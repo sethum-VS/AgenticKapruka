@@ -13,6 +13,7 @@ import jinja2
 from fastapi.templating import Jinja2Templates
 
 from lib.checkout.delivery import DeliveryFormValues
+from lib.checkout.recipient import RecipientFormValues
 from lib.kapruka.types import LOCATION_TYPES, CheckDeliveryOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import SUPPORTED_CURRENCIES, format_currency
@@ -197,6 +198,44 @@ def render_delivery_form_validation_response(
         return form_html
     oob_errors = "".join(
         render_delivery_field_error(field=field, message=message)
+        for field, message in errors.items()
+    )
+    return form_html + oob_errors
+
+
+def render_recipient_field_error(*, field: str, message: str) -> str:
+    """Render HTMX OOB inline field error for recipient form validation."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/recipient_field_error.html")
+    return template.render(field=field, message=message)
+
+
+def render_recipient_form(
+    *,
+    values: RecipientFormValues | None = None,
+    valid: bool = False,
+) -> str:
+    """Render templates/checkout/recipient_form.html with optional submitted values."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/recipient_form.html")
+    return template.render(
+        values=values or RecipientFormValues(),
+        valid=valid,
+    )
+
+
+def render_recipient_form_validation_response(
+    *,
+    values: RecipientFormValues,
+    errors: dict[str, str],
+    valid: bool = False,
+) -> str:
+    """Render recipient form plus OOB field error fragments (preserves form state)."""
+    form_html = render_recipient_form(values=values, valid=valid)
+    if not errors:
+        return form_html
+    oob_errors = "".join(
+        render_recipient_field_error(field=field, message=message)
         for field, message in errors.items()
     )
     return form_html + oob_errors

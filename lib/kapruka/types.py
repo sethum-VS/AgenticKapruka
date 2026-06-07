@@ -12,6 +12,7 @@ SUPPORTED_CURRENCIES = frozenset({"LKR", "USD", "GBP", "AUD", "CAD", "EUR"})
 LOCATION_TYPES = frozenset({"house", "apartment", "office", "other"})
 SEARCH_SORT_VALUES = frozenset({"relevance", "price_asc", "price_desc", "newest", "bestseller"})
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_SL_MOBILE_PHONE = re.compile(r"^(?:\+9477\d{7}|077\d{7})$")
 
 ResponseFormat = Literal["markdown", "json"]
 
@@ -267,6 +268,15 @@ class Recipient(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=80)
     phone: str = Field(..., min_length=7, max_length=30)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        phone = value.strip()
+        if not _SL_MOBILE_PHONE.match(phone):
+            msg = "Phone must be E.164 +9477XXXXXXX or local 077XXXXXXX format"
+            raise ValueError(msg)
+        return phone
 
 
 class Delivery(BaseModel):
