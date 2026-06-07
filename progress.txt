@@ -229,3 +229,11 @@ Next: PRD-030 call_mcp_tools LangGraph node (graphs/nodes/call_mcp_tools.py).
 - Unit tests: discovery search mock, general list_categories, explicit tool_calls override, count increment, product-id routing helper.
 Files: graphs/nodes/{call_mcp_tools,__init__}.py, tests/unit/test_call_mcp_tools.py, prd.json
 Next: PRD-031 generate_response LangGraph node (graphs/nodes/generate_response.py).
+
+## PRD-031 — generate_response LangGraph node
+- Added `graphs/nodes/generate_response.py`: async `generate_response(state)` calls Gemini (flash default, pro when `model_tier=pro`) with faithfulness system prompt + serialized `tool_results` JSON; structured `AssistantReply` schema; renders `templates/chat/message_assistant.html` into `response_html`.
+- Created `templates/chat/message_assistant.html` assistant bubble partial (left-aligned, commerce styling); product carousel slot deferred to PRD-039/055.
+- Injectable `genai_client`; empty user message short-circuits without LLM; `render_assistant_html()` exposed for tests.
+- Unit tests: product names from mocked tool_results appear in response_html, empty message skip, JSON text fallback parsing, template structure.
+Files: graphs/nodes/{generate_response,__init__}.py, templates/chat/message_assistant.html, tests/unit/test_generate_response.py, prd.json
+Next: PRD-032 Model router Flash to Pro escalation (graphs/model_router.py).

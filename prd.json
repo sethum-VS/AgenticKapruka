@@ -369,7 +369,7 @@
       "Render templates/chat/message_assistant.html with response text",
       "Write unit test verifying response_html contains product names from mocked tool_results"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-032",
