@@ -439,4 +439,26 @@ Next: PRD-056 Currency formatting Jinja filter.
 - `app/templating.py` imports `format_currency` from `lib.utils.currency` (Jinja filter registration unchanged).
 - Tests: `tests/unit/test_currency.py` (PRD assertion + decimal/rounding/validation); updated product card snapshot and carousel tests to `Rs.` LKR display.
 Files: lib/utils/{__init__,currency}.py, app/templating.py, tests/unit/{test_currency,test_templating,test_product_card,test_product_carousel}.py, tests/fixtures/snapshots/product_card_in_stock.html, prd.json
-Next: PRD-057 Header currency selector with HTMX.
+## PRD-057 — Header currency selector with HTMX
+- Added `lib/redis/session.py`: `get_session_currency` / `set_session_currency` with Redis key `session:{id}:currency` (7-day TTL).
+- Added `POST /session/currency` (`app/routes/session.py`): HTMX form post, validates against `SUPPORTED_CURRENCIES`, sets signed `ak_session` cookie on first visit.
+- `templates/components/currency_selector.html` in `base.html` header (`hx-post`, `hx-swap="none"`, `hx-trigger="change"`); chat page uses `header_start` / `content` / `footer` blocks.
+- `lib/chat/page_context.py` loads currency for GET `/chat` from Redis when session cookie present.
+- Tests: `tests/unit/test_session_currency.py` (Redis get/set, HTMX attrs, POST persistence, refresh retains EUR selection).
+Files: lib/redis/session.py, lib/chat/page_context.py, app/routes/{session,chat}.py, app/main.py, app/templating.py, templates/{base,chat/index}.html, templates/components/currency_selector.html, tests/unit/{test_session_currency,test_chat,test_templating}.py, prd.json
+Next: PRD-058 Propagate session currency to all MCP calls.
+
+## PRD-058 — Propagate session currency to all MCP calls
+- `_chat_event_stream` loads `get_session_currency(redis, thread_id)` before graph invocation; `resolve_turn_state` seeds/refreshes `AgentState.currency` on every turn (first + follow-up via `initial_shopping_state` / `append_message_state`).
+- `call_mcp_tools`: `_resolve_currency` prefers session state; `_inject_currency_args` ensures `search_products` and `get_product` always receive currency (explicit LLM tool_calls included).
+- Tests: `test_chat_deps` currency seed/refresh; `test_call_mcp_tools_injects_session_currency_into_explicit_tool_calls`; integration `test_chat_stream_search_uses_session_currency_after_update` (POST /session/currency USD → POST /chat/stream → search_products currency=USD).
+Files: app/routes/chat.py, lib/chat/deps.py, graphs/{shopping_graph,nodes/call_mcp_tools}.py, tests/unit/{test_chat_deps,test_call_mcp_tools}.py, tests/integration/test_chat_flow.py, prd.json
+Next: PRD-059 Redis server-side cart state.
+
+## PRD-059 — Redis server-side cart state
+- Added `lib/redis/cart.py`: Redis hash `cart:{session_id}` stores JSON-serialized `StoredCartItem` rows (product_id, quantity, icing_text, name, price snapshot); 7-day TTL aligned with session prefs.
+- API: `add_item` (merge qty for existing product_id), `remove_item`, `update_quantity`, `get_cart`, `clear_cart`; `CartLimitExceeded` on 31st distinct line; quantity bounded 1–99.
+- Exported cart helpers from `lib/redis/__init__.py`.
+- Tests: `tests/unit/test_redis_cart.py` (CRUD, merge, limit, quantity bounds, clear).
+Files: lib/redis/{cart,__init__}.py, tests/unit/test_redis_cart.py, prd.json
+Next: PRD-060 Cart HTMX partial swaps.
