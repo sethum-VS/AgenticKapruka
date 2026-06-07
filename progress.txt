@@ -141,3 +141,10 @@ Next: PRD-018 Wrapper for kapruka_get_product and kapruka_list_categories.
 - Unit tests: fixture JSON for product detail (variants, shipping, category path) and nested category tree (depth=2); forced response_format; input validation short-circuit; product_not_found → KaprukaNotFoundError.
 Files: lib/kapruka/tools/{get_product,list_categories}.py, lib/kapruka/{__init__,tools/__init__}.py, tests/unit/{test_get_product,test_list_categories}.py, prd.json
 Next: PRD-019 Wrapper for delivery city and check_delivery tools (lib/kapruka/tools/delivery.py).
+
+## PRD-019 — Wrapper for delivery city and check_delivery tools
+- Added `lib/kapruka/tools/delivery.py`: async `list_delivery_cities(client, *, query, limit)` returns `list[str]` of canonical city names from `ListDeliveryCitiesOutput`; async `check_delivery(client, *, city, delivery_date, product_id)` validates via `CheckDeliveryInput` (YYYY-MM-DD) and returns typed `CheckDeliveryOutput` with `available` bool plus rate/reason/next_available_date.
+- Both wrappers force `response_format=json`, call MCP via `parse_mcp_error` + Pydantic validate; `city_not_deliverable` and `date_not_deliverable` map to `KaprukaValidationError`.
+- Unit tests: city name extraction, forced JSON format, limit/date validation short-circuit, available/unavailable payloads, both deliverability error codes.
+Files: lib/kapruka/tools/delivery.py, lib/kapruka/tools/__init__.py, lib/kapruka/__init__.py, tests/unit/test_delivery.py, prd.json
+Next: PRD-020 Wrapper for kapruka_create_order (lib/kapruka/tools/create_order.py).

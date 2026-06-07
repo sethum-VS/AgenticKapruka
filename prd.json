@@ -225,7 +225,7 @@
       "Implement check_delivery validating YYYY-MM-DD date format and returning availability bool",
       "Write unit tests covering city_not_deliverable and date_not_deliverable error parsing"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-020",
