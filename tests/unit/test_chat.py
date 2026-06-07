@@ -62,6 +62,9 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'id="chat-form"' in html
     assert 'hx-post="/chat/stream"' in html
     assert 'hx-ext="sse"' in html
+    assert 'sse-connect="/chat/stream"' in html
+    assert 'sse-swap="message"' in html
+    assert 'id="chat-sse-listener"' in html
     assert 'hx-target="#chat-messages"' in html
     assert 'hx-swap="beforeend"' in html
     assert 'hx-trigger="submit"' in html
@@ -72,6 +75,7 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'x-data="chatHelpers()"' in html
     assert 'x-ref="messages"' in html
     assert 'x-ref="input"' in html
+    assert "/static/js/chat-sse.js" in html
     assert "/static/js/chat-helpers.js" in html
 
 
@@ -187,5 +191,8 @@ async def test_chat_index_returns_200_html_with_empty_state() -> None:
     assert "Gift ideas under Rs. 5,000" in html
     assert 'id="chat-form"' in html
     assert 'hx-post="/chat/stream"' in html
+    assert 'sse-connect="/chat/stream"' in html
+    assert 'sse-swap="message"' in html
     assert 'x-data="chatHelpers()"' in html
+    assert "/static/js/chat-sse.js" in html
     assert "/static/js/chat-helpers.js" in html

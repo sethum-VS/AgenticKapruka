@@ -453,7 +453,7 @@
       "Set sse-connect and sse-swap on chat form or dedicated SSE listener element",
       "Manual browser test verifying streamed tokens appear incrementally in chat"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-039",

@@ -290,6 +290,13 @@ Next: PRD-037 SSE streaming chat endpoint.
 Files: app/routes/chat.py, lib/chat/{__init__,sse,streaming,deps,session}.py, tests/unit/{test_chat,test_chat_sse}.py, prd.json
 Next: PRD-038 HTMX SSE extension wiring (sse-connect/sse-swap on chat form).
 
+## PRD-038 — HTMX SSE extension wiring
+- `base.html` already ships `hx-ext="sse"` + `htmx-ext-sse@2.2.2`; chat form now uses `sse-connect="/chat/stream"` and a hidden `#chat-sse-listener` with `sse-swap="message"` targeting `#chat-messages` (`beforeend`).
+- Added `static/js/chat-sse.js`: bridges POST `/chat/stream` (SSE extension only supports GET EventSource) via fetch + `htmx.swap`, stubs `htmx.createEventSource` for the connect path, dispatches `htmx:afterSwap`/`htmx:afterRequest` for Alpine chatHelpers.
+- Playwright harness (`test_chat_sse_browser.py`) verifies incremental `message` events append into `#chat-messages`; static contract test for `chat-sse.js`.
+Files: templates/chat/index.html, static/js/chat-sse.js, tests/unit/{test_chat,test_chat_sse_js,test_chat_sse_browser}.py, prd.json
+Next: PRD-039 Assistant message Jinja partial (products carousel slot).
+
 ## PRD-040 — Chat route integration test
 - Added `tests/integration/test_chat_flow.py`: httpx `AsyncClient` POSTs `show me birthday cakes` to `/chat/stream`, collects SSE body, asserts `role="assistant"`, `data-role="assistant-message"`, user message present, no error alert markup.
 - Mocks `build_shopping_graph_deps` with `ShoppingGraphDeps` (mocked `KaprukaService` + Gemini); real `get_compiled_chat_graph` + full shopping StateGraph run.

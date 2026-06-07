@@ -3,6 +3,7 @@
 {% block title %}{{ title | default("Chat — AgenticKapruka") }}{% endblock %}
 
 {% block head_extra %}
+<script src="/static/js/chat-sse.js"></script>
 <script src="/static/js/chat-helpers.js"></script>
 {% endblock %}
 
@@ -84,12 +85,19 @@
         id="chat-form"
         hx-post="/chat/stream"
         hx-ext="sse"
-        hx-target="#chat-messages"
-        hx-swap="beforeend"
+        sse-connect="/chat/stream"
         hx-trigger="submit"
         hx-indicator="#chat-loading"
         class="relative"
       >
+        <div
+          id="chat-sse-listener"
+          sse-swap="message"
+          hx-target="#chat-messages"
+          hx-swap="beforeend"
+          hidden
+          aria-hidden="true"
+        ></div>
         <div class="flex items-end gap-3">
           <label for="chat-message" class="sr-only">Message</label>
           <textarea
