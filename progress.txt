@@ -27,3 +27,10 @@ Next: PRD-003 Pydantic Settings (app/config.py).
 - Unit tests: `test_settings_loads_from_env` plus rejection cases for short session secret and empty API key.
 Files: app/config.py, tests/unit/test_settings.py, pyproject.toml
 Next: PRD-004 .env.example and .gitignore for secrets.
+
+## PRD-004 — Environment example file
+- Created `.env.example` documenting all Settings fields with commented local vs Cloud Run guidance.
+- Documented Memorystore VPC connector requirement (`--vpc-connector`, `--vpc-egress=private-ranges-only`) and Secret Manager mapping for Cloud Run deploy.
+- Confirmed `.gitignore` already excludes `.env` and `.env.*` while allowing `.env.example`; placeholders only, no real secrets.
+Files: .env.example
+Next: PRD-005 Jinja2 template environment (app/templating.py).
