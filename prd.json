@@ -801,7 +801,7 @@
       "Add nodes for each step with validation gates blocking advance on invalid data",
       "Write unit test verifying cannot jump from cart to review without intermediate steps"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-068",

@@ -523,3 +523,11 @@ Next: PRD-066 Sender form with anonymous toggle.
 - Tests: `test_sender_form.py` (HTMX attrs, Sender schema fields only, Alpine preview binding, Pydantic bounds); `test_sender_form_flow.py` integration (empty name OOB + anonymous preserved; valid with/without checkbox).
 Files: lib/checkout/{sender,__init__}.py, templates/checkout/{sender_form,sender_field_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_sender_form.py, tests/integration/test_sender_form_flow.py, prd.json
 Next: PRD-067 Checkout sub-graph state machine definition.
+
+## PRD-067 — Checkout sub-graph state machine definition
+- Added `graphs/checkout_state.py`: `CheckoutState` TypedDict with `current_step`, `target_step`, `action`, form accumulators (cart, delivery, recipient, sender), `step_valid`, `validation_errors`; `resolve_navigation` blocks forward skips; `CHECKOUT_STEP_ORDER` matches PRD sequence.
+- Added `graphs/nodes/checkout_steps.py`: per-step validation gates (Redis cart hydrate, city/date/recipient/sender Pydantic checks, review requires all prior steps + full Delivery); optional Kapruka MCP city/date checks when service injected.
+- Added `graphs/checkout_graph.py`: `build_checkout_graph` / `get_checkout_graph` with `CheckoutGraphDeps` (redis, kapruka, client_ip); START routes to current step node only — one step per invoke.
+- Tests: `tests/unit/test_checkout_graph.py` (cart→review jump blocked, sequential advance, empty cart, back navigation, Redis cart load, navigation matrix).
+Files: graphs/{checkout_state,checkout_graph}.py, graphs/nodes/checkout_steps.py, graphs/__init__.py, tests/unit/test_checkout_graph.py, prd.json
+Next: PRD-068 Checkout sub-graph integration with main graph.
