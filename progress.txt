@@ -111,3 +111,19 @@ Next: PRD-014 MCP HTTP JSON-RPC client (lib/kapruka/mcp_client.py).
 - Unit tests: JSON-RPC `tools/call` envelope verification, 503 retry with backoff timing, max-retry exhaustion, no retry on 4xx, idempotent close.
 Files: lib/kapruka/__init__.py, lib/kapruka/mcp_client.py, tests/unit/test_mcp_client.py
 Next: PRD-015 Kapruka error hierarchy (lib/kapruka/errors.py).
+
+## PRD-015 — Kapruka error hierarchy
+- Added `lib/kapruka/errors.py`: `KaprukaError` base with `code`/`message`; `KaprukaRateLimitError` (429 + `retry_after_seconds` parsed from message or default 60s); `KaprukaValidationError` for checkout/input codes (`empty_cart`, `city_not_deliverable`, etc.); `KaprukaNotFoundError` for `product_not_found`/`order_not_found`.
+- `parse_mcp_error(result_str)` matches live MCP `Error (<code>): <message>` payloads; also handles `Error: …` and MCP SDK `Error executing tool … validation error` strings; successful JSON passes through without raising.
+- Verified live MCP formats: `Error (product_not_found): …`, `Error (order_not_found): …`.
+- Unit tests: 429 with/without retry hint, empty_cart, product_not_found, order_not_found, success JSON no-op.
+Files: lib/kapruka/errors.py, lib/kapruka/__init__.py, tests/unit/test_kapruka_errors.py
+Next: PRD-016 Shared Pydantic types for MCP tools (lib/kapruka/types.py).
+
+## PRD-016 — Shared Pydantic types for MCP tools
+- Added `lib/kapruka/types.py` with Pydantic v2 input/output models for all 7 Kapruka MCP tools: search_products, get_product, list_categories, list_delivery_cities, check_delivery, create_order, track_order.
+- Checkout models: `CartItem` (qty 1–99, icing_text max 120), `Recipient`, `Delivery` (YYYY-MM-DD date, location_type enum), `Sender`, `CreateOrderInput` (cart 1–30, gift_message max 300), `CreateOrderResponse` (order_ref, checkout_url, expires_at, summary).
+- Shared helpers: `Money`, `CategoryRef`, currency/sort validators aligned with live MCP constraints.
+- Unit tests: gift_message 300-char boundary + 301 rejection; icing_text 120-char boundary + 121 rejection; cart size bounds.
+Files: lib/kapruka/types.py, lib/kapruka/__init__.py, tests/unit/test_kapruka_types.py
+Next: PRD-017 Wrapper for kapruka_search_products (lib/kapruka/tools/search_products.py).

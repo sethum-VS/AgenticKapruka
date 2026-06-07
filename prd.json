@@ -177,7 +177,7 @@
       "Implement parse_mcp_error(result_str) raising appropriate subclass",
       "Write pytest covering Error (429), empty_cart, and product_not_found parsing"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-016",
@@ -189,7 +189,7 @@
       "Define Delivery, Recipient, Sender, CreateOrderInput, CreateOrderResponse with field validators",
       "Write pytest validating gift_message max 300 chars and icing_text max 120 chars constraints"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-017",
