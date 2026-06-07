@@ -357,7 +357,7 @@
       "Increment tool_call_count on each invocation; store results in tool_results",
       "Write unit test with mocked KaprukaService verifying search called for discovery intent"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-031",

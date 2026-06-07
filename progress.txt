@@ -222,3 +222,10 @@ Next: PRD-029 retrieve_hybrid_context stub node (graphs/nodes/retrieve_hybrid_co
 - Graph wiring deferred to PRD-033; routing helper ready for conditional edges.
 Files: graphs/nodes/{retrieve_hybrid_context,__init__}.py, tests/unit/test_retrieve_hybrid_context.py, prd.json
 Next: PRD-030 call_mcp_tools LangGraph node (graphs/nodes/call_mcp_tools.py).
+
+## PRD-030 — call_mcp_tools LangGraph node
+- Added `graphs/nodes/call_mcp_tools.py`: `select_tool_calls(state)` picks explicit `tool_calls` when present, else intent defaults — discovery → search_products (or get_product when Kapruka product id detected in message), general → list_categories; tracking/checkout deferred to later PRDs.
+- `call_mcp_tools(state, kapruka_service=…, client_ip=…)` invokes KaprukaService, merges serialized Pydantic outputs into `tool_results`, increments `tool_call_count` per invocation; requires injected service (graph wiring in PRD-033).
+- Unit tests: discovery search mock, general list_categories, explicit tool_calls override, count increment, product-id routing helper.
+Files: graphs/nodes/{call_mcp_tools,__init__}.py, tests/unit/test_call_mcp_tools.py, prd.json
+Next: PRD-031 generate_response LangGraph node (graphs/nodes/generate_response.py).
