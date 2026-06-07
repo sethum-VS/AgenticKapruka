@@ -165,7 +165,7 @@
       "Add retry decorator with exponential backoff max 3 attempts on 5xx/timeout",
       "Write unit test with httpx mock transport verifying tool call JSON-RPC envelope"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-015",

@@ -102,3 +102,12 @@ Next: PRD-013 Zep Cloud client wrapper (lib/zep/client.py).
 - Unit tests with httpx MockTransport: API key Authorization header, health_check success/failure, list_sessions, create_session, close idempotency.
 Files: lib/zep/__init__.py, lib/zep/client.py, tests/unit/test_zep_client.py
 Next: PRD-014 MCP HTTP JSON-RPC client (lib/kapruka/mcp_client.py).
+
+## PRD-014 — MCP HTTP JSON-RPC client
+- Added `lib/kapruka/mcp_client.py` with `MCPHttpClient`: uses MCP SDK `streamable_http_client` + `ClientSession` over HTTP JSON-RPC to `KAPRUKA_MCP_URL` (default `https://mcp.kapruka.com/mcp`).
+- `call_tool(name, params)` wraps Kapruka's `{"params": ...}` argument shape, returns concatenated text content; per-call MCP session avoids anyio task-group lifecycle issues on reconnect.
+- Retry loop: max 3 attempts, exponential backoff (0.5s, 1s) on 5xx `HTTPStatusError`, `TimeoutException`, and `ExceptionGroup` wrappers from the transport.
+- Injectable `httpx.AsyncClient` for tests; `connect()` / `close()` mirror Redis/Neo4j/Zep client pattern.
+- Unit tests: JSON-RPC `tools/call` envelope verification, 503 retry with backoff timing, max-retry exhaustion, no retry on 4xx, idempotent close.
+Files: lib/kapruka/__init__.py, lib/kapruka/mcp_client.py, tests/unit/test_mcp_client.py
+Next: PRD-015 Kapruka error hierarchy (lib/kapruka/errors.py).
