@@ -12,6 +12,11 @@ source "$(cd "$(dirname "$0")" && pwd)/ralph-common.sh"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --interactive|-i)
+      echo "Error: --interactive is only supported by ralph-once.sh (single HITL session)." >&2
+      echo "Run: ./scripts/ralph-once.sh --interactive" >&2
+      exit 1
+      ;;
     --model)
       RALPH_MODEL="$2"
       shift 2

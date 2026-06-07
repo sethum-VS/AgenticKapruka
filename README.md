@@ -41,8 +41,15 @@ See [AGENTS.md](AGENTS.md) for agent and contributor conventions.
 PRD backlog lives in `prd.json`. Progress is logged in `progress.txt`.
 
 ```bash
-# Single supervised iteration
+# Single supervised iteration (headless JSON stream — good for logs)
 ./scripts/ralph-once.sh
+
+# Interactive Cursor Agent UI (full-screen TUI)
+./scripts/ralph-once.sh --interactive
+# or: RALPH_INTERACTIVE=1 ./scripts/ralph-once.sh
+
+# Headless plain text instead of JSON
+./scripts/ralph-once.sh --text
 
 # AFK loop (default 10 iterations)
 ./scripts/ralph.sh

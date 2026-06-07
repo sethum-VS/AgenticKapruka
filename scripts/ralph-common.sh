@@ -9,6 +9,7 @@ RALPH_BRANCH="${RALPH_BRANCH:-ralph/sprint-1}"
 RALPH_MODEL="${RALPH_MODEL:-composer-2.5}"
 RALPH_SANDBOX="${RALPH_SANDBOX:-}"
 RALPH_STREAM="${RALPH_STREAM:-1}"
+RALPH_INTERACTIVE="${RALPH_INTERACTIVE:-}"
 RALPH_LAST_LOG=""
 
 PRD_FILE="$PROJECT_ROOT/prd.json"
@@ -30,6 +31,15 @@ cursor_agent_bin() {
 parse_ralph_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --interactive|-i)
+        RALPH_INTERACTIVE=1
+        RALPH_STREAM=0
+        shift
+        ;;
+      --text|--no-stream)
+        RALPH_STREAM=0
+        shift
+        ;;
       --model)
         RALPH_MODEL="$2"
         shift 2
@@ -156,22 +166,30 @@ EOF
 }
 
 log_iteration_context() {
-  local sandbox_label prd_id specialist prd_title
+  local sandbox_label ui_label prd_id specialist prd_title
   if [[ -n "$RALPH_SANDBOX" ]]; then
     sandbox_label="on"
   else
     sandbox_label="off"
   fi
 
+  if [[ -n "$RALPH_INTERACTIVE" ]]; then
+    ui_label="interactive"
+  elif [[ "$RALPH_STREAM" == "1" ]]; then
+    ui_label="headless-json"
+  else
+    ui_label="headless-text"
+  fi
+
   prd_id="$(select_next_prd_id)"
   if [[ -z "$prd_id" ]]; then
-    echo "branch: $RALPH_BRANCH | model: $RALPH_MODEL | sandbox: $sandbox_label | PRD: (none — all pass)" >&2
+    echo "branch: $RALPH_BRANCH | model: $RALPH_MODEL | ui: $ui_label | sandbox: $sandbox_label | PRD: (none — all pass)" >&2
     return
   fi
 
   specialist="$(resolve_specialist_persona "$prd_id")"
   prd_title="$(get_prd_field "$prd_id" title)"
-  echo "branch: $RALPH_BRANCH | model: $RALPH_MODEL | sandbox: $sandbox_label | PRD: $prd_id ($prd_title) | personas: strict-qa + $specialist" >&2
+  echo "branch: $RALPH_BRANCH | model: $RALPH_MODEL | ui: $ui_label | sandbox: $sandbox_label | PRD: $prd_id ($prd_title) | personas: strict-qa + $specialist" >&2
 }
 
 log_iteration_commit() {
@@ -187,18 +205,22 @@ log_iteration_commit() {
 
 _build_agent_args() {
   RALPH_AGENT_ARGS=(
-    -p
     --force
-    --trust
     --approve-mcps
     --model "$RALPH_MODEL"
     --workspace "$PROJECT_ROOT"
   )
 
-  if [[ "$RALPH_STREAM" == "1" ]]; then
-    RALPH_AGENT_ARGS+=(--output-format stream-json --stream-partial-output)
+  if [[ -n "$RALPH_INTERACTIVE" ]]; then
+    # Full-screen Cursor Agent TUI (no -p / --print).
+    :
   else
-    RALPH_AGENT_ARGS+=(--output-format text)
+    RALPH_AGENT_ARGS+=(-p --trust)
+    if [[ "$RALPH_STREAM" == "1" ]]; then
+      RALPH_AGENT_ARGS+=(--output-format stream-json --stream-partial-output)
+    else
+      RALPH_AGENT_ARGS+=(--output-format text)
+    fi
   fi
 
   if [[ -n "$RALPH_SANDBOX" ]]; then
@@ -223,7 +245,11 @@ run_ralph_iteration() {
   agent_args=("${RALPH_AGENT_ARGS[@]}")
   prompt="$(build_prompt)"
 
-  if [[ "$RALPH_STREAM" == "1" ]]; then
+  if [[ -n "$RALPH_INTERACTIVE" ]]; then
+    echo "Launching Cursor Agent interactive UI — quit the session when the PRD item is done." >&2
+    "$agent_bin" "${agent_args[@]}" "$prompt"
+    agent_exit=$?
+  elif [[ "$RALPH_STREAM" == "1" ]]; then
     "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"
     agent_exit="${PIPESTATUS[0]}"
   else
