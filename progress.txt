@@ -81,3 +81,10 @@ Next: PRD-010 Read-only MCP response cache (lib/redis/cache.py).
 - Unit tests: cache miss→set→hit for `kapruka_search_products`, reordered-args equivalence, create_order bypass (no Redis keys written), key format and canonical JSON helpers.
 Files: lib/redis/cache.py, lib/redis/__init__.py, tests/unit/test_cache.py
 Next: PRD-011 FastAPI dependency injection for Redis (app/dependencies.py).
+
+## PRD-011 — FastAPI dependency injection for Redis
+- Lifespan connects `RedisClient` via `get_settings().redis_url` and stores on `app.state.redis`; shutdown closes via existing `_close_client`.
+- Added `app/dependencies.py` with async `get_redis(request)` generator dependency; returns 503 when Redis unavailable.
+- Unit tests: route DI resolves with fakeredis-injected client, 503 when state.redis is None, lifespan assigns connected client to app.state.
+Files: app/dependencies.py, app/lifespan.py, tests/unit/test_dependencies.py
+Next: PRD-012 Neo4j async driver wrapper (lib/neo4j/client.py).

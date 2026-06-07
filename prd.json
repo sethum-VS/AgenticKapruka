@@ -129,7 +129,7 @@
       "Implement get_redis(request) dependency yielding client",
       "Write route test confirming dependency injection resolves without error"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-012",
