@@ -741,7 +741,7 @@
       "Debounce input with hx-trigger delay:300ms",
       "Integration test typing 'Col' returns Colombo suggestion HTML"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-063",

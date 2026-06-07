@@ -122,6 +122,20 @@ def render_cart_drawer(
     )
 
 
+def render_delivery_city() -> str:
+    """Render templates/checkout/delivery_city.html for checkout city autocomplete."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_city.html")
+    return template.render()
+
+
+def render_delivery_city_suggestions(cities: list[str]) -> str:
+    """Render li suggestion items for HTMX swap into #delivery-city-suggestions."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_city_suggestions.html")
+    return template.render(cities=cities)
+
+
 def render_currency_selector(*, currency: str = "LKR") -> str:
     """Render templates/components/currency_selector.html for the site header."""
     templates = get_templates()

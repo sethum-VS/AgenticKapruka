@@ -479,3 +479,11 @@ Next: PRD-061 Alpine cart drawer.
 - Tests: `test_cart_drawer.py` (Alpine markup, badge count, base.html wiring); `test_cart_drawer_browser.py` Playwright (open, backdrop close, Escape close, HTMX badge sync).
 Files: static/js/cart-drawer.js, templates/{base,components/cart_drawer}.html, lib/chat/page_context.py, app/{routes/chat,templating}.py, tests/unit/{test_cart_drawer,test_cart_drawer_browser,test_chat,test_templating}.py, prd.json
 Next: PRD-062 Delivery city debounced autocomplete.
+
+## PRD-062 — Delivery city debounced autocomplete
+- Added `templates/checkout/delivery_city.html`: city input with `hx-get /partials/delivery-cities`, `hx-trigger="keyup changed delay:300ms"`, swaps suggestions into `#delivery-city-suggestions`.
+- Added `templates/checkout/delivery_city_suggestions.html`: `li` suggestion rows from Kapruka city names.
+- Extended `app/routes/partials.py`: `GET /partials/delivery-cities` calls `KaprukaService.list_delivery_cities` (min 2-char query); `render_delivery_city` / `render_delivery_city_suggestions` in `app/templating.py`.
+- Tests: `test_delivery_city.py` (HTMX debounce attrs, li partial); `test_delivery_city_flow.py` integration (`q=Col` → Colombo HTML, short query skips MCP).
+Files: templates/checkout/{delivery_city,delivery_city_suggestions}.html, app/{routes/partials,templating}.py, tests/unit/test_delivery_city.py, tests/integration/test_delivery_city_flow.py, prd.json
+Next: PRD-063 Colombo timezone delivery date picker.
