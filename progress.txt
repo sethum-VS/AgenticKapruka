@@ -134,3 +134,10 @@ Next: PRD-017 Wrapper for kapruka_search_products (lib/kapruka/tools/search_prod
 - Unit tests: mocked JSON → typed `ProductResult` list, forced response_format, no-products error, input validation short-circuit.
 Files: lib/kapruka/tools/{__init__,search_products}.py, lib/kapruka/__init__.py, tests/unit/test_search_products.py
 Next: PRD-018 Wrapper for kapruka_get_product and kapruka_list_categories.
+
+## PRD-018 — Wrapper for kapruka_get_product and kapruka_list_categories
+- Added `lib/kapruka/tools/get_product.py`: async `get_product(client, *, product_id, currency, type)` builds validated `GetProductInput`, forces `response_format=json`, calls MCP `kapruka_get_product`, parses via `parse_mcp_error` + `GetProductOutput.model_validate`.
+- Added `lib/kapruka/tools/list_categories.py`: async `list_categories(client, *, depth)` builds `ListCategoriesInput`, forces JSON, returns nested `ListCategoriesOutput` with `CategoryNode` children.
+- Unit tests: fixture JSON for product detail (variants, shipping, category path) and nested category tree (depth=2); forced response_format; input validation short-circuit; product_not_found → KaprukaNotFoundError.
+Files: lib/kapruka/tools/{get_product,list_categories}.py, lib/kapruka/{__init__,tools/__init__}.py, tests/unit/{test_get_product,test_list_categories}.py, prd.json
+Next: PRD-019 Wrapper for delivery city and check_delivery tools (lib/kapruka/tools/delivery.py).

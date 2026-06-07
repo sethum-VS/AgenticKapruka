@@ -213,7 +213,7 @@
       "Implement list_categories(depth) returning nested CategoryTree model",
       "Write unit tests with fixture JSON for both tools"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-019",
