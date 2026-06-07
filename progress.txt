@@ -192,3 +192,10 @@ Next: PRD-025 Alpine.js focus and scroll helpers.
 - Unit tests: DOM attribute assertions in `test_chat.py`, JS source checks in `test_chat_helpers_js.py`; Playwright browser harness verifies scroll-to-bottom and input focus on HTMX events.
 Files: static/js/chat-helpers.js, templates/chat/index.html, tests/unit/{test_chat,test_chat_helpers_js,test_chat_helpers_browser}.py, prd.json
 Next: PRD-026 AgentState TypedDict schema (graphs/state.py).
+
+## PRD-026 — AgentState TypedDict schema
+- Added `graphs/state.py` with `AgentState` TypedDict: `messages` (Annotated reducer via `operator.add` on `list[BaseMessage]`), optional orchestration fields for intent, hybrid_context, tool_calls/results, tool_call_count, model_tier, session_id, zep_thread_id, currency, checkout_state, response_html.
+- Literal aliases: `Intent`, `ModelTier`, `CheckoutStep`, `CurrencyCode` aligned with downstream PRD-028/032/067 routing and MCP currency codes.
+- Unit tests: minimal dict type-check, all 12 field keys + messages reducer metadata, fully populated state assignment.
+Files: graphs/{state,__init__}.py, tests/unit/test_agent_state.py, prd.json
+Next: PRD-027 Redis LangGraph checkpointer (lib/redis/checkpointer.py).

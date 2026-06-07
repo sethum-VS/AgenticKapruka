@@ -309,7 +309,7 @@
       "Add reducer annotations for messages list using operator.add",
       "Write unit test instantiating minimal AgentState dict passes type check"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-027",
