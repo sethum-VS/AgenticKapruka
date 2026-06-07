@@ -57,7 +57,7 @@
       "Create templates/base.html shell with HTMX, Alpine.js, and SSE extension script tags",
       "Write pytest verifying TemplateResponse renders base.html without errors"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-006",
