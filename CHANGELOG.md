@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.5.0] - 2026-06-08
+
+### Added
+
+- Stock badge overlay on product cards (PRD-053)
+- Alpine lazy-load image animations for carousel product images (PRD-054)
+- Product carousel embedded in assistant messages when search returns results (PRD-055)
+- `format_currency` Jinja filter for LKR, USD, GBP, AUD, CAD, EUR (PRD-056)
+- Header currency selector with HTMX `POST /session/currency` and Redis session prefs (PRD-057)
+- Session currency propagated into all Kapruka MCP tool calls (PRD-058)
+- Redis server-side cart (`lib/redis/cart.py`) with 30-item limit (PRD-059)
+- Cart HTMX partial swaps at `/cart/add`, `/cart/remove`, `/cart/update` (PRD-060)
+- Alpine cart drawer with badge sync on HTMX swaps (PRD-061)
+- Delivery city debounced autocomplete via `/partials/delivery-cities` (PRD-062)
+- Colombo timezone delivery date picker with `/checkout/check-delivery` validation (PRD-063)
+
 ## [0.0.4.0] - 2026-06-08
 
 ### Added
