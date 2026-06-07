@@ -426,3 +426,17 @@ Next: PRD-054 Alpine lazy-load image animations.
 - Tests: `test_lazy_image_js.py`; carousel structure asserts lazy markup; Playwright scroll test stubs delayed PNGs and verifies off-screen cards defer load then fade in after `scrollLeft`.
 Files: static/js/lazy-image.js, templates/components/{product_card,product_carousel}.html, templates/chat/index.html, tests/unit/{test_lazy_image_js,test_product_carousel,test_product_carousel_browser,test_chat}.py, prd.json
 Next: PRD-055 Embed product carousel in assistant messages.
+
+## PRD-055 — Embed product carousel in assistant messages
+- Added `extract_search_products` and `build_products_carousel_html` in `graphs/nodes/generate_response.py`: reads `kapruka_search_products` from `tool_results`, renders `product_carousel` via `render_product_carousel`, passes `products_html` into `message_assistant.html` below assistant prose.
+- `message_assistant.html` already had `products_html` slot from PRD-039; no template change required.
+- Unit tests: carousel markup in `test_generate_response.py` (extract, build, empty-results skip); integration test `test_chat_flow.py` mocks search with product fixture and asserts `data-testid="product-carousel"` in SSE stream.
+Files: graphs/nodes/generate_response.py, tests/unit/test_generate_response.py, tests/integration/test_chat_flow.py, prd.json
+Next: PRD-056 Currency formatting Jinja filter.
+
+## PRD-056 — Currency formatting Jinja filter
+- Added `lib/utils/currency.py`: `format_currency(amount, currency)` for LKR, USD, GBP, AUD, CAD, EUR; LKR renders as `Rs. {n:,}` (no decimals, rounded); decimal currencies use symbol prefix with `,.2f`.
+- `app/templating.py` imports `format_currency` from `lib.utils.currency` (Jinja filter registration unchanged).
+- Tests: `tests/unit/test_currency.py` (PRD assertion + decimal/rounding/validation); updated product card snapshot and carousel tests to `Rs.` LKR display.
+Files: lib/utils/{__init__,currency}.py, app/templating.py, tests/unit/{test_currency,test_templating,test_product_card,test_product_carousel}.py, tests/fixtures/snapshots/product_card_in_stock.html, prd.json
+Next: PRD-057 Header currency selector with HTMX.

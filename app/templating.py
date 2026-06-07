@@ -12,12 +12,9 @@ from urllib.parse import quote
 import jinja2
 from fastapi.templating import Jinja2Templates
 
+from lib.utils.currency import format_currency
+
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
-
-
-def format_currency(amount: float | int, currency: str = "LKR") -> str:
-    """Stub currency filter; full formatting lands in PRD-056."""
-    return f"{currency} {amount:,}"
 
 
 def urlencode_filter(value: str) -> str:

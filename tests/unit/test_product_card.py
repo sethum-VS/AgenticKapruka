@@ -45,7 +45,7 @@ def test_product_card_renders_required_fields() -> None:
 
     assert 'data-product-id="cake00ka002034"' in html
     assert "Chocolate Fudge Birthday Cake" in html
-    assert "LKR 4,500" in html
+    assert "Rs. 4,500" in html
     assert 'src="https://cdn.kapruka.com/cakes/chocolate-fudge.jpg"' in html
     assert 'data-testid="stock-badge"' in html
     assert "In Stock" in html
@@ -67,4 +67,4 @@ def test_product_card_out_of_stock_disables_add_button() -> None:
     assert "Out of Stock" in html
     assert "disabled" in html
     assert 'aria-disabled="true"' in html
-    assert "LKR 3,200" in html
+    assert "Rs. 3,200" in html

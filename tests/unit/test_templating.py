@@ -28,8 +28,8 @@ def clear_templates_cache() -> None:
     _create_templates.cache_clear()
 
 
-def test_format_currency_stub() -> None:
-    assert format_currency(1500, "LKR") == "LKR 1,500"
+def test_format_currency_filter_registered() -> None:
+    assert format_currency(1500, "LKR") == "Rs. 1,500"
 
 
 def test_get_templates_returns_singleton() -> None:

@@ -99,7 +99,7 @@ def test_product_carousel_includes_product_card_fields() -> None:
     assert "Chocolate Fudge Birthday Cake" in html
     assert "Red Rose Bouquet" in html
     assert "Vanilla Celebration Cake" in html
-    assert "LKR 4,500" in html
-    assert "LKR 3,200" in html
-    assert "LKR 5,200" in html
+    assert "Rs. 4,500" in html
+    assert "Rs. 3,200" in html
+    assert "Rs. 5,200" in html
     assert html.count('hx-post="/cart/add"') == 3

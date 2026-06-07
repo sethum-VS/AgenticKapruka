@@ -657,7 +657,7 @@
       "Render carousel below assistant text in message partial",
       "Integration test verifying carousel HTML present after product search turn"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-056",
@@ -669,7 +669,7 @@
       "Register format_currency filter in Jinja environment",
       "Write unit test: format_currency(1500, 'LKR') returns 'Rs. 1,500'"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-057",
