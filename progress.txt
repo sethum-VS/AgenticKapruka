@@ -41,3 +41,12 @@ Next: PRD-005 Jinja2 template environment (app/templating.py).
 - Unit tests: filter stub, singleton dependency, `TemplateResponse` renders base.html with expected script tags.
 Files: app/templating.py, templates/base.html, tests/unit/test_templating.py
 Next: PRD-006 Tailwind CSS standalone CLI build (static/css/input.css).
+
+## PRD-006 — Tailwind CSS standalone CLI build
+- Added `static/css/input.css` with `@tailwind` directives, base body styles, and component classes (`btn-primary`, `btn-secondary`, `card-commerce`).
+- Added `tailwind.config.js` with Kapruka red (`kapruka-*`) and warm commerce palette (`commerce-cream`, `commerce-gold`, `commerce-terracotta`, etc.); content scans `templates/**` and `app/**`; safelist keeps component utilities in production build.
+- Makefile targets: `make css` (minified build), `make css-watch`, `make install-tailwind`; `scripts/install-tailwind.sh` downloads Tailwind v3.4.17 standalone CLI (no Node.js) per OS/arch into `bin/tailwindcss`.
+- `templates/base.html` body gets `min-h-screen bg-commerce-cream text-commerce-ink` for content scanning; `bin/tailwindcss` and `static/css/app.css` gitignored (generated).
+- Verified: `make css` → `static/css/app.css` (~5KB) contains `.min-h-screen`, `.bg-commerce-cream`, `.bg-kapruka-600`, `.btn-primary`.
+Files: static/css/input.css, tailwind.config.js, Makefile, scripts/install-tailwind.sh, templates/base.html, .gitignore
+Next: PRD-007 Static assets mount (FastAPI StaticFiles at /static).
