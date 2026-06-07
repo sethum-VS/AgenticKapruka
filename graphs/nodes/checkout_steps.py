@@ -16,12 +16,15 @@ from graphs.checkout_state import (
 )
 from graphs.state import CheckoutStep
 from lib.checkout.delivery import DeliveryFormValues, parse_delivery_form
+from lib.checkout.order import build_create_order_from_checkout
 from lib.checkout.recipient import RecipientFormValues, parse_recipient_form
 from lib.checkout.review import review_context_from_checkout_state
 from lib.checkout.sender import SenderFormValues, parse_sender_form
+from lib.kapruka.errors import KaprukaError
 from lib.kapruka.service import KaprukaService
 from lib.redis.cart import get_cart
 from lib.redis.client import RedisClient
+from lib.redis.order import store_pending_order
 from lib.utils.timezone import is_past_colombo_date
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -112,6 +115,67 @@ def validate_review_step(state: CheckoutState) -> tuple[bool, dict[str, str]]:
     return True, {}
 
 
+async def execute_finalize_step(
+    state: CheckoutState,
+    *,
+    redis_client: RedisClient | None = None,
+    kapruka_service: KaprukaService | None = None,
+    client_ip: str = "127.0.0.1",
+) -> tuple[bool, dict[str, str], dict[str, Any]]:
+    """Place order via Kapruka MCP and persist order_ref / expires_at in Redis."""
+    step_valid = state.get("step_valid") or {}
+    if not step_valid.get("review"):
+        return False, {"finalize": "Confirm your order at review before placing it."}, {}
+    if not all_steps_before_review_valid(step_valid):
+        return False, {"finalize": "Complete all checkout steps before placing your order."}, {}
+
+    if kapruka_service is None:
+        return False, {"finalize": "Checkout is temporarily unavailable. Please try again."}, {}
+
+    session_id = state.get("session_id", "")
+    items: list[dict[str, Any]] = list(state.get("cart_items") or [])
+    if redis_client is not None and session_id and not items:
+        cart_rows = await get_cart(redis_client, session_id)
+        items = [row.model_dump() for row in cart_rows]
+
+    try:
+        recipient, delivery, sender, cart, gift_message, currency = (
+            build_create_order_from_checkout(state, items)
+        )
+    except ValueError as exc:
+        return False, {"finalize": str(exc)}, {}
+
+    try:
+        response = await kapruka_service.create_order(
+            client_ip,
+            cart=cart,
+            recipient=recipient,
+            delivery=delivery,
+            sender=sender,
+            gift_message=gift_message,
+            currency=currency,
+        )
+    except KaprukaError as exc:
+        return False, {"finalize": exc.message}, {}
+
+    extra: dict[str, Any] = {
+        "checkout_url": response.checkout_url,
+        "order_ref": response.order_ref,
+        "expires_at": response.expires_at,
+        "order_summary": response.summary.model_dump(),
+    }
+
+    if redis_client is not None and session_id:
+        await store_pending_order(
+            redis_client,
+            session_id,
+            order_ref=response.order_ref,
+            expires_at=response.expires_at,
+        )
+
+    return True, {}, extra
+
+
 async def _validate_step(
     step: CheckoutStep,
     state: CheckoutState,
@@ -168,6 +232,14 @@ async def _validate_step(
     if step == "review":
         ok, errors = validate_review_step(state)
         return ok, errors, extra
+
+    if step == "finalize":
+        return await execute_finalize_step(
+            state,
+            redis_client=redis_client,
+            kapruka_service=kapruka_service,
+            client_ip=client_ip,
+        )
 
     return False, {"current_step": f"Unknown checkout step: {step}"}, extra
 

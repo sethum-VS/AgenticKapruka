@@ -71,6 +71,10 @@ async def run_checkout_graph(
         "sender_anonymous": result.get("sender_anonymous"),
         "gift_message": result.get("gift_message"),
         "review_html": result.get("response_html"),
+        "checkout_url": result.get("checkout_url"),
+        "order_ref": result.get("order_ref"),
+        "expires_at": result.get("expires_at"),
+        "order_summary": result.get("order_summary"),
     }
 
     logger.info(
@@ -84,7 +88,7 @@ async def run_checkout_graph(
         "checkout_state": current_step,
         "tool_results": {CHECKOUT_TOOL_KEY: payload},
     }
-    if current_step == "review":
+    if current_step in ("review", "finalize"):
         updates["model_tier"] = "pro"
 
     return updates

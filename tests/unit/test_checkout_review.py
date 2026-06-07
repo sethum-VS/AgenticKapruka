@@ -112,13 +112,7 @@ async def test_review_step_renders_response_html() -> None:
     fixed_now = datetime(2026, 6, 8, 10, 0, tzinfo=COLOMBO)
 
     with patch("lib.utils.timezone.colombo_now", return_value=fixed_now):
-        result = await graph.ainvoke(
-            {
-                **_full_review_state(),
-                "action": "advance",
-                "target_step": "review",
-            },
-        )
+        result = await graph.ainvoke(_full_review_state())
 
     assert result["current_step"] == "review"
     assert result["step_valid"].get("review")

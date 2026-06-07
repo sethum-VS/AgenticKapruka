@@ -837,7 +837,7 @@
       "Parse CreateOrderResponse; store order_ref and expires_at in session Redis",
       "Integration test with mocked MCP verifying checkout_url returned in state"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-071",

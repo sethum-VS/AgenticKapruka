@@ -552,3 +552,13 @@ Next: PRD-069 Checkout review step with Pro model.
 - Tests: `test_checkout_review.py` (template sections, review step HTML, model_tier pro, model_router); `test_generate_response` Pro model + embedded summary.
 Files: lib/checkout/review.py, templates/checkout/review.html, templates/chat/message_assistant.html, app/templating.py, graphs/nodes/{checkout_steps,run_checkout_graph,generate_response}.py, tests/unit/{test_checkout_review,test_generate_response}.py, prd.json
 Next: PRD-070 kapruka_create_order integration.
+
+## PRD-070 — kapruka_create_order integration
+- Added `finalize` checkout step after `review` in `CHECKOUT_STEP_ORDER`; fixed `PRE_REVIEW_STEPS` tuple so `all_steps_before_review_valid` no longer requires review before review validation.
+- Added `lib/checkout/order.py`: `build_create_order_from_checkout` maps Redis cart rows + checkout state to Kapruka Recipient/Delivery/Sender/CartItem args.
+- Added `lib/redis/order.py`: `store_pending_order` / `get_pending_order` persist `order_ref` and `expires_at` under `session:{id}:order_*` keys (7-day TTL).
+- `execute_finalize_step` in `checkout_steps.py` calls `KaprukaService.create_order`, stores Redis metadata, returns `checkout_url` / `order_ref` / `expires_at` / `order_summary` in state.
+- `run_checkout_graph` passes order fields in checkout tool_results; `generate_response` surfaces checkout URL message on finalize step.
+- Tests: `test_checkout_order.py`, `test_redis_order.py`, `tests/integration/test_checkout_finalize.py` (mocked MCP + Redis persistence).
+Files: lib/checkout/order.py, lib/redis/order.py, graphs/{state,checkout_state}.py, graphs/nodes/{checkout_steps,run_checkout_graph,generate_response}.py, tests/{unit/test_checkout_order,unit/test_redis_order,integration/test_checkout_finalize}.py, tests/unit/{test_checkout_graph,test_checkout_review}.py, prd.json
+Next: PRD-071 Click-to-pay countdown UI component.

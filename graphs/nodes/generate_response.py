@@ -182,6 +182,15 @@ def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> st
             f"Let's check out your {count} cart {noun}. "
             "Next, tell me the delivery city for your order."
         )
+    if step == "finalize":
+        checkout_url = checkout.get("checkout_url")
+        order_ref = checkout.get("order_ref")
+        if isinstance(checkout_url, str) and checkout_url.strip():
+            ref_note = f" (reference {order_ref})" if order_ref else ""
+            return (
+                f"Your Kapruka order is ready{ref_note}. "
+                f"Complete payment using this secure link: {checkout_url}"
+            )
     return "Continuing your Kapruka checkout."
 
 

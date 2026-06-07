@@ -180,7 +180,7 @@ async def test_sequential_advance_through_all_steps() -> None:
                 "target_step": "review",
             },
         )
-        assert state["current_step"] == "review"
+        assert state["current_step"] == "finalize"
         assert state["step_valid"].get("review")
         assert state.get("validation_errors") is None
 
@@ -280,4 +280,5 @@ def test_checkout_step_order_matches_prd() -> None:
         "recipient",
         "sender",
         "review",
+        "finalize",
     )

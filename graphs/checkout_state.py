@@ -15,6 +15,15 @@ CHECKOUT_STEP_ORDER: tuple[CheckoutStep, ...] = (
     "recipient",
     "sender",
     "review",
+    "finalize",
+)
+
+PRE_REVIEW_STEPS: tuple[CheckoutStep, ...] = (
+    "cart",
+    "delivery_city",
+    "delivery_date",
+    "recipient",
+    "sender",
 )
 
 
@@ -41,6 +50,11 @@ class CheckoutState(TypedDict, total=False):
     sender_anonymous: bool | None
 
     gift_message: str | None
+
+    order_ref: str | None
+    checkout_url: str | None
+    expires_at: str | None
+    order_summary: dict[str, Any] | None
 
     step_valid: dict[str, bool]
     validation_errors: dict[str, str] | None
@@ -125,4 +139,4 @@ def all_steps_before_review_valid(step_valid: dict[str, bool] | None) -> bool:
     """True when every pre-review step has passed validation."""
     if not step_valid:
         return False
-    return all(step_valid.get(step) for step in CHECKOUT_STEP_ORDER[:-1])
+    return all(step_valid.get(step) for step in PRE_REVIEW_STEPS)
