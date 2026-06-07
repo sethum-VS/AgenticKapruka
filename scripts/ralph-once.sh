@@ -11,8 +11,10 @@ REMAINING_ARGS=()
 source "$(cd "$(dirname "$0")" && pwd)/ralph-common.sh"
 
 parse_ralph_args "$@"
+warn_unknown_args
 RALPH_SANDBOX=""
 
+require_jq
 ensure_branch
 
 if [[ -n "$RALPH_INTERACTIVE" ]]; then
