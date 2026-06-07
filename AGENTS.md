@@ -32,6 +32,7 @@ Work one PRD item at a time from `prd.json`. Update `passes: true` when done.
 Append decisions to `progress.txt`. Commit on `ralph/sprint-1` branch.
 
 ```bash
-./scripts/ralph-once.sh          # single supervised iteration
+./scripts/ralph-once.sh          # single supervised iteration (headless JSON)
+./scripts/ralph-once.sh -i       # same PRD prompt in interactive Cursor Agent UI
 ./scripts/ralph.sh [N]           # AFK loop (default 10 iterations)
 ```
