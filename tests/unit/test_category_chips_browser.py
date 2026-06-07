@@ -9,13 +9,14 @@ import pytest
 
 pytest.importorskip("playwright.sync_api")
 
-from playwright.sync_api import Page, Response, Route, sync_playwright
+from playwright.sync_api import Route, sync_playwright
 
 from app.templating import render_category_chips
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 CATEGORIES_FIXTURE = FIXTURES_DIR / "hybrid_context" / "sample_categories.json"
 APP_CSS = Path(__file__).resolve().parent.parent.parent / "static" / "css" / "app.css"
+HARNESS_URL = "http://localhost/"
 
 
 def _load_categories() -> list[dict[str, object]]:
@@ -29,7 +30,6 @@ def _chips_harness_html(chips_html: str) -> str:
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <base href="http://localhost/" />
     <style>{css}</style>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   </head>
@@ -40,46 +40,44 @@ def _chips_harness_html(chips_html: str) -> str:
 </html>"""
 
 
-def _wait_for_htmx(page: Page) -> None:
-    page.wait_for_function("() => window.htmx")
+def _is_harness_document(url: str) -> bool:
+    return url.rstrip("/") in ("http://localhost", HARNESS_URL.rstrip("/"))
 
 
 @pytest.mark.browser
 def test_category_chip_click_triggers_htmx_without_full_reload() -> None:
     """Clicking a chip fetches the search partial into #results without navigation."""
     chips_html = render_category_chips(_load_categories(), active_category="Flowers")
+    harness_html = _chips_harness_html(chips_html)
     requests: list[str] = []
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page()
 
-        def handle_search(route: Route) -> None:
-            if "/partials/search" not in route.request.url:
+        def handle_route(route: Route) -> None:
+            url = route.request.url
+            if _is_harness_document(url):
+                route.fulfill(
+                    status=200,
+                    headers={"Content-Type": "text/html"},
+                    body=harness_html,
+                )
+                return
+            if "/partials/search" not in url:
                 route.continue_()
                 return
-            requests.append(route.request.url)
+            requests.append(url)
             route.fulfill(
                 status=200,
                 headers={"Content-Type": "text/html"},
                 body="<div data-testid='filtered-results'>Cakes only</div>",
             )
 
-        page.route("**/*", handle_search)
-        page.set_content(_chips_harness_html(chips_html))
-        _wait_for_htmx(page)
-        page.evaluate("() => window.htmx.process(document.body)")
-        page.wait_for_function(
-            "() => document.querySelector('[data-category=\"Cakes\"]')?.hasAttribute('hx-get')"
-        )
+        page.route("**/*", handle_route)
+        page.goto(HARNESS_URL, wait_until="networkidle")
 
-        def _is_search_response(response: Response) -> bool:
-            return "/partials/search" in response.url
-
-        with page.expect_response(_is_search_response) as response_info:
-            page.locator('[data-category="Cakes"]').click()
-        assert "category=Cakes" in response_info.value.url
-
+        page.locator('[data-category="Cakes"]').click()
         page.wait_for_selector('[data-testid="filtered-results"]')
 
         stayed_on_harness = page.evaluate(

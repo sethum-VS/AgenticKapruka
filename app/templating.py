@@ -61,6 +61,23 @@ def render_product_carousel(products: list[dict[str, Any]]) -> str:
     return template.render(products=products)
 
 
+def categories_for_chips(hybrid_context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Extract deduplicated category rows from hybrid_context for chip rendering."""
+    if not hybrid_context:
+        return []
+
+    seen: set[str] = set()
+    chips: list[dict[str, Any]] = []
+    for source in ("vector_hits", "categories"):
+        for item in hybrid_context.get(source) or []:
+            name = item.get("display_name")
+            if not name or name in seen:
+                continue
+            seen.add(str(name))
+            chips.append(dict(item))
+    return chips
+
+
 def render_category_chips(
     categories: list[dict[str, Any]],
     *,

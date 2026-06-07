@@ -9,8 +9,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.templating import _create_templates, render_category_chips
-from lib.neo4j.hybrid_context import categories_for_chips
+from app.templating import _create_templates, categories_for_chips, render_category_chips
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 CATEGORIES_FIXTURE = FIXTURES_DIR / "hybrid_context" / "sample_categories.json"
@@ -35,6 +34,7 @@ def test_category_chips_render_htmx_search_links() -> None:
     assert html.count('data-testid="category-chip"') == 3
     assert 'hx-target="#results"' in html
     assert 'hx-swap="innerHTML"' in html
+    assert 'hx-trigger="click"' in html
     assert 'hx-get="/partials/search?category=Flowers"' in html
     assert 'hx-get="/partials/search?category=Cakes"' in html
     assert 'hx-get="/partials/search?category=Gifts"' in html
