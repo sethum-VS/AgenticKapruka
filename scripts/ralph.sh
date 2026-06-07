@@ -10,47 +10,27 @@ set -euo pipefail
 REMAINING_ARGS=()
 source "$(cd "$(dirname "$0")" && pwd)/ralph-common.sh"
 
-# Parse optional iteration count (first numeric arg) and --model
-POSITIONAL=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
+for arg in "$@"; do
+  case "$arg" in
     --interactive|-i)
       echo "Error: --interactive is only supported by ralph-once.sh (single HITL session)." >&2
       echo "Run: ./scripts/ralph-once.sh --interactive" >&2
       exit 1
       ;;
-    --text|--no-stream)
-      RALPH_STREAM=0
-      shift
-      ;;
-    --model)
-      if [[ $# -lt 2 || -z "${2:-}" ]]; then
-        echo "Error: --model requires a value." >&2
-        exit 1
-      fi
-      RALPH_MODEL="$2"
-      shift 2
-      ;;
-    --model=*)
-      RALPH_MODEL="${1#*=}"
-      shift
-      ;;
-    *)
-      POSITIONAL+=("$1")
-      shift
-      ;;
   esac
 done
 
-ITERATIONS="${POSITIONAL[0]:-10}"
+parse_ralph_args "$@"
+
+ITERATIONS="${REMAINING_ARGS[0]:-10}"
 if ! [[ "$ITERATIONS" =~ ^[0-9]+$ ]] || [[ "$ITERATIONS" -lt 1 ]]; then
   echo "Usage: $0 [iterations] [--text|--no-stream] [--model MODEL]" >&2
   echo "  iterations must be a positive integer (default: 10)" >&2
   exit 1
 fi
 
-if [[ ${#POSITIONAL[@]} -gt 1 ]]; then
-  echo "Warning: ignoring unknown arguments: ${POSITIONAL[*]:1}" >&2
+if [[ ${#REMAINING_ARGS[@]} -gt 1 ]]; then
+  echo "Warning: ignoring unknown arguments: ${REMAINING_ARGS[*]:1}" >&2
 fi
 
 RALPH_SANDBOX=1

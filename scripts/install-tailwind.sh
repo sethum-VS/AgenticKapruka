@@ -13,6 +13,7 @@ mkdir -p "${BIN_DIR}"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 PLATFORM_TAG="${OS}-${ARCH}"
+STAMP_EXPECTED="${VERSION}:${PLATFORM_TAG}"
 
 case "${PLATFORM_TAG}" in
   darwin-arm64) ASSET="tailwindcss-macos-arm64" ;;
@@ -25,18 +26,18 @@ case "${PLATFORM_TAG}" in
     ;;
 esac
 
-if [[ -x "${TARGET}" && -f "${STAMP_FILE}" && "$(cat "${STAMP_FILE}")" == "${PLATFORM_TAG}" ]]; then
-  echo "Tailwind CSS already installed for ${PLATFORM_TAG}: ${TARGET}"
+if [[ -x "${TARGET}" && -f "${STAMP_FILE}" && "$(cat "${STAMP_FILE}")" == "${STAMP_EXPECTED}" ]]; then
+  echo "Tailwind CSS ${VERSION} already installed for ${PLATFORM_TAG}: ${TARGET}"
   exit 0
 fi
 
 if [[ -x "${TARGET}" ]]; then
-  echo "Re-downloading Tailwind CSS for ${PLATFORM_TAG} (existing binary is for a different platform)..."
+  echo "Re-downloading Tailwind CSS ${VERSION} for ${PLATFORM_TAG} (version or platform mismatch)..."
 fi
 
 URL="https://github.com/tailwindlabs/tailwindcss/releases/download/${VERSION}/${ASSET}"
 echo "Downloading Tailwind CSS ${VERSION} (${ASSET})..."
 curl -fsSL "${URL}" -o "${TARGET}"
 chmod +x "${TARGET}"
-echo "${PLATFORM_TAG}" >"${STAMP_FILE}"
+echo "${STAMP_EXPECTED}" >"${STAMP_FILE}"
 echo "Installed ${TARGET}"

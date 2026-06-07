@@ -63,6 +63,10 @@ parse_ralph_args() {
         ;;
       --model=*)
         RALPH_MODEL="${1#*=}"
+        if [[ -z "$RALPH_MODEL" ]]; then
+          echo "Error: --model requires a non-empty value." >&2
+          exit 1
+        fi
         shift
         ;;
       *)
@@ -287,8 +291,8 @@ run_ralph_iteration() {
 
   if [[ -n "$RALPH_INTERACTIVE" ]]; then
     echo "Launching Cursor Agent interactive UI — quit the session when the PRD item is done." >&2
-    _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"
-    agent_exit="${PIPESTATUS[0]}"
+    _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt"
+    agent_exit=$?
   else
     # Stream live via tee — do NOT use command substitution (buffers until agent exits).
     _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"
