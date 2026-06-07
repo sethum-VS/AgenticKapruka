@@ -285,7 +285,7 @@
       "Configure hx-trigger submit and hx-indicator for loading spinner",
       "Manual test: submit message triggers POST without full page reload"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-025",

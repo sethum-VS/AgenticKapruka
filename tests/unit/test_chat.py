@@ -50,6 +50,52 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert "Birthday cake for mom in Colombo" in html
     assert "htmx.org" in html
     assert 'href="/static/css/app.css"' in html
+    assert 'id="chat-form"' in html
+    assert 'hx-post="/chat/stream"' in html
+    assert 'hx-ext="sse"' in html
+    assert 'hx-target="#chat-messages"' in html
+    assert 'hx-swap="beforeend"' in html
+    assert 'hx-trigger="submit"' in html
+    assert 'hx-indicator="#chat-loading"' in html
+    assert 'name="message"' in html
+    assert 'id="chat-loading"' in html
+    assert "htmx-indicator" in html
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_post_returns_user_bubble_html() -> None:
+    """POST /chat/stream returns HTMX-swappable user message HTML."""
+    application = create_app()
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/chat/stream",
+            data={"message": "Birthday cake for mom"},
+            headers={"HX-Request": "true"},
+        )
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    html = response.text
+    assert "Birthday cake for mom" in html
+    assert 'hx-swap-oob="delete"' in html
+    assert 'id="chat-empty-state"' in html
+    assert 'aria-label="Your message"' in html
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_rejects_empty_message() -> None:
+    """POST /chat/stream rejects blank messages."""
+    application = create_app()
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/chat/stream",
+            data={"message": "   "},
+            headers={"HX-Request": "true"},
+        )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -67,3 +113,5 @@ async def test_chat_index_returns_200_html_with_empty_state() -> None:
     assert 'id="chat-empty-state"' in html
     assert "Kapruka Gift Assistant" in html
     assert "Gift ideas under Rs. 5,000" in html
+    assert 'id="chat-form"' in html
+    assert 'hx-post="/chat/stream"' in html
