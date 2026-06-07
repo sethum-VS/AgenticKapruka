@@ -549,7 +549,7 @@
       "Implement vector_search(query_embedding, top_k=5) returning node ids and scores",
       "Write integration test verifying semantically similar category returned for 'birthday gift' query"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-047",
@@ -561,7 +561,7 @@
       "Traverse 2 hops via lib/neo4j/traverse.py collecting related occasions and product types",
       "Write integration test verifying hybrid_context contains category filter for 'wedding flowers'"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-048",
@@ -573,7 +573,7 @@
       "Include relationship type and hop depth in result",
       "Write unit test with fixture graph verifying 2-hop reachability"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-049",

@@ -351,10 +351,30 @@ Next: PRD-045 Batch embed ontology nodes.
 Files: lib/neo4j/{embed_ontology,__init__}.py, scripts/embed_ontology.py, tests/unit/test_embed_ontology.py, prd.json
 Next: PRD-046 Neo4j vector index creation and query.
 
+## PRD-046 — Neo4j vector index creation and query
+- Added `lib/neo4j/vector_search.py`: `create_category_vector_index` (768-dim cosine index `ontology_category_embedding` on `Category.embedding`), `vector_search(client, query_embedding, top_k=5)` via `db.index.vector.queryNodes`, `VectorSearchHit` dataclass, `has_category_vector_index` verification helper.
+- Exported vector search API from `lib/neo4j/__init__.py`.
+- Unit/integration tests (`tests/unit/test_vector_search.py`): mock store with cosine similarity simulates `queryNodes`; verifies index CREATE Cypher, id+score return shape, dimension/top_k validation, and that "birthday gift" ranks `category:cakes` above `category:flowers`.
+Files: lib/neo4j/{vector_search,__init__}.py, tests/unit/test_vector_search.py, prd.json
+Next: PRD-047 HybridRAG retrieve_hybrid_context full implementation.
+
+## PRD-047 — HybridRAG retrieve_hybrid_context full implementation
+- Replaced Zep-only stub in `graphs/nodes/retrieve_hybrid_context.py`: embed user message (Vertex `embed_texts`, injectable), `vector_search` top-5 categories, `traverse_from_categories` 2-hop ontology walk, merge graph hints then Zep preferences (Zep wins on conflicts); graceful fallback when Neo4j fails.
+- Added `lib/neo4j/traverse.py` (`TraversalResult`, `traverse_from_categories`) and `lib/neo4j/hybrid_context.py` (`build_graph_hybrid_context`, `fetch_category_display_names`).
+- Wired `neo4j_client` through `ShoppingGraphDeps` into retrieve node.
+- Tests: `tests/integration/test_hybrid_rag.py` (wedding flowers → Flowers category + Wedding occasion hints), `tests/unit/test_traverse.py`, updated `test_retrieve_hybrid_context.py`.
+Files: graphs/nodes/retrieve_hybrid_context.py, graphs/shopping_graph.py, lib/neo4j/{traverse,hybrid_context,__init__}.py, tests/{integration/test_hybrid_rag,unit/test_traverse,unit/test_retrieve_hybrid_context}.py, prd.json
+Next: PRD-048 Neo4j multi-hop traversal helper.
+
 ## Review hardening — signed chat sessions (post PRD-037–044)
 - `lib/chat/session.py`: HMAC-signed `ak_session` cookie bound to `SESSION_SECRET`; rejects client-forged thread IDs (fixes checkpoint IDOR/session fixation).
 - `app/routes/chat.py`: yield SSE error fragment on pre-stream failures; `Secure` cookie when `APP_ENV=production`.
 - `lib/chat/deps.py`: honor `X-Forwarded-For` only behind trusted proxy (production or localhost peer).
 - Tests: `test_chat_session.py`, `test_chat_deps.py`, setup-failure + cookie reuse in `test_chat.py`.
 Files: lib/chat/session.py, app/routes/chat.py, lib/chat/deps.py, tests/unit/{test_chat_session,test_chat_deps,test_chat}.py
-Next: PRD-046 Neo4j vector index creation and query.
+
+## PRD-048 — Neo4j multi-hop traversal helper
+- Core shipped in PRD-047 (`lib/neo4j/traverse.py`): `traverse_from_categories` runs parameterized variable-length Cypher along `OCCASION_TO_CATEGORY` / `CATEGORY_TO_PRODUCT_TYPE`, returns `TraversalResult` with hop depth, relationship type, and path weight product.
+- Hardened unit tests (`tests/unit/test_traverse.py`): fixture graph now includes sibling category `category:cakes` reachable in 2 hops (flowers → wedding → cakes); asserts weights, seed_id, empty-seed short-circuit, invalid max_hops.
+Files: lib/neo4j/traverse.py, tests/unit/test_traverse.py, lib/neo4j/__init__.py, prd.json
+Next: PRD-049 Graph-informed MCP filter injection.

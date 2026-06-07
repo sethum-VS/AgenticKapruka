@@ -20,6 +20,11 @@ from lib.neo4j.ontology import (
     apply_ontology_schema,
     verify_ontology_schema,
 )
+from lib.neo4j.traverse import (
+    TraversalNode,
+    TraversalResult,
+    traverse_from_categories,
+)
 
 __all__ = [
     "Neo4jClient",
@@ -35,5 +40,8 @@ __all__ = [
     "embed_ontology_nodes",
     "has_category_embeddings",
     "ingest_category_tree",
+    "TraversalNode",
+    "TraversalResult",
+    "traverse_from_categories",
     "verify_ontology_schema",
 ]
