@@ -12,7 +12,8 @@ from urllib.parse import quote
 import jinja2
 from fastapi.templating import Jinja2Templates
 
-from lib.kapruka.types import CheckDeliveryOutput
+from lib.checkout.delivery import DeliveryFormValues
+from lib.kapruka.types import LOCATION_TYPES, CheckDeliveryOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import SUPPORTED_CURRENCIES, format_currency
 from lib.utils.timezone import colombo_today_iso
@@ -157,6 +158,48 @@ def render_delivery_date_error(*, title: str, message: str) -> str:
     templates = get_templates()
     template = templates.env.get_template("checkout/delivery_date_error.html")
     return template.render(title=title, message=message)
+
+
+def render_delivery_field_error(*, field: str, message: str) -> str:
+    """Render HTMX OOB inline field error for delivery form validation."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_field_error.html")
+    return template.render(field=field, message=message)
+
+
+def render_delivery_form(
+    *,
+    values: DeliveryFormValues | None = None,
+    min_date: str | None = None,
+    valid: bool = False,
+) -> str:
+    """Render templates/checkout/delivery_form.html with optional submitted values."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_form.html")
+    return template.render(
+        values=values or DeliveryFormValues(),
+        min_date=min_date or colombo_today_iso(),
+        location_types=sorted(LOCATION_TYPES),
+        valid=valid,
+    )
+
+
+def render_delivery_form_validation_response(
+    *,
+    values: DeliveryFormValues,
+    errors: dict[str, str],
+    valid: bool = False,
+    min_date: str | None = None,
+) -> str:
+    """Render delivery form plus OOB field error fragments (preserves form state)."""
+    form_html = render_delivery_form(values=values, min_date=min_date, valid=valid)
+    if not errors:
+        return form_html
+    oob_errors = "".join(
+        render_delivery_field_error(field=field, message=message)
+        for field, message in errors.items()
+    )
+    return form_html + oob_errors
 
 
 def render_currency_selector(*, currency: str = "LKR") -> str:

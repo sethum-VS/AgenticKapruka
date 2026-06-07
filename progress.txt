@@ -497,3 +497,12 @@ Next: PRD-063 Colombo timezone delivery date picker.
 - Tests: `test_delivery_date.py` (zoneinfo, HTMX attrs, partials); `test_delivery_date_flow.py` integration (past date → error HTML, no MCP; valid date → availability partial).
 Files: lib/utils/{timezone,__init__}.py, templates/checkout/{delivery_date,delivery_date_status,delivery_date_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_delivery_date.py, tests/integration/test_delivery_date_flow.py, prd.json
 Next: PRD-064 Delivery address and instructions form.
+
+## PRD-064 — Delivery address and instructions form
+- Added `lib/checkout/delivery.py`: `DeliveryFormValues` dataclass + `parse_delivery_form` validating via Kapruka `Delivery` Pydantic model (address 3–250, instructions max 250).
+- Added `templates/checkout/delivery_form.html`: address, city (debounced autocomplete), location_type select, date (Colombo min), optional instructions; `hx-post /checkout/validate-delivery` with outerHTML swap preserving values.
+- Added `templates/checkout/delivery_field_error.html`: per-field HTMX `hx-swap-oob="innerHTML"` error fragments.
+- Implemented `POST /checkout/validate-delivery` in `app/routes/checkout.py`; `render_delivery_form` / `render_delivery_field_error` / `render_delivery_form_validation_response` in `app/templating.py`.
+- Tests: `test_delivery_form.py` (structure, Pydantic bounds, OOB fragments); `test_delivery_form_flow.py` integration (short address → OOB error + city/instructions preserved; valid form → success marker).
+Files: lib/checkout/{__init__,delivery}.py, templates/checkout/{delivery_form,delivery_field_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_delivery_form.py, tests/integration/test_delivery_form_flow.py, prd.json
+Next: PRD-065 Recipient name and phone validation.

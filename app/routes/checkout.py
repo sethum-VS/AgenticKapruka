@@ -12,8 +12,10 @@ from app.dependencies import get_redis
 from app.templating import (
     render_delivery_date_error,
     render_delivery_date_status,
+    render_delivery_form_validation_response,
 )
 from lib.chat.deps import client_ip_from_request, ensure_kapruka_service
+from lib.checkout.delivery import DeliveryFormValues, parse_delivery_form
 from lib.kapruka.errors import KaprukaError
 from lib.kapruka.types import CheckDeliveryOutput
 from lib.redis.client import RedisClient
@@ -75,6 +77,32 @@ async def check_delivery_date(
         raise HTTPException(status_code=502, detail=exc.message) from exc
 
     return HTMLResponse(render_delivery_date_status(result=result))
+
+
+@router.post("/validate-delivery", response_class=HTMLResponse)
+async def validate_delivery_form(
+    address: Annotated[str, Form()] = "",
+    city: Annotated[str, Form()] = "",
+    location_type: Annotated[str, Form()] = "house",
+    date: Annotated[str, Form()] = "",
+    instructions: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    """Validate delivery address form fields; return form with OOB field errors on failure."""
+    values = DeliveryFormValues(
+        address=address,
+        city=city,
+        location_type=location_type,
+        date=date,
+        instructions=instructions,
+    )
+    _delivery, errors = parse_delivery_form(values)
+    return HTMLResponse(
+        render_delivery_form_validation_response(
+            values=values,
+            errors=errors,
+            valid=not errors,
+        )
+    )
 
 
 @router.get("")

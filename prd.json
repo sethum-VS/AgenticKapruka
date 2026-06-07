@@ -765,7 +765,7 @@
       "Render inline field errors as HTMX OOB swap fragments",
       "Test invalid address returns error partial without losing form state"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-065",
