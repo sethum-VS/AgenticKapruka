@@ -63,6 +63,10 @@ parse_ralph_args() {
         ;;
       --model=*)
         RALPH_MODEL="${1#*=}"
+        if [[ -z "$RALPH_MODEL" ]]; then
+          echo "Error: --model requires a non-empty value." >&2
+          exit 1
+        fi
         shift
         ;;
       *)
