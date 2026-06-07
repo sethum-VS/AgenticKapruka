@@ -45,7 +45,7 @@
       "Document Memorystore VPC connector requirement for Cloud Run",
       "Verify no real secrets are committed; add .env to .gitignore"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-005",
