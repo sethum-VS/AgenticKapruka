@@ -33,6 +33,8 @@ VALID_INTENTS: frozenset[Intent] = frozenset(
     {"discovery", "checkout", "tracking", "general"},
 )
 
+PROCEED_CHECKOUT_MESSAGE = "Proceed to checkout"
+
 
 class IntentClassification(BaseModel):
     """Structured Gemini response for intent routing."""
@@ -135,6 +137,10 @@ async def analyze_intent(
     if not user_message.strip():
         logger.debug("analyze_intent: empty user message, defaulting to general")
         return {"intent": "general"}
+
+    if user_message.strip() == PROCEED_CHECKOUT_MESSAGE:
+        logger.info("analyze_intent: proceed-to-checkout trigger from cart drawer")
+        return {"intent": "checkout"}
 
     client = genai_client or create_genai_client()
     zep_memory_facts = state.get("zep_memory_facts")

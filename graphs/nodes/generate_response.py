@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from app.templating import get_templates, render_product_carousel
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message, create_genai_client
+from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.state import AgentState
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.zep.memory import format_memory_facts_block
@@ -140,6 +141,34 @@ def build_products_carousel_html(tool_results: dict[str, Any] | None) -> str | N
     return render_product_carousel(products)
 
 
+def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> str | None:
+    """Synthesize a checkout-step reply from run_checkout_graph tool_results."""
+    if not tool_results:
+        return None
+    checkout = tool_results.get(CHECKOUT_TOOL_KEY)
+    if not isinstance(checkout, dict):
+        return None
+
+    errors = checkout.get("validation_errors")
+    if isinstance(errors, dict) and errors:
+        first_error = next(iter(errors.values()))
+        return str(first_error)
+
+    cart_items = checkout.get("cart_items")
+    if not isinstance(cart_items, list) or not cart_items:
+        return "Your cart is empty. Add a gift before starting checkout."
+
+    count = sum(int(item.get("quantity", 1)) for item in cart_items if isinstance(item, dict))
+    step = checkout.get("current_step") or "cart"
+    if step == "cart":
+        noun = "item" if count == 1 else "items"
+        return (
+            f"Let's check out your {count} cart {noun}. "
+            "Next, tell me the delivery city for your order."
+        )
+    return "Continuing your Kapruka checkout."
+
+
 def render_assistant_html(message: str, *, products_html: str | None = None) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
@@ -163,6 +192,14 @@ async def generate_response(
             "response_html": render_assistant_html(fallback),
             "assistant_message": fallback,
         }
+
+    if state.get("intent") == "checkout":
+        checkout_reply = _build_checkout_assistant_message(tool_results)
+        if checkout_reply:
+            return {
+                "response_html": render_assistant_html(checkout_reply),
+                "assistant_message": checkout_reply,
+            }
 
     client = genai_client or create_genai_client()
     model = select_model(state)

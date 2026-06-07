@@ -20,6 +20,17 @@ document.addEventListener("alpine:init", () => {
       this.open = false;
     },
 
+    proceedToCheckout() {
+      const form = document.getElementById("chat-form");
+      const input = document.getElementById("chat-message");
+      if (!form || !input) {
+        return;
+      }
+      input.value = "Proceed to checkout";
+      form.requestSubmit();
+      this.close();
+    },
+
     syncCountFromPanel(event) {
       const target = event.detail?.target;
       if (!target || target.id !== "cart-panel") {

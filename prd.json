@@ -813,7 +813,7 @@
       "Pass cart state from Redis into checkout_graph initial state",
       "Integration test verifying checkout flow starts from cart with items present"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-069",

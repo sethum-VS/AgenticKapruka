@@ -82,6 +82,7 @@ async def build_shopping_graph_deps(
         client_ip=client_ip_from_request(request),
         genai_client=genai_client,
         zep_client=zep_client_from_app(request),
+        redis_client=redis_client,
     )
 
 

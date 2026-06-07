@@ -531,3 +531,14 @@ Next: PRD-067 Checkout sub-graph state machine definition.
 - Tests: `tests/unit/test_checkout_graph.py` (cart→review jump blocked, sequential advance, empty cart, back navigation, Redis cart load, navigation matrix).
 Files: graphs/{checkout_state,checkout_graph}.py, graphs/nodes/checkout_steps.py, graphs/__init__.py, tests/unit/test_checkout_graph.py, prd.json
 Next: PRD-068 Checkout sub-graph integration with main graph.
+
+## PRD-068 — Checkout sub-graph integration with main graph
+- Added `graphs/nodes/run_checkout_graph.py`: hydrates Redis cart into `initial_checkout_state`, invokes checkout sub-graph, maps result to `checkout_state` + `tool_results.checkout`.
+- Updated `route_after_analyze_intent`: `intent=checkout` routes to `run_checkout_graph` (not `call_mcp_tools`); tracking still skips HybridRAG.
+- Wired `run_checkout_graph` node in `shopping_graph.py`; `ShoppingGraphDeps.redis_client` injected from `build_shopping_graph_deps`.
+- `analyze_intent`: deterministic `PROCEED_CHECKOUT_MESSAGE` from cart drawer skips Gemini.
+- `generate_response`: checkout branch renders assistant reply from checkout tool_results without LLM.
+- Cart drawer: proceed button + `cart-drawer.js` `proceedToCheckout()` submits chat form.
+- Tests: `test_run_checkout_graph.py`, `test_checkout_graph_integration.py` (Redis cart hydrate, proceed trigger, node order).
+Files: graphs/{checkout_constants,nodes/run_checkout_graph,shopping_graph,nodes/{analyze_intent,generate_response,retrieve_hybrid_context}}, lib/chat/deps.py, templates/checkout/cart_partial.html, static/js/cart-drawer.js, tests/{unit,integration}/test_*.py, prd.json
+Next: PRD-069 Checkout review step with Pro model.

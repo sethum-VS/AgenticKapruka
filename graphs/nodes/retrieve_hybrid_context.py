@@ -25,9 +25,13 @@ from lib.zep.preferences import (
 
 logger = logging.getLogger(__name__)
 
-RouteAfterAnalyzeIntent = Literal["retrieve_hybrid_context", "call_mcp_tools"]
+RouteAfterAnalyzeIntent = Literal[
+    "retrieve_hybrid_context",
+    "call_mcp_tools",
+    "run_checkout_graph",
+]
 
-_INTENTS_SKIP_HYBRID_CONTEXT: frozenset[Intent] = frozenset({"tracking", "checkout"})
+_INTENTS_SKIP_HYBRID_CONTEXT: frozenset[Intent] = frozenset({"tracking"})
 
 _VALID_CURRENCIES: frozenset[str] = frozenset({"LKR", "USD", "GBP", "AUD", "CAD", "EUR"})
 
@@ -38,8 +42,11 @@ EmbedTextsFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 
 def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
-    """Conditional edge after analyze_intent: skip HybridRAG for tracking/checkout."""
+    """Conditional edge after analyze_intent: checkout sub-graph or HybridRAG skip."""
     intent = state.get("intent")
+    if intent == "checkout":
+        logger.debug("route_after_analyze_intent: routing to checkout sub-graph")
+        return "run_checkout_graph"
     if intent in _INTENTS_SKIP_HYBRID_CONTEXT:
         logger.debug("route_after_analyze_intent: skipping hybrid context for %s", intent)
         return "call_mcp_tools"
