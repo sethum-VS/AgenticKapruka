@@ -127,3 +127,10 @@ Next: PRD-016 Shared Pydantic types for MCP tools (lib/kapruka/types.py).
 - Unit tests: gift_message 300-char boundary + 301 rejection; icing_text 120-char boundary + 121 rejection; cart size bounds.
 Files: lib/kapruka/types.py, lib/kapruka/__init__.py, tests/unit/test_kapruka_types.py
 Next: PRD-017 Wrapper for kapruka_search_products (lib/kapruka/tools/search_products.py).
+
+## PRD-017 — Wrapper for kapruka_search_products
+- Added `lib/kapruka/tools/search_products.py`: async `search_products(client, *, q, category, min_price, max_price, in_stock_only, sort, limit, cursor, currency)` builds validated `SearchProductsInput`, forces `response_format=json`, calls MCP `kapruka_search_products`, parses via `parse_mcp_error` + `SearchProductsOutput.model_validate`.
+- Handles plain-text `No products found for …` MCP responses as `KaprukaError(no_products_found)` before JSON parse.
+- Unit tests: mocked JSON → typed `ProductResult` list, forced response_format, no-products error, input validation short-circuit.
+Files: lib/kapruka/tools/{__init__,search_products}.py, lib/kapruka/__init__.py, tests/unit/test_search_products.py
+Next: PRD-018 Wrapper for kapruka_get_product and kapruka_list_categories.

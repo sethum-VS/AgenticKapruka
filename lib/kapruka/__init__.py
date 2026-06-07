@@ -8,6 +8,7 @@ from lib.kapruka.errors import (
     parse_mcp_error,
 )
 from lib.kapruka.mcp_client import MCPHttpClient
+from lib.kapruka.tools.search_products import search_products
 from lib.kapruka.types import (
     CartItem,
     CreateOrderInput,
@@ -44,6 +45,7 @@ __all__ = [
     "SearchProductsInput",
     "SearchProductsOutput",
     "Sender",
+    "search_products",
     "TrackOrderInput",
     "TrackOrderOutput",
 ]

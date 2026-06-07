@@ -201,7 +201,7 @@
       "Force response_format json in MCP params",
       "Write unit test with mocked MCP returning sample JSON verifying parsed ProductResult list"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-018",
