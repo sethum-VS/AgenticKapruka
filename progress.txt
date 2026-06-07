@@ -215,3 +215,10 @@ Next: PRD-028 analyze_intent LangGraph node (graphs/nodes/analyze_intent.py).
 - Shopping graph still uses bootstrap stub until PRD-033 wires all nodes.
 Files: graphs/nodes/{__init__,analyze_intent}.py, tests/unit/test_analyze_intent.py, prd.json
 Next: PRD-029 retrieve_hybrid_context stub node (graphs/nodes/retrieve_hybrid_context.py).
+
+## PRD-029 — retrieve_hybrid_context stub node
+- Added `graphs/nodes/retrieve_hybrid_context.py`: async `retrieve_hybrid_context(state)` returns `{"hybrid_context": {}}` stub (Neo4j deferred to PRD-047); `route_after_analyze_intent(state)` routes tracking/checkout directly to `call_mcp_tools`, discovery/general to `retrieve_hybrid_context`.
+- Unit tests: empty dict return without Neo4j imports, routing matrix for all intents, missing intent defaults to retrieve.
+- Graph wiring deferred to PRD-033; routing helper ready for conditional edges.
+Files: graphs/nodes/{retrieve_hybrid_context,__init__}.py, tests/unit/test_retrieve_hybrid_context.py, prd.json
+Next: PRD-030 call_mcp_tools LangGraph node (graphs/nodes/call_mcp_tools.py).

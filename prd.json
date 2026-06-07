@@ -345,7 +345,7 @@
       "Add conditional edge skipping stub when intent is tracking or checkout",
       "Write unit test confirming stub returns without Neo4j connection"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-030",
