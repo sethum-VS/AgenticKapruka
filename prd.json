@@ -1,0 +1,1010 @@
+[
+  {
+    "id": "PRD-001",
+    "category": "architecture",
+    "title": "Initialize Python project with pyproject.toml",
+    "description": "Create pyproject.toml with FastAPI, uvicorn, gunicorn, pydantic v2, jinja2, redis, neo4j, zep-python, mcp, langgraph, google-genai, google-cloud-aiplatform, networkx, ragas, pytest, httpx, playwright dev dependencies. Configure ruff and mypy.",
+    "steps": [
+      "Create pyproject.toml with [project] metadata and all runtime dependencies pinned to compatible ranges",
+      "Run pip install -e '.[dev]' and verify zero resolution errors",
+      "Add [tool.ruff] and [tool.mypy] baseline configuration sections"
+    ],
+    "passes": true
+  },
+  {
+    "id": "PRD-002",
+    "category": "architecture",
+    "title": "FastAPI application factory",
+    "description": "Implement app/main.py with create_app() factory registering lifespan hooks, CORS disabled (same-origin HTMX), and route inclusion stubs for chat, cart, checkout, health, and partials.",
+    "steps": [
+      "Create app/main.py with FastAPI create_app() returning configured application",
+      "Wire lifespan async context manager for Redis/Neo4j/Zep connection startup and shutdown",
+      "Run uvicorn app.main:app --reload and verify GET / returns 200 or redirect to chat"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-003",
+    "category": "architecture",
+    "title": "Pydantic Settings and environment validation",
+    "description": "Create app/config.py with pydantic-settings BaseSettings loading REDIS_URL, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, ZEP_API_KEY, GOOGLE_API_KEY, GCP_PROJECT_ID, GCP_LOCATION, KAPRUKA_MCP_URL, and SESSION_SECRET from environment.",
+    "steps": [
+      "Define Settings class with Field validators for required production keys",
+      "Add get_settings() lru_cache singleton",
+      "Write pytest test_settings_loads_from_env verifying all fields parse correctly"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-004",
+    "category": "architecture",
+    "title": "Environment example file",
+    "description": "Create .env.example documenting all required and optional environment variables for local dev and Cloud Run deployment with Memorystore Redis, Neo4j AuraDB, and Zep Cloud.",
+    "steps": [
+      "Create .env.example with commented descriptions for each variable",
+      "Document Memorystore VPC connector requirement for Cloud Run",
+      "Verify no real secrets are committed; add .env to .gitignore"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-005",
+    "category": "architecture",
+    "title": "Jinja2 template environment",
+    "description": "Configure Jinja2Templates in app/templating.py with templates/ directory, auto_reload in dev, and custom filters stub for currency formatting.",
+    "steps": [
+      "Create app/templating.py exposing get_templates() dependency",
+      "Create templates/base.html shell with HTMX, Alpine.js, and SSE extension script tags",
+      "Write pytest verifying TemplateResponse renders base.html without errors"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-006",
+    "category": "architecture",
+    "title": "Tailwind CSS standalone CLI build",
+    "description": "Set up static/css/input.css with Tailwind directives and a Makefile or package script invoking tailwindcss CLI to compile into static/css/app.css for production.",
+    "steps": [
+      "Create static/css/input.css with @tailwind base/components/utilities",
+      "Add tailwind.config.js with Kapruka-adjacent warm commerce color palette",
+      "Run tailwindcss build and verify static/css/app.css is generated with utility classes"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-007",
+    "category": "architecture",
+    "title": "Static assets mount",
+    "description": "Mount StaticFiles at /static in FastAPI serving compiled CSS and any future assets from static/ directory.",
+    "steps": [
+      "Register StaticFiles(directory='static') at /static in create_app()",
+      "Verify GET /static/css/app.css returns 200 with text/css content-type",
+      "Confirm base.html links to /static/css/app.css"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-008",
+    "category": "architecture",
+    "title": "Async Redis client wrapper",
+    "description": "Implement lib/redis/client.py using redis-py async client with connection pooling, reconnect logic, and ping health check against Memorystore Redis URL.",
+    "steps": [
+      "Create RedisClient class wrapping redis.asyncio.from_url with pool settings",
+      "Implement async ping() returning bool and async close() for lifespan",
+      "Write integration test with fakeredis or docker redis verifying ping succeeds"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-009",
+    "category": "architecture",
+    "title": "Sliding-window rate limiter per client IP",
+    "description": "Implement lib/redis/rate_limit.py with token bucket sliding window: 60 requests/minute across all MCP tools and 30 kapruka_create_order calls/hour per client IP using Redis sorted sets.",
+    "steps": [
+      "Implement check_rate_limit(ip, tool_name) raising RateLimitExceeded with retry_after_seconds",
+      "Use separate Redis keys rate:{ip}:global and rate:{ip}:create_order",
+      "Write pytest simulating 61st global request returns 429 with Retry-After header value"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-010",
+    "category": "architecture",
+    "title": "Read-only MCP response cache",
+    "description": "Implement lib/redis/cache.py with 30-minute TTL for read-only Kapruka MCP tools. Cache key format tool:hash(args) using SHA-256 of canonical JSON args. Writes never cached.",
+    "steps": [
+      "Implement get_cached(tool, args) and set_cached(tool, args, response, ttl=1800)",
+      "Canonicalize args dict with sorted keys before hashing",
+      "Write pytest verifying cache hit on second identical search_products call and bypass for create_order"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-011",
+    "category": "architecture",
+    "title": "FastAPI dependency injection for Redis",
+    "description": "Expose get_redis() FastAPI dependency in app/dependencies.py returning the shared RedisClient from app state set during lifespan.",
+    "steps": [
+      "Store RedisClient on app.state.redis in lifespan",
+      "Implement get_redis(request) dependency yielding client",
+      "Write route test confirming dependency injection resolves without error"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-012",
+    "category": "architecture",
+    "title": "Neo4j async driver wrapper",
+    "description": "Implement lib/neo4j/client.py using neo4j Python driver with async session management, connection verify, and health Cypher RETURN 1.",
+    "steps": [
+      "Create Neo4jClient with async execute(cypher, params) helper",
+      "Implement health_check() running RETURN 1 AS ok",
+      "Write integration test with testcontainers neo4j or mock driver verifying health_check"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-013",
+    "category": "architecture",
+    "title": "Zep Cloud client wrapper",
+    "description": "Implement lib/zep/client.py using zep-python SDK with session list/create and health ping against Zep Cloud API.",
+    "steps": [
+      "Create ZepClient wrapping Zep SDK with async-compatible interface",
+      "Implement health_check() verifying API key validity",
+      "Write unit test with mocked HTTP verifying client initializes with ZEP_API_KEY"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-014",
+    "category": "mcp",
+    "title": "MCP HTTP JSON-RPC client",
+    "description": "Implement lib/kapruka/mcp_client.py using mcp Python SDK establishing JSON-RPC connection over HTTP to https://mcp.kapruka.com/mcp with exponential backoff retry on transient failures.",
+    "steps": [
+      "Implement MCPHttpClient.call_tool(name, params) returning raw result string",
+      "Add retry decorator with exponential backoff max 3 attempts on 5xx/timeout",
+      "Write unit test with httpx mock transport verifying tool call JSON-RPC envelope"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-015",
+    "category": "mcp",
+    "title": "Kapruka error hierarchy",
+    "description": "Implement lib/kapruka/errors.py with KaprukaError base, KaprukaRateLimitError (429 with retry_after), KaprukaValidationError, and KaprukaNotFoundError mapped from MCP error strings.",
+    "steps": [
+      "Define exception classes with structured fields code and message",
+      "Implement parse_mcp_error(result_str) raising appropriate subclass",
+      "Write pytest covering Error (429), empty_cart, and product_not_found parsing"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-016",
+    "category": "mcp",
+    "title": "Shared Pydantic types for MCP tools",
+    "description": "Implement lib/kapruka/types.py with Pydantic v2 models for all 7 Kapruka MCP tool inputs and outputs including CartItem, Recipient, Delivery, Sender, CreateOrderResponse with order_ref, checkout_url, expires_at.",
+    "steps": [
+      "Define SearchProductsInput/Output, GetProductInput/Output, ListCategoriesInput/Output models",
+      "Define Delivery, Recipient, Sender, CreateOrderInput, CreateOrderResponse with field validators",
+      "Write pytest validating gift_message max 300 chars and icing_text max 120 chars constraints"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-017",
+    "category": "mcp",
+    "title": "Wrapper for kapruka_search_products",
+    "description": "Implement lib/kapruka/tools/search_products.py calling MCP with response_format json, parsing typed SearchProductsOutput including results, next_cursor, applied_filters.",
+    "steps": [
+      "Implement search_products(q, category, min_price, max_price, in_stock_only, sort, limit, cursor, currency) async function",
+      "Force response_format json in MCP params",
+      "Write unit test with mocked MCP returning sample JSON verifying parsed ProductResult list"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-018",
+    "category": "mcp",
+    "title": "Wrapper for kapruka_get_product and kapruka_list_categories",
+    "description": "Implement lib/kapruka/tools/get_product.py and list_categories.py with typed JSON parsing and response_format json.",
+    "steps": [
+      "Implement get_product(product_id, currency) returning ProductDetail model",
+      "Implement list_categories(depth) returning nested CategoryTree model",
+      "Write unit tests with fixture JSON for both tools"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-019",
+    "category": "mcp",
+    "title": "Wrapper for delivery city and check_delivery tools",
+    "description": "Implement lib/kapruka/tools/delivery.py with list_delivery_cities(query, limit) and check_delivery(city, delivery_date, product_id) typed wrappers.",
+    "steps": [
+      "Implement list_delivery_cities returning list of city name strings",
+      "Implement check_delivery validating YYYY-MM-DD date format and returning availability bool",
+      "Write unit tests covering city_not_deliverable and date_not_deliverable error parsing"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-020",
+    "category": "mcp",
+    "title": "Wrapper for kapruka_create_order",
+    "description": "Implement lib/kapruka/tools/create_order.py building CreateOrderInput from cart, recipient, delivery, sender, gift_message, currency. Parse JSON response with order_ref, checkout_url, expires_at ISO 8601, and summary totals. Sender schema accepts name and anonymous only.",
+    "steps": [
+      "Implement create_order() forcing response_format json and bypassing read cache",
+      "Validate cart 1-30 items, quantity 1-99, gift_message max 300, icing_text cakes only max 120",
+      "Write unit test verifying parsed CreateOrderResponse fields match MCP JSON schema"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-021",
+    "category": "mcp",
+    "title": "Wrapper for kapruka_track_order",
+    "description": "Implement lib/kapruka/tools/track_order.py accepting order_number (post-payment identifier distinct from order_ref) and returning typed tracking status.",
+    "steps": [
+      "Implement track_order(order_number) with response_format json",
+      "Define TrackOrderResponse model with status, events, and delivery ETA fields",
+      "Write unit test with mocked tracking JSON response"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-022",
+    "category": "mcp",
+    "title": "KaprukaService facade with cache and rate limiting",
+    "description": "Implement lib/kapruka/service.py as unified facade delegating to all 7 tool wrappers, applying per-IP rate limits and read cache before MCP calls.",
+    "steps": [
+      "Create KaprukaService class accepting redis client and mcp client in constructor",
+      "Wire check_rate_limit before every call; apply cache on read tools only",
+      "Write integration test verifying 30-min cache hit and create_order bypasses cache"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-023",
+    "category": "ui",
+    "title": "Chat viewport Jinja template with empty state",
+    "description": "Create templates/chat/index.html as full-screen chat viewport with welcome empty state, message list container div#chat-messages, and Kapruka-adjacent warm commerce styling via Tailwind.",
+    "steps": [
+      "Create templates/chat/index.html extending base.html with centered chat layout",
+      "Add empty state placeholder with suggested prompts for gift discovery",
+      "Verify GET /chat renders 200 HTML with empty state visible"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-024",
+    "category": "ui",
+    "title": "HTMX chat input form",
+    "description": "Add chat input form with hx-post to /chat/stream, hx-ext sse, hx-target #chat-messages, and hx-swap beforeend for message injection.",
+    "steps": [
+      "Add form with textarea name=message and submit button with hx-post /chat/stream",
+      "Configure hx-trigger submit and hx-indicator for loading spinner",
+      "Manual test: submit message triggers POST without full page reload"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-025",
+    "category": "ui",
+    "title": "Alpine.js focus and scroll helpers",
+    "description": "Add minimal Alpine.js x-data chatHelpers component for auto-scrolling message list to bottom on new content and focusing input after response completes.",
+    "steps": [
+      "Add x-data chatHelpers with scrollToBottom() method on message container",
+      "Wire htmx:afterSwap event listener to call scrollToBottom",
+      "Verify in browser that new messages auto-scroll into view"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-026",
+    "category": "orchestration",
+    "title": "AgentState TypedDict schema",
+    "description": "Define graphs/state.py AgentState with messages, intent, hybrid_context, tool_calls, tool_results, tool_call_count, model_tier, session_id, zep_thread_id, currency, checkout_state, and response_html fields.",
+    "steps": [
+      "Create AgentState TypedDict with all required fields and Optional annotations",
+      "Add reducer annotations for messages list using operator.add",
+      "Write unit test instantiating minimal AgentState dict passes type check"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-027",
+    "category": "orchestration",
+    "title": "Redis LangGraph checkpointer",
+    "description": "Configure LangGraph Redis checkpointer in lib/redis/checkpointer.py persisting graph state to Memorystore Redis for conversation continuity across requests.",
+    "steps": [
+      "Implement get_checkpointer(redis_client) returning AsyncRedisSaver or equivalent",
+      "Wire checkpointer into shopping graph compile step",
+      "Write integration test verifying state persists across two graph invocations with same thread_id"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-028",
+    "category": "orchestration",
+    "title": "analyze_intent LangGraph node",
+    "description": "Implement graphs/nodes/analyze_intent.py node classifying user message into discovery, checkout, tracking, or general intent using Gemini 2.5 Flash via google-genai SDK.",
+    "steps": [
+      "Implement async analyze_intent(state) returning updated intent field",
+      "Use structured output or JSON mode for intent classification",
+      "Write unit test with mocked genai client verifying discovery intent for 'birthday cake for mom'"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-029",
+    "category": "orchestration",
+    "title": "retrieve_hybrid_context stub node",
+    "description": "Implement graphs/nodes/retrieve_hybrid_context.py stub returning empty hybrid_context dict; full Neo4j implementation deferred to Sprint 3 PRD-047.",
+    "steps": [
+      "Create async retrieve_hybrid_context(state) returning state with empty hybrid_context",
+      "Add conditional edge skipping stub when intent is tracking or checkout",
+      "Write unit test confirming stub returns without Neo4j connection"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-030",
+    "category": "orchestration",
+    "title": "call_mcp_tools LangGraph node",
+    "description": "Implement graphs/nodes/call_mcp_tools.py selecting and invoking KaprukaService tools based on intent and LLM tool-call decisions, incrementing tool_call_count.",
+    "steps": [
+      "Implement tool selection logic for search_products, get_product, list_categories based on intent",
+      "Increment tool_call_count on each invocation; store results in tool_results",
+      "Write unit test with mocked KaprukaService verifying search called for discovery intent"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-031",
+    "category": "orchestration",
+    "title": "generate_response LangGraph node",
+    "description": "Implement graphs/nodes/generate_response.py synthesizing final assistant response with Gemini using MCP tool results only, rendering Jinja message partial to response_html.",
+    "steps": [
+      "Call google-genai with tool_results context; enforce faithfulness to MCP data",
+      "Render templates/chat/message_assistant.html with response text",
+      "Write unit test verifying response_html contains product names from mocked tool_results"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-032",
+    "category": "orchestration",
+    "title": "Model router Flash to Pro escalation",
+    "description": "Implement graphs/model_router.py selecting gemini-2.5-flash by default and escalating to gemini-2.5-pro when checkout review turn detected or tool_call_count exceeds 3.",
+    "steps": [
+      "Implement select_model(state) returning model name string",
+      "Escalate to pro when state.checkout_state == 'review' or tool_call_count > 3",
+      "Write unit test verifying pro selected after 4th tool call"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-033",
+    "category": "orchestration",
+    "title": "Compile main shopping StateGraph",
+    "description": "Implement graphs/shopping_graph.py wiring analyze_intent, retrieve_hybrid_context, call_mcp_tools, generate_response nodes with conditional edges and Redis checkpointer.",
+    "steps": [
+      "Build StateGraph(AgentState) with all four nodes and edge routing by intent",
+      "Compile with checkpointer and export get_shopping_graph() factory",
+      "Write integration test invoking graph end-to-end with mocked services"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-034",
+    "category": "orchestration",
+    "title": "Zep session create and resume",
+    "description": "Implement lib/zep/session.py creating Zep memory sessions on first visit and resuming by session cookie thread_id stored in Redis.",
+    "steps": [
+      "Implement get_or_create_session(session_id) returning zep_thread_id",
+      "Store session_id to zep_thread_id mapping in Redis with 7-day TTL",
+      "Write unit test verifying new session creates Zep thread and existing resumes"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-035",
+    "category": "orchestration",
+    "title": "Zep memory read and write in graph loop",
+    "description": "Integrate Zep memory.add and memory.get into shopping graph: append user/assistant messages after each turn and inject memory context into analyze_intent and generate_response.",
+    "steps": [
+      "Add zep_memory_write node or side-effect after generate_response",
+      "Inject last 10 Zep memory facts into generate_response system prompt",
+      "Write integration test verifying message persisted to Zep mock after chat turn"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-036",
+    "category": "orchestration",
+    "title": "Cross-session preference extraction",
+    "description": "Use Zep memory search to extract user preferences (favorite categories, past occasions, currency) and inject into AgentState for personalized discovery.",
+    "steps": [
+      "Implement extract_preferences(zep_thread_id) returning dict of preference keys",
+      "Merge preferences into hybrid_context hints before MCP search",
+      "Write unit test with mocked Zep facts verifying category preference applied"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-037",
+    "category": "orchestration",
+    "title": "SSE streaming chat endpoint",
+    "description": "Implement POST /chat/stream in app/routes/chat.py returning text/event-stream with async generator yielding HTML token chunks from LangGraph graph.astream.",
+    "steps": [
+      "Create StreamingResponse with media_type text/event-stream",
+      "Yield SSE events with data field containing HTML fragments per token or chunk",
+      "Write httpx async test verifying Content-Type text/event-stream and event stream format"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-038",
+    "category": "ui",
+    "title": "HTMX SSE extension wiring",
+    "description": "Configure base.html with hx-ext='sse' and chat form sse-connect/sse-swap attributes to consume POST /chat/stream SSE events into #chat-messages.",
+    "steps": [
+      "Include htmx-ext-sse.js in base.html",
+      "Set sse-connect and sse-swap on chat form or dedicated SSE listener element",
+      "Manual browser test verifying streamed tokens appear incrementally in chat"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-039",
+    "category": "ui",
+    "title": "Assistant message Jinja partial",
+    "description": "Create templates/chat/message_assistant.html partial for hx-swap rendering assistant bubbles with optional embedded product card slots.",
+    "steps": [
+      "Create partial with role=assistant styling and prose Tailwind classes",
+      "Support optional products block for inline carousel injection",
+      "Render partial in isolation test verifying HTML structure"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-040",
+    "category": "ops",
+    "title": "Chat route integration test",
+    "description": "Write tests/integration/test_chat_flow.py end-to-end test posting message to /chat/stream with mocked KaprukaService and genai, verifying HTML response contains assistant message.",
+    "steps": [
+      "Use httpx AsyncClient with mocked dependencies",
+      "POST message='show me birthday cakes' and collect SSE stream",
+      "Assert response contains assistant role markup and no unhandled 500 errors"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-041",
+    "category": "graphrag",
+    "title": "Neo4j ontology Cypher schema",
+    "description": "Define lib/neo4j/ontology.py Cypher constraints and indexes for Occasion, Category, ProductType nodes with OCCASION_TO_CATEGORY and CATEGORY_TO_PRODUCT_TYPE relationships.",
+    "steps": [
+      "Write CREATE CONSTRAINT statements for unique node ids",
+      "Define relationship types and property schemas in ontology.py",
+      "Run migration script against test Neo4j verifying constraints created"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-042",
+    "category": "graphrag",
+    "title": "Category ingestion script",
+    "description": "Implement scripts/ingest_categories.py calling kapruka_list_categories via KaprukaService and MERGE-ing Occasion, Category, ProductType triplet nodes into Neo4j.",
+    "steps": [
+      "Fetch categories with depth=3 from live or mocked MCP",
+      "Map taxonomy to triplet structure and execute MERGE Cypher batches",
+      "Run script and verify node counts with MATCH (n) RETURN labels(n), count(*)"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-043",
+    "category": "graphrag",
+    "title": "Ontology node property enrichment",
+    "description": "Enrich ingested nodes with slug, display_name, and description properties derived from Kapruka category metadata for embedding and display.",
+    "steps": [
+      "Add property mapping in ingest_categories.py for each node type",
+      "Store source kapruka_id on each node for traceability",
+      "Verify sample Birthday occasion node has display_name and slug properties"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-044",
+    "category": "graphrag",
+    "title": "Vertex AI text-embedding-005 client",
+    "description": "Implement lib/embeddings/vertex_embeddings.py using google-cloud-aiplatform to embed text via text-embedding-005 model with batch support and GCP project/location from Settings.",
+    "steps": [
+      "Implement embed_texts(texts: list[str]) -> list[list[float]] async wrapper",
+      "Configure GCP_PROJECT_ID and GCP_LOCATION from Settings",
+      "Write unit test with mocked aiplatform verifying 768-dim vector returned"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-045",
+    "category": "graphrag",
+    "title": "Batch embed ontology nodes",
+    "description": "Extend ingest_categories.py or add scripts/embed_ontology.py to batch-embed all Occasion, Category, ProductType display_name+description and store embedding property on nodes.",
+    "steps": [
+      "Query all nodes missing embedding property",
+      "Batch embed via Vertex client and SET n.embedding = $vector",
+      "Verify MATCH (c:Category) WHERE c.embedding IS NOT NULL RETURN count(c) > 0"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-046",
+    "category": "graphrag",
+    "title": "Neo4j vector index creation and query",
+    "description": "Implement lib/neo4j/vector_search.py creating vector index on Category.embedding and querying via db.index.vector.queryNodes Cypher procedure.",
+    "steps": [
+      "Create vector index ontology_category_embedding with appropriate dimensions and similarity function",
+      "Implement vector_search(query_embedding, top_k=5) returning node ids and scores",
+      "Write integration test verifying semantically similar category returned for 'birthday gift' query"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-047",
+    "category": "graphrag",
+    "title": "HybridRAG retrieve_hybrid_context full implementation",
+    "description": "Replace stub in graphs/nodes/retrieve_hybrid_context.py: embed user query via Vertex, Neo4j vector search, 2-hop Cypher traversal Occasion-Category-ProductType, return structured hints for MCP filters.",
+    "steps": [
+      "Embed user message and run vector_search top 5 categories",
+      "Traverse 2 hops via lib/neo4j/traverse.py collecting related occasions and product types",
+      "Write integration test verifying hybrid_context contains category filter for 'wedding flowers'"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-048",
+    "category": "graphrag",
+    "title": "Neo4j multi-hop traversal helper",
+    "description": "Implement lib/neo4j/traverse.py executing parameterized 2-hop Cypher from seed category nodes returning connected occasions, categories, and product types with relationship weights.",
+    "steps": [
+      "Implement traverse_from_categories(category_ids, max_hops=2) returning TraversalResult",
+      "Include relationship type and hop depth in result",
+      "Write unit test with fixture graph verifying 2-hop reachability"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-049",
+    "category": "graphrag",
+    "title": "Graph-informed MCP filter injection",
+    "description": "Update call_mcp_tools node to pass hybrid_context category and occasion hints as category filter and refined q parameters to kapruka_search_products.",
+    "steps": [
+      "Map top traversal category to search_products category param",
+      "Augment q with occasion keywords when confidence score exceeds threshold",
+      "Write unit test verifying search called with category='Birthday' for birthday intent context"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-050",
+    "category": "ui",
+    "title": "Product card Jinja partial",
+    "description": "Create templates/components/product_card.html rendering product image, name, price with format_currency, in_stock badge, and hx-post add-to-cart button.",
+    "steps": [
+      "Accept product dict with id, name, price, image_url, in_stock, url fields",
+      "Render Tailwind card with hover state and stock badge overlay",
+      "Snapshot test rendering sample product fixture HTML"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-051",
+    "category": "ui",
+    "title": "Horizontal product carousel partial",
+    "description": "Create templates/components/product_carousel.html with horizontal scroll container including multiple product_card partials and scroll snap CSS.",
+    "steps": [
+      "Render list of products as horizontal flex overflow-x-auto carousel",
+      "Include prev/next Alpine buttons for keyboard-accessible navigation",
+      "Verify carousel renders 3+ cards without layout overflow on mobile viewport"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-052",
+    "category": "ui",
+    "title": "Category filter chips partial",
+    "description": "Create templates/components/category_chips.html rendering clickable HTMX filter chips from hybrid_context categories triggering refined search partial swap.",
+    "steps": [
+      "Render chips with hx-get /partials/search?category={name} hx-target #results",
+      "Highlight active chip with distinct Tailwind variant",
+      "Test chip click triggers HTMX request without full page reload"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-053",
+    "category": "ui",
+    "title": "Stock badge overlay component",
+    "description": "Create templates/components/stock_badge.html partial showing in-stock green badge or out-of-stock muted overlay based on in_stock and stock_level fields.",
+    "steps": [
+      "Render green 'In Stock' badge when in_stock true",
+      "Render gray 'Out of Stock' overlay when in_stock false",
+      "Include partial in product_card and verify both states render correctly"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-054",
+    "category": "ui",
+    "title": "Alpine lazy-load image animations",
+    "description": "Add Alpine.js x-data lazyImage component with intersection observer fading in product images on carousel scroll into viewport.",
+    "steps": [
+      "Implement lazyImage with loading skeleton and opacity transition on load",
+      "Apply to product_card img tags in carousel",
+      "Verify images fade in on scroll in browser devtools throttled network"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-055",
+    "category": "ui",
+    "title": "Embed product carousel in assistant messages",
+    "description": "Update generate_response node and message_assistant.html to inject product_carousel partial when tool_results contain search_products results.",
+    "steps": [
+      "Detect search results in tool_results and pass products list to Jinja context",
+      "Render carousel below assistant text in message partial",
+      "Integration test verifying carousel HTML present after product search turn"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-056",
+    "category": "ui",
+    "title": "Currency formatting Jinja filter",
+    "description": "Implement lib/utils/currency.py format_currency(amount, currency) supporting LKR, USD, GBP, AUD, CAD, EUR and register as Jinja filter in templating.py.",
+    "steps": [
+      "Format LKR without decimals and USD/EUR with two decimal places",
+      "Register format_currency filter in Jinja environment",
+      "Write unit test: format_currency(1500, 'LKR') returns 'Rs. 1,500'"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-057",
+    "category": "ui",
+    "title": "Header currency selector with HTMX",
+    "description": "Add persistent header currency select with hx-post /session/currency, hx-swap none, options LKR USD GBP AUD CAD EUR, defaulting to session currency from Redis.",
+    "steps": [
+      "Render select in base.html header with current currency selected",
+      "POST updates Redis session currency key session:{id}:currency",
+      "Verify currency change persists across page refresh within same session"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-058",
+    "category": "ui",
+    "title": "Propagate session currency to all MCP calls",
+    "description": "Inject session currency from Redis into AgentState.currency at graph start and pass to every KaprukaService call including search, get_product, and create_order.",
+    "steps": [
+      "Load currency in chat route before graph invocation",
+      "Pass currency param in all MCP tool calls via call_mcp_tools node",
+      "Write test verifying search_products called with currency='USD' after session update"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-059",
+    "category": "checkout",
+    "title": "Redis server-side cart state",
+    "description": "Implement lib/redis/cart.py storing cart matrix in Redis hash cart:{session_id} with up to 30 items, each with product_id, quantity, icing_text, name, price snapshot.",
+    "steps": [
+      "Implement add_item, remove_item, update_quantity, get_cart, clear_cart methods",
+      "Enforce max 30 items and quantity 1-99 per item",
+      "Write unit test adding 31st item raises CartLimitExceeded"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-060",
+    "category": "checkout",
+    "title": "Cart HTMX partial swaps",
+    "description": "Implement app/routes/cart.py with hx-post /cart/add, /cart/remove, /cart/update returning templates/checkout/cart_partial.html fragments for hx-swap outerHTML on #cart-panel.",
+    "steps": [
+      "Create cart_partial.html listing items with quantity stepper and remove buttons",
+      "Each action returns updated partial without full page reload",
+      "Integration test POST /cart/add returns HTML with product name"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-061",
+    "category": "ui",
+    "title": "Alpine cart drawer",
+    "description": "Add Alpine.js cart drawer slide-over in base.html toggled by cart icon badge showing item count from cart partial hx-swap.",
+    "steps": [
+      "Implement x-data cartDrawer with open/close state and transition classes",
+      "Cart icon shows badge count from server-rendered cart item total",
+      "Verify drawer opens/closes with escape key and backdrop click"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-062",
+    "category": "checkout",
+    "title": "Delivery city debounced autocomplete",
+    "description": "Create templates/checkout/delivery_city.html with hx-get /partials/delivery-cities, hx-trigger keyup changed delay:300ms, calling kapruka_list_delivery_cities for autocomplete suggestions.",
+    "steps": [
+      "Implement partial route returning li suggestion items for hx-swap",
+      "Debounce input with hx-trigger delay:300ms",
+      "Integration test typing 'Col' returns Colombo suggestion HTML"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-063",
+    "category": "checkout",
+    "title": "Colombo timezone delivery date picker",
+    "description": "Create templates/checkout/delivery_date.html with date input min=today in Asia/Colombo timezone and hx-post /checkout/check-delivery validating via kapruka_check_delivery.",
+    "steps": [
+      "Compute today date in Asia/Colombo using zoneinfo",
+      "POST selected date and city to check_delivery endpoint returning availability partial",
+      "Write test verifying past date rejected with user-friendly error partial"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-064",
+    "category": "checkout",
+    "title": "Delivery address and instructions form",
+    "description": "Create templates/checkout/delivery_form.html with address, city, location_type select (house/apartment/office/other), date, and optional instructions fields with Pydantic validation.",
+    "steps": [
+      "Validate address 3-250 chars and instructions max 250 chars server-side",
+      "Render inline field errors as HTMX OOB swap fragments",
+      "Test invalid address returns error partial without losing form state"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-065",
+    "category": "checkout",
+    "title": "Recipient name and phone validation",
+    "description": "Create templates/checkout/recipient_form.html validating recipient name 1-80 chars and phone in E.164 +9477 or local 077 Sri Lanka formats via Pydantic validator.",
+    "steps": [
+      "Implement phone regex validator accepting +94771234567 and 0771234567 formats",
+      "Return field-level error partials on validation failure",
+      "Write pytest for valid and invalid phone numbers"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-066",
+    "category": "checkout",
+    "title": "Sender form with anonymous toggle",
+    "description": "Create templates/checkout/sender_form.html with sender name field and anonymous checkbox only. No email field per MCP Sender schema.",
+    "steps": [
+      "Render name input max 80 chars and anonymous boolean toggle",
+      "When anonymous checked, display preview showing 'Anonymous' on gift card",
+      "Verify form schema matches Sender Pydantic model with name and anonymous only"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-067",
+    "category": "orchestration",
+    "title": "Checkout sub-graph state machine definition",
+    "description": "Implement graphs/checkout_graph.py as deterministic LangGraph sub-graph with strict states: cart, delivery_city, delivery_date, recipient, sender, review. No backward skips without explicit user action.",
+    "steps": [
+      "Define CheckoutState TypedDict with current_step and form field accumulators",
+      "Add nodes for each step with validation gates blocking advance on invalid data",
+      "Write unit test verifying cannot jump from cart to review without intermediate steps"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-068",
+    "category": "checkout",
+    "title": "Checkout sub-graph integration with main graph",
+    "description": "Wire checkout_graph as conditional sub-graph invoked when analyze_intent classifies checkout intent or user clicks proceed-to-checkout from cart drawer.",
+    "steps": [
+      "Add conditional edge from analyze_intent to checkout_graph when intent=checkout",
+      "Pass cart state from Redis into checkout_graph initial state",
+      "Integration test verifying checkout flow starts from cart with items present"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-069",
+    "category": "checkout",
+    "title": "Checkout review step with Pro model",
+    "description": "Implement review node in checkout_graph rendering order summary partial and escalating to Gemini 2.5 Pro via model_router for final confirmation turn.",
+    "steps": [
+      "Render templates/checkout/review.html with cart items, delivery, recipient, sender summary",
+      "Force model_tier=pro on review step",
+      "Verify model_router returns pro when checkout_state is review"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-070",
+    "category": "checkout",
+    "title": "kapruka_create_order integration",
+    "description": "Implement checkout finalize node calling KaprukaService.create_order with assembled cart, recipient, delivery, sender, gift_message, currency. Parse order_ref, checkout_url, expires_at from JSON response.",
+    "steps": [
+      "Build CreateOrderInput from checkout state and Redis cart",
+      "Parse CreateOrderResponse; store order_ref and expires_at in session Redis",
+      "Integration test with mocked MCP verifying checkout_url returned in state"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-071",
+    "category": "checkout",
+    "title": "Click-to-pay countdown UI component",
+    "description": "Create templates/checkout/payment_cta.html displaying checkout_url link, order_ref, grand_total, and Alpine.js countdown timer to expires_at ISO 8601 with warning when under 10 minutes.",
+    "steps": [
+      "Parse expires_at and render MM:SS countdown updating every second",
+      "Style primary CTA button linking to checkout_url opens in new tab",
+      "Verify countdown reaches zero and displays expired message"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-072",
+    "category": "checkout",
+    "title": "Order tracking chat flow",
+    "description": "Implement tracking intent handler in call_mcp_tools calling kapruka_track_order with order_number extracted from user message, rendering templates/checkout/tracking_status.html partial.",
+    "steps": [
+      "Extract order_number from user message via regex or LLM structured extraction",
+      "Call track_order with post-payment order_number not order_ref",
+      "Write unit test verifying tracking partial renders status timeline HTML"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-073",
+    "category": "ops",
+    "title": "Exception middleware for MCP errors",
+    "description": "Implement app/middleware/errors.py mapping KaprukaRateLimitError, KaprukaValidationError, and unhandled exceptions to user-friendly HTMX-compatible HTML error partials.",
+    "steps": [
+      "Register exception handlers returning templates/partials/error_banner.html",
+      "Include error code and human-readable message in partial",
+      "Write test verifying KaprukaValidationError returns 400 HTML not JSON"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-074",
+    "category": "ops",
+    "title": "429 rate limit alert banner with countdown",
+    "description": "Extend error middleware for 429 responses rendering HTMX alert banner with Retry-After countdown timer and auto-dismiss when window resets.",
+    "steps": [
+      "Parse Retry-After header into countdown seconds on KaprukaRateLimitError",
+      "Render templates/partials/rate_limit_banner.html with Alpine countdown",
+      "Write test simulating 429 returns banner with data-retry-after attribute"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-075",
+    "category": "graphrag",
+    "title": "NetworkX community detection background worker",
+    "description": "Implement lib/analytics/networkx_worker.py as asyncio background task exporting Neo4j co-purchase edges to NetworkX graph and running community detection for frequently-bought-together recommendations.",
+    "steps": [
+      "Query Neo4j for CO_PURCHASED_WITH relationships or synthesize from category proximity",
+      "Run networkx.community.louvain_communities in thread executor",
+      "Store community recommendations back to Neo4j RECOMMENDS relationships"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-076",
+    "category": "graphrag",
+    "title": "Optional cuGraph CUDA Dockerfile stage",
+    "description": "Add optional Dockerfile.cuda stage installing cugraph for local GPU development. Document that production Cloud Run uses NetworkX path only. Not enabled in default Cloud Run deploy.",
+    "steps": [
+      "Add Dockerfile.cuda stage with CUDA base image and cugraph pip install",
+      "Create lib/analytics/cugraph_optional.py importing cugraph only when CUDA available",
+      "Document in README that cuGraph stage is dev-only; Cloud Run uses NetworkX"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-077",
+    "category": "ops",
+    "title": "Ragas evaluation golden dataset",
+    "description": "Create evals/golden_dataset.json with 20+ query-answer pairs covering discovery, checkout guidance, and tracking scenarios with expected MCP tool usage patterns.",
+    "steps": [
+      "Define golden cases with user_query, expected_tools, reference_answer fields",
+      "Cover birthday cake search, flower delivery check, and order tracking cases",
+      "Validate JSON schema with pytest fixture loader"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-078",
+    "category": "ops",
+    "title": "Ragas eval script and CI mock MCP fixture",
+    "description": "Implement evals/ragas_eval.py measuring context_precision, answer_relevance, and faithfulness against golden dataset with mocked KaprukaService transport for CI.",
+    "steps": [
+      "Implement run_ragas_eval() using ragas metrics on graph outputs",
+      "Create tests/fixtures/mcp_mock.py returning deterministic JSON for all 7 tools",
+      "Add CI job running ragas_eval with thresholds context_precision >= 0.7"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-079",
+    "category": "ops",
+    "title": "Ruff and mypy CI gate",
+    "description": "Create .github/workflows/ci.yml running ruff check, ruff format --check, mypy on app/ lib/ graphs/, and pytest unit tests on every push.",
+    "steps": [
+      "Configure GitHub Actions with Python 3.12 matrix",
+      "Run ruff and mypy with zero errors required to pass",
+      "Run pytest tests/unit excluding integration tests requiring live services"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-080",
+    "category": "ops",
+    "title": "Multi-stage production Dockerfile",
+    "description": "Create Dockerfile with builder stage installing Python deps and runtime stage with gunicorn+uvicorn, non-root user, PORT=8080, and static CSS copied from build stage.",
+    "steps": [
+      "Builder stage runs pip install and tailwindcss compile",
+      "Runtime stage uses python:3.12-slim with gunicorn app.main:app -k uvicorn.workers.UvicornWorker",
+      "docker build succeeds and container starts on PORT 8080"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-081",
+    "category": "ops",
+    "title": "Aggregated health check endpoint",
+    "description": "Implement GET /health in app/routes/health.py returning JSON status of Redis ping, Neo4j RETURN 1, Zep health, and MCP lightweight list_categories call with overall healthy/degraded status.",
+    "steps": [
+      "Return 200 with {status: healthy, services: {redis, neo4j, zep, mcp}} when all pass",
+      "Return 503 degraded when any critical service fails",
+      "Write test with mocked services verifying response schema"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-082",
+    "category": "ops",
+    "title": "Gunicorn Uvicorn production entrypoint",
+    "description": "Create gunicorn.conf.py with worker count, timeout, and bind 0.0.0.0:8080 configuration for Cloud Run. Document Procfile or CMD in Dockerfile.",
+    "steps": [
+      "Configure workers = (2 * cpu_count) + 1 and timeout 120 for SSE streams",
+      "Set graceful_timeout and keepalive for Cloud Run request patterns",
+      "Verify gunicorn starts and serves /health with 200"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-083",
+    "category": "ops",
+    "title": "Google Cloud Run deployment with gcloud",
+    "description": "Create scripts/deploy_cloud_run.sh and docs/DEPLOY.md with step-by-step gcloud commands: build image, push to Artifact Registry, deploy Cloud Run with VPC connector for Memorystore, Secret Manager env vars.",
+    "steps": [
+      "Document gcloud artifacts repositories create and docker push steps",
+      "Document gcloud run deploy with --vpc-connector, --set-secrets, --min-instances 0",
+      "Include env var checklist for REDIS_URL, NEO4J_URI, ZEP_API_KEY, GOOGLE_API_KEY, GCP_PROJECT_ID"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-084",
+    "category": "ops",
+    "title": "Playwright E2E smoke tests",
+    "description": "Implement tests/e2e/test_smoke.py with Playwright testing chat page load, product search flow with mocked MCP, cart add partial, and checkout form render stopping before real create_order.",
+    "steps": [
+      "Configure pytest-playwright with base_url http://localhost:8080",
+      "Test: load /chat, submit search message, verify product card appears in DOM",
+      "Test: add to cart and verify cart drawer shows item; mock create_order in test env"
+    ],
+    "passes": false
+  }
+]

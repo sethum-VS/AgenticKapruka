@@ -1,0 +1,13 @@
+# Ralph progress log — delete after sprint
+# Format: one block per iteration
+
+Session started: 2026-06-07
+Branch: ralph/sprint-1
+
+## PRD-001 — Initialize Python project with pyproject.toml
+- Created pyproject.toml with hatchling build, runtime deps (FastAPI, uvicorn, gunicorn, pydantic v2, jinja2, redis, neo4j, zep-python, mcp, langgraph, google-genai, google-cloud-aiplatform, networkx, ragas) and dev extras (pytest, pytest-asyncio, httpx, playwright, pytest-playwright, ruff, mypy).
+- Pinned compatible version ranges; verified `pip install -e '.[dev]'` resolves cleanly in Python 3.13 venv.
+- Added baseline [tool.ruff] and [tool.mypy] sections plus pytest asyncio config.
+- Added empty app/, lib/, graphs/ package stubs matching hatch wheel packages for editable install and mypy targets.
+Files: pyproject.toml, app/__init__.py, lib/__init__.py, graphs/__init__.py
+Next: PRD-002 FastAPI application factory (app/main.py create_app).
