@@ -51,8 +51,11 @@ PRD backlog lives in `prd.json`. Progress is logged in `progress.txt`.
 # Headless plain text instead of JSON
 ./scripts/ralph-once.sh --text
 
-# AFK loop (default 10 iterations)
+# AFK loop (default 10 iterations, headless JSON stream)
 ./scripts/ralph.sh
+
+# AFK loop with readable plain text instead of JSON
+./scripts/ralph.sh 10 --text
 
 # Custom iteration count and model
 ./scripts/ralph.sh 5 --model composer-2.5

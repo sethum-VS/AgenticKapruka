@@ -34,5 +34,7 @@ Append decisions to `progress.txt`. Commit on `ralph/sprint-1` branch.
 ```bash
 ./scripts/ralph-once.sh          # single supervised iteration (headless JSON)
 ./scripts/ralph-once.sh -i       # same PRD prompt in interactive Cursor Agent UI
-./scripts/ralph.sh [N]           # AFK loop (default 10 iterations)
+./scripts/ralph-once.sh --text   # single iteration, plain text output
+./scripts/ralph.sh [N]           # AFK loop (default 10 iterations, JSON stream)
+./scripts/ralph.sh [N] --text    # AFK loop with plain text output
 ```
