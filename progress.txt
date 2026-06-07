@@ -378,3 +378,18 @@ Files: lib/chat/session.py, app/routes/chat.py, lib/chat/deps.py, tests/unit/{te
 - Hardened unit tests (`tests/unit/test_traverse.py`): fixture graph now includes sibling category `category:cakes` reachable in 2 hops (flowers → wedding → cakes); asserts weights, seed_id, empty-seed short-circuit, invalid max_hops.
 Files: lib/neo4j/traverse.py, tests/unit/test_traverse.py, lib/neo4j/__init__.py, prd.json
 Next: PRD-049 Graph-informed MCP filter injection.
+
+## PRD-049 — Graph-informed MCP filter injection
+- Added `build_discovery_search_args` in `lib/neo4j/hybrid_context.py`: maps `hints.category` (top graph traversal category) to MCP `category` filter; augments `q` with `hints.occasion` when top `vector_hits[0].score` ≥ `VECTOR_CONFIDENCE_THRESHOLD` (0.65) and occasion terms absent from user message.
+- Updated `graphs/nodes/call_mcp_tools.select_tool_calls` to use graph-informed search args for discovery intent instead of inline category/q assembly.
+- Unit tests: birthday graph context → `category='Birthday'` + occasion-augmented `q`; low-confidence vector score skips occasion augmentation.
+Files: lib/neo4j/hybrid_context.py, graphs/nodes/call_mcp_tools.py, tests/unit/test_call_mcp_tools.py, prd.json
+Next: PRD-050 Product card Jinja partial.
+
+## PRD-050 — Product card Jinja partial
+- Added `templates/components/product_card.html`: Tailwind `card-commerce` with hover shadow/scale, image link, inline stock badge overlay (green In Stock / muted Out of Stock), `format_currency` price, and `hx-post /cart/add` button targeting `#cart-panel`.
+- Supports product dict with scalar or Money-shaped `price`; optional `currency` when price is numeric.
+- Added `render_product_card` + `normalize_html_snapshot` in `app/templating.py` for reuse and golden-file comparisons.
+- Tests: `tests/unit/test_product_card.py` with JSON fixtures (`tests/fixtures/products/`) and HTML snapshot (`tests/fixtures/snapshots/product_card_in_stock.html`); out-of-stock overlay + disabled button coverage.
+Files: templates/components/product_card.html, app/templating.py, tests/unit/test_product_card.py, tests/fixtures/{products,snapshots}/*
+Next: PRD-051 Horizontal product carousel partial.

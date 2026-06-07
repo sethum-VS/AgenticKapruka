@@ -585,7 +585,7 @@
       "Augment q with occasion keywords when confidence score exceeds threshold",
       "Write unit test verifying search called with category='Birthday' for birthday intent context"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-050",
@@ -597,7 +597,7 @@
       "Render Tailwind card with hover state and stock badge overlay",
       "Snapshot test rendering sample product fixture HTML"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-051",

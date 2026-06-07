@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import jinja2
 from fastapi.templating import Jinja2Templates
@@ -36,3 +38,16 @@ def _create_templates() -> Jinja2Templates:
 def get_templates() -> Jinja2Templates:
     """FastAPI dependency returning the shared Jinja2 template environment."""
     return _create_templates()
+
+
+def render_product_card(product: dict[str, Any]) -> str:
+    """Render templates/components/product_card.html for carousel and search results."""
+    templates = get_templates()
+    template = templates.env.get_template("components/product_card.html")
+    return template.render(product=product)
+
+
+def normalize_html_snapshot(html: str) -> str:
+    """Collapse insignificant whitespace for stable snapshot comparisons."""
+    collapsed = re.sub(r">\s+<", "><", html.strip())
+    return re.sub(r"\s{2,}", " ", collapsed)
