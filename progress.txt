@@ -261,3 +261,13 @@ Next: PRD-034 Zep session create and resume (lib/zep/session.py).
 - Unit tests (`tests/unit/test_zep_session.py`): fakeredis + mocked Zep HTTP; asserts create on first visit, resume without second POST, TTL set.
 Files: lib/zep/{session,__init__}.py, tests/unit/test_zep_session.py, prd.json
 Next: PRD-035 Zep memory read and write in graph loop.
+
+## PRD-035 — Zep memory read and write in graph loop
+- Added `lib/zep/memory.py`: `get_session_memory_facts`, `append_session_messages`, `extract_memory_facts`, `format_memory_facts_block` (last 10 facts default).
+- Extended `ZepClient` with `get_memory()` and `add_messages()` wrapping SDK memory.get/add.
+- New graph nodes: `load_zep_memory` (START → before analyze_intent) loads facts into `zep_memory_facts`; `zep_memory_write` (after generate_response → END) persists user/assistant turn.
+- `AgentState` gains `zep_memory_facts` and `assistant_message`; `analyze_intent` and `generate_response` inject facts into system prompts.
+- `ShoppingGraphDeps` accepts optional `zep_client`; graph skips memory I/O when absent (tests without Zep).
+- Integration tests (`tests/integration/test_zep_memory_graph.py`): mocked Zep HTTP verifies GET facts loaded and POST messages persisted after full graph turn.
+Files: lib/zep/{memory,client,__init__}.py, graphs/{state,shopping_graph}.py, graphs/nodes/{load_zep_memory,zep_memory_write,analyze_intent,generate_response,__init__}.py, tests/unit/test_zep_memory.py, tests/integration/test_zep_memory_graph.py, tests/integration/test_shopping_graph.py, tests/unit/test_agent_state.py, prd.json
+Next: PRD-036 Cross-session preference extraction.

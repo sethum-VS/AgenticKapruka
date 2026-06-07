@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import get_settings
 from graphs.state import AgentState, Intent
+from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +91,26 @@ def _parse_intent_response(response: types.GenerateContentResponse) -> Intent:
         raise ValueError(msg) from exc
 
 
-def _classify_intent_sync(client: genai.Client, user_message: str) -> Intent:
+def _build_intent_system_instruction(zep_memory_facts: list[str] | None) -> str:
+    """Combine base intent prompt with optional Zep memory context."""
+    instruction = SYSTEM_INSTRUCTION
+    if zep_memory_facts:
+        instruction += format_memory_facts_block(zep_memory_facts)
+    return instruction
+
+
+def _classify_intent_sync(
+    client: genai.Client,
+    user_message: str,
+    *,
+    zep_memory_facts: list[str] | None = None,
+) -> Intent:
     """Blocking Gemini call; run via asyncio.to_thread from analyze_intent."""
     response = client.models.generate_content(
         model=INTENT_MODEL,
         contents=user_message,
         config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
+            system_instruction=_build_intent_system_instruction(zep_memory_facts),
             response_mime_type="application/json",
             response_schema=IntentClassification,
             temperature=0,
@@ -123,6 +137,12 @@ async def analyze_intent(
         return {"intent": "general"}
 
     client = genai_client or create_genai_client()
-    intent = await asyncio.to_thread(_classify_intent_sync, client, user_message)
+    zep_memory_facts = state.get("zep_memory_facts")
+    intent = await asyncio.to_thread(
+        _classify_intent_sync,
+        client,
+        user_message,
+        zep_memory_facts=zep_memory_facts,
+    )
     logger.info("analyze_intent: classified message as %s", intent)
     return {"intent": intent}

@@ -36,6 +36,8 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
         "currency",
         "checkout_state",
         "response_html",
+        "assistant_message",
+        "zep_memory_facts",
     }
     assert set(hints) == expected_keys
 

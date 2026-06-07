@@ -164,16 +164,20 @@ async def test_shopping_graph_node_order_via_stream_events(graph_deps: ShoppingG
     node_names: list[str] = []
     async for event in graph.astream_events(state, config, version="v2"):
         if event.get("event") == "on_chain_start" and event.get("name") in {
+            "load_zep_memory",
             "analyze_intent",
             "retrieve_hybrid_context",
             "call_mcp_tools",
             "generate_response",
+            "zep_memory_write",
         }:
             node_names.append(str(event["name"]))
 
     assert node_names == [
+        "load_zep_memory",
         "analyze_intent",
         "retrieve_hybrid_context",
         "call_mcp_tools",
         "generate_response",
+        "zep_memory_write",
     ]

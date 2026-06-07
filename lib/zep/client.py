@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 from zep_python.client import AsyncZep
 from zep_python.types import Session, SessionListResponse
+from zep_python.types.memory import Memory
+from zep_python.types.message import Message
+from zep_python.types.success_response import SuccessResponse
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +106,23 @@ class ZepClient:
             user_id=user_id,
             metadata=metadata,
         )
+
+    async def get_memory(
+        self,
+        session_id: str,
+        *,
+        lastn: int | None = None,
+    ) -> Memory:
+        """Return memory (summary, messages, facts) for a session thread."""
+        return await self.sdk.memory.get(session_id, lastn=lastn)
+
+    async def add_messages(
+        self,
+        session_id: str,
+        messages: Sequence[Message],
+    ) -> SuccessResponse:
+        """Append chat messages to a session's Zep memory."""
+        return await self.sdk.memory.add(session_id, messages=messages)
 
     async def health_check(self) -> bool:
         """Return True when Zep Cloud accepts the configured API key."""

@@ -15,6 +15,7 @@ from app.templating import get_templates
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message, create_genai_client
 from graphs.state import AgentState
+from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
 
@@ -77,18 +78,31 @@ def _parse_reply_response(response: types.GenerateContentResponse) -> str:
         raise ValueError(msg) from exc
 
 
+def _build_response_system_instruction(zep_memory_facts: list[str] | None) -> str:
+    """Combine base response prompt with optional Zep memory context."""
+    instruction = SYSTEM_INSTRUCTION
+    if zep_memory_facts:
+        instruction += format_memory_facts_block(zep_memory_facts)
+        instruction += (
+            "\nDo not treat prior session facts as catalog data; "
+            "tool_results remain the sole source of truth for products and prices."
+        )
+    return instruction
+
+
 def _generate_reply_sync(
     client: genai.Client,
     *,
     model: str,
     user_prompt: str,
+    zep_memory_facts: list[str] | None = None,
 ) -> str:
     """Blocking Gemini call; run via asyncio.to_thread from generate_response."""
     response = client.models.generate_content(
         model=model,
         contents=user_prompt,
         config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
+            system_instruction=_build_response_system_instruction(zep_memory_facts),
             response_mime_type="application/json",
             response_schema=AssistantReply,
             temperature=0.2,
@@ -116,21 +130,29 @@ async def generate_response(
 
     if not user_message.strip():
         fallback = "How can I help you find a gift on Kapruka today?"
-        return {"response_html": render_assistant_html(fallback)}
+        return {
+            "response_html": render_assistant_html(fallback),
+            "assistant_message": fallback,
+        }
 
     client = genai_client or create_genai_client()
     model = select_model(state)
     user_prompt = _build_user_prompt(user_message, tool_results)
 
+    zep_memory_facts = state.get("zep_memory_facts")
     reply_text = await asyncio.to_thread(
         _generate_reply_sync,
         client,
         model=model,
         user_prompt=user_prompt,
+        zep_memory_facts=zep_memory_facts,
     )
 
     if not reply_text:
         reply_text = "I could not generate a response. Please try again."
 
     logger.info("generate_response: rendered assistant reply (%d chars)", len(reply_text))
-    return {"response_html": render_assistant_html(reply_text)}
+    return {
+        "response_html": render_assistant_html(reply_text),
+        "assistant_message": reply_text,
+    }

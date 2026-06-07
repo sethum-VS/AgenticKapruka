@@ -417,7 +417,7 @@
       "Inject last 10 Zep memory facts into generate_response system prompt",
       "Write integration test verifying message persisted to Zep mock after chat turn"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-036",
