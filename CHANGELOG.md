@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 
 - Circular import between `app.templating` and checkout graph that blocked app startup
 - Integration tests updated for PRD-072 tracking MCP behavior
+- Multi-turn chat checkout: Redis session persistence, message parsing, cart reload at finalize, pending-order guard, PRD-073 error paths on delivery check, safe payment countdown binding
 
 ## [0.0.5.0] - 2026-06-08
 
