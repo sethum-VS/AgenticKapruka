@@ -148,3 +148,10 @@ Next: PRD-019 Wrapper for delivery city and check_delivery tools (lib/kapruka/to
 - Unit tests: city name extraction, forced JSON format, limit/date validation short-circuit, available/unavailable payloads, both deliverability error codes.
 Files: lib/kapruka/tools/delivery.py, lib/kapruka/tools/__init__.py, lib/kapruka/__init__.py, tests/unit/test_delivery.py, prd.json
 Next: PRD-020 Wrapper for kapruka_create_order (lib/kapruka/tools/create_order.py).
+
+## PRD-020 — Wrapper for kapruka_create_order
+- Added `lib/kapruka/tools/create_order.py`: async `create_order(client, *, cart, recipient, delivery, sender, gift_message, currency)` builds validated `CreateOrderInput`, forces `response_format=json`, asserts `is_cacheable_tool` is False (write path never read-cached), calls MCP `kapruka_create_order`, parses via `parse_mcp_error` + `CreateOrderResponse.model_validate`.
+- Pre-MCP validation: `_validate_cart_icing_text` rejects icing_text on non-cake SKUs (CAKE* prefix); cart/qty/gift_message bounds enforced by Pydantic models from PRD-016.
+- Unit tests: full response field parsing (order_ref, checkout_url, expires_at, summary totals), forced JSON format, cache bypass, cart/qty/gift_message/icing_text validation short-circuit, empty_cart → KaprukaValidationError.
+Files: lib/kapruka/tools/create_order.py, lib/kapruka/tools/__init__.py, lib/kapruka/__init__.py, tests/unit/test_create_order.py, prd.json
+Next: PRD-021 Wrapper for kapruka_track_order (lib/kapruka/tools/track_order.py).

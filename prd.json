@@ -237,7 +237,7 @@
       "Validate cart 1-30 items, quantity 1-99, gift_message max 300, icing_text cakes only max 120",
       "Write unit test verifying parsed CreateOrderResponse fields match MCP JSON schema"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-021",

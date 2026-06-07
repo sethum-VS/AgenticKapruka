@@ -8,6 +8,7 @@ from lib.kapruka.errors import (
     parse_mcp_error,
 )
 from lib.kapruka.mcp_client import MCPHttpClient
+from lib.kapruka.tools.create_order import create_order
 from lib.kapruka.tools.delivery import check_delivery, list_delivery_cities
 from lib.kapruka.tools.get_product import get_product
 from lib.kapruka.tools.list_categories import list_categories
@@ -49,6 +50,7 @@ __all__ = [
     "SearchProductsOutput",
     "Sender",
     "check_delivery",
+    "create_order",
     "get_product",
     "list_categories",
     "list_delivery_cities",
