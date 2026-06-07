@@ -344,10 +344,17 @@ Next: PRD-044 Vertex AI text-embedding-005 client.
 Files: lib/embeddings/{__init__,vertex_embeddings}.py, tests/unit/test_vertex_embeddings.py, prd.json
 Next: PRD-045 Batch embed ontology nodes.
 
+## PRD-045 — Batch embed ontology nodes
+- Added `lib/neo4j/embed_ontology.py`: `fetch_nodes_missing_embedding`, `build_embedding_text` (display_name + description), batched `set_node_embeddings` via UNWIND, `embed_ontology_nodes` orchestrating Vertex `embed_texts` (injectable for tests); `has_category_embeddings` + `count_nodes_with_embedding` for verification.
+- Added `scripts/embed_ontology.py` CLI: connect Neo4j → embed missing nodes → assert Category embedding present → print per-label counts.
+- Unit tests (`tests/unit/test_embed_ontology.py`): mock store + fake embed_fn covers fetch, batch SET, full embed run, skip when already embedded, PRD verify query, vector count mismatch.
+Files: lib/neo4j/{embed_ontology,__init__}.py, scripts/embed_ontology.py, tests/unit/test_embed_ontology.py, prd.json
+Next: PRD-046 Neo4j vector index creation and query.
+
 ## Review hardening — signed chat sessions (post PRD-037–044)
 - `lib/chat/session.py`: HMAC-signed `ak_session` cookie bound to `SESSION_SECRET`; rejects client-forged thread IDs (fixes checkpoint IDOR/session fixation).
 - `app/routes/chat.py`: yield SSE error fragment on pre-stream failures; `Secure` cookie when `APP_ENV=production`.
 - `lib/chat/deps.py`: honor `X-Forwarded-For` only behind trusted proxy (production or localhost peer).
 - Tests: `test_chat_session.py`, `test_chat_deps.py`, setup-failure + cookie reuse in `test_chat.py`.
 Files: lib/chat/session.py, app/routes/chat.py, lib/chat/deps.py, tests/unit/{test_chat_session,test_chat_deps,test_chat}.py
-Next: PRD-045 Batch embed ontology nodes.
+Next: PRD-046 Neo4j vector index creation and query.

@@ -1,6 +1,10 @@
 """Neo4j client utilities."""
 
 from lib.neo4j.client import Neo4jClient
+from lib.neo4j.embed_ontology import (
+    embed_ontology_nodes,
+    has_category_embeddings,
+)
 from lib.neo4j.ingest_categories import (
     INGEST_CATEGORY_DEPTH,
     build_triplets_from_categories,
@@ -28,6 +32,8 @@ __all__ = [
     "apply_ontology_schema",
     "build_triplets_from_categories",
     "count_ontology_nodes_by_label",
+    "embed_ontology_nodes",
+    "has_category_embeddings",
     "ingest_category_tree",
     "verify_ontology_schema",
 ]

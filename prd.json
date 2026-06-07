@@ -537,7 +537,7 @@
       "Batch embed via Vertex client and SET n.embedding = $vector",
       "Verify MATCH (c:Category) WHERE c.embedding IS NOT NULL RETURN count(c) > 0"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-046",
