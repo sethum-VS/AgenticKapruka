@@ -254,3 +254,10 @@ Next: PRD-033 Compile main shopping StateGraph (graphs/shopping_graph.py).
 - Updated `tests/integration/test_redis_checkpointer.py` to use full graph + mocks (tool_call_count persistence still verified).
 Files: graphs/{shopping_graph,__init__}.py, tests/integration/{test_shopping_graph,test_redis_checkpointer}.py, prd.json
 Next: PRD-034 Zep session create and resume (lib/zep/session.py).
+
+## PRD-034 — Zep session create and resume
+- Added `lib/zep/session.py`: `get_or_create_session(redis_client, zep_client, session_id)` returns `zep_thread_id`; Redis key `zep:session:{session_id}` with 7-day TTL; resume refreshes TTL via EXPIRE; first visit calls `ZepClient.create_session`.
+- Used browser `session_id` as Zep thread id (1:1 mapping) — Redis TTL enables re-init after expiry; PRD-035 can wire into chat route.
+- Unit tests (`tests/unit/test_zep_session.py`): fakeredis + mocked Zep HTTP; asserts create on first visit, resume without second POST, TTL set.
+Files: lib/zep/{session,__init__}.py, tests/unit/test_zep_session.py, prd.json
+Next: PRD-035 Zep memory read and write in graph loop.

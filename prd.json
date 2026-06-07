@@ -405,7 +405,7 @@
       "Store session_id to zep_thread_id mapping in Redis with 7-day TTL",
       "Write unit test verifying new session creates Zep thread and existing resumes"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-035",
