@@ -111,9 +111,9 @@ async def call_mcp_tools(
     selected = select_tool_calls(state)
     if not selected:
         logger.debug("call_mcp_tools: no tools selected for intent=%s", state.get("intent"))
-        return {}
+        return {"tool_results": {}}
 
-    tool_results = dict(state.get("tool_results") or {})
+    tool_results: dict[str, Any] = {}
     invocations = 0
 
     for call in selected:

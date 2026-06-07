@@ -146,6 +146,7 @@ async def test_shopping_graph_tracking_skips_hybrid_context(graph_deps: Shopping
     assert result["intent"] == "tracking"
     assert result.get("hybrid_context") is None
     assert result.get("tool_call_count") in (None, 0)
+    assert result.get("tool_results") == {}
     kapruka_service = graph_deps.kapruka_service
     assert isinstance(kapruka_service, AsyncMock)
     kapruka_service.search_products.assert_not_awaited()

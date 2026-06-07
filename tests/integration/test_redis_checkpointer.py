@@ -108,6 +108,71 @@ async def test_state_persists_across_two_invocations_same_thread_id(
 
 
 @pytest.mark.asyncio
+async def test_tracking_turn_clears_stale_tool_results_from_prior_discovery(
+    checkpointer: AsyncRedisSaver,
+) -> None:
+    """Follow-up tracking must not retain discovery MCP payloads from checkpoint."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = _SEARCH_OUTPUT
+
+    mock_client = MagicMock()
+    discovery_intent = MagicMock()
+    discovery_intent.parsed = IntentClassification(intent="discovery")
+    discovery_intent.text = '{"intent": "discovery"}'
+    discovery_reply = MagicMock()
+    discovery_reply.parsed = AssistantReply(message="Here are some birthday cake options.")
+    discovery_reply.text = discovery_reply.parsed.model_dump_json()
+
+    tracking_intent = MagicMock()
+    tracking_intent.parsed = IntentClassification(intent="tracking")
+    tracking_intent.text = '{"intent": "tracking"}'
+    tracking_reply = MagicMock()
+    tracking_reply.parsed = AssistantReply(
+        message="Please share your Kapruka order number so I can look up delivery status.",
+    )
+    tracking_reply.text = tracking_reply.parsed.model_dump_json()
+
+    mock_client.models.generate_content.side_effect = [
+        discovery_intent,
+        discovery_reply,
+        tracking_intent,
+        tracking_reply,
+    ]
+
+    deps = ShoppingGraphDeps(
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        genai_client=mock_client,
+    )
+    graph = build_shopping_graph(checkpointer=checkpointer, deps=deps)
+    config: dict[str, Any] = {"configurable": {"thread_id": _THREAD_ID}}
+
+    first = await graph.ainvoke(
+        initial_shopping_state(
+            message="birthday cake for mom",
+            session_id=_SESSION_ID,
+            thread_id=_THREAD_ID,
+        ),
+        config,
+    )
+    assert SEARCH_PRODUCTS_TOOL in (first.get("tool_results") or {})
+
+    second = await graph.ainvoke(
+        append_message_state("where is order VIMP34456CB2"),
+        config,
+    )
+    assert second["intent"] == "tracking"
+    assert second.get("tool_results") == {}
+
+    tracking_response_call = mock_client.models.generate_content.call_args_list[3]
+    tracking_prompt = tracking_response_call.kwargs.get("contents")
+    if tracking_prompt is None and len(tracking_response_call.args) > 1:
+        tracking_prompt = tracking_response_call.args[1]
+    assert "Chocolate Birthday Cake" not in str(tracking_prompt)
+    assert '"results"' not in str(tracking_prompt)
+
+
+@pytest.mark.asyncio
 async def test_different_thread_ids_have_isolated_state(
     checkpointer: AsyncRedisSaver,
 ) -> None:

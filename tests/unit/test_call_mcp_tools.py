@@ -210,3 +210,53 @@ async def test_call_mcp_tools_applies_category_preference_in_search() -> None:
         currency="USD",
         category="Birthday",
     )
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tools_clears_stale_tool_results_when_no_tools_selected() -> None:
+    """Tracking/checkout turns must not carry prior-turn MCP payloads into state."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    state: AgentState = {
+        "messages": [HumanMessage(content="where is order VIMP34456CB2")],
+        "intent": "tracking",
+        "tool_results": {
+            SEARCH_PRODUCTS_TOOL: {
+                "results": [{"id": "stale-cake", "name": "Stale Birthday Cake"}],
+            },
+        },
+    }
+
+    result = await call_mcp_tools(
+        state,
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+    )
+
+    assert result == {"tool_results": {}}
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tools_does_not_merge_prior_turn_tool_results() -> None:
+    """Each turn stores only the current invocation's MCP outputs."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.list_categories.return_value = _LIST_CATEGORIES_OUTPUT
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="what categories do you have")],
+        "intent": "general",
+        "tool_results": {
+            SEARCH_PRODUCTS_TOOL: {
+                "results": [{"id": "stale-cake", "name": "Stale Birthday Cake"}],
+            },
+        },
+    }
+
+    result = await call_mcp_tools(
+        state,
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+    )
+
+    assert set(result["tool_results"].keys()) == {LIST_CATEGORIES_TOOL}
+    assert SEARCH_PRODUCTS_TOOL not in result["tool_results"]

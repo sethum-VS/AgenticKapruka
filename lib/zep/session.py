@@ -28,6 +28,21 @@ async def get_or_create_session(
         return existing
 
     zep_thread_id = session_id
+    claimed = await redis_client.client.set(
+        key,
+        zep_thread_id,
+        ex=SESSION_TTL_SECONDS,
+        nx=True,
+    )
+    if claimed:
+        await zep_client.create_session(zep_thread_id)
+        return zep_thread_id
+
+    existing = cast(str | None, await redis_client.client.get(key))
+    if existing is not None:
+        await redis_client.client.expire(key, SESSION_TTL_SECONDS)
+        return existing
+
     await zep_client.create_session(zep_thread_id)
     await redis_client.client.set(key, zep_thread_id, ex=SESSION_TTL_SECONDS)
     return zep_thread_id

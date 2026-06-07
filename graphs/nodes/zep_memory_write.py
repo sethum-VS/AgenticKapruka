@@ -30,11 +30,20 @@ async def zep_memory_write(
         logger.debug("zep_memory_write: skipped (empty user or assistant message)")
         return {}
 
-    await append_session_messages(
-        zep_client,
-        thread_id,
-        user_message,
-        assistant_message,
-    )
+    try:
+        await append_session_messages(
+            zep_client,
+            thread_id,
+            user_message,
+            assistant_message,
+        )
+    except Exception as exc:
+        logger.warning(
+            "zep_memory_write: failed to persist turn for thread %s: %s",
+            thread_id,
+            exc,
+        )
+        return {}
+
     logger.info("zep_memory_write: persisted turn for thread %s", thread_id)
     return {}
