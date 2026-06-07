@@ -74,3 +74,10 @@ Next: PRD-009 Sliding-window rate limiter (lib/redis/rate_limit.py).
 - Unit tests: 60th allowed, 61st raises + httpx ASGI 429 with Retry-After, separate keys, create_order 31st block, shared global across read tools.
 Files: lib/redis/rate_limit.py, lib/redis/__init__.py, tests/unit/test_rate_limit.py
 Next: PRD-010 Read-only MCP response cache (lib/redis/cache.py).
+
+## PRD-010 — Read-only MCP response cache
+- Added `lib/redis/cache.py`: `get_cached` / `set_cached` with 30-min default TTL (`DEFAULT_CACHE_TTL=1800`); Redis key `tool:sha256(canonical_json)` via `canonical_args_json` (sorted keys, compact separators).
+- `is_cacheable_tool` blocks `kapruka_create_order` (imported from rate_limit); read tools cache normally.
+- Unit tests: cache miss→set→hit for `kapruka_search_products`, reordered-args equivalence, create_order bypass (no Redis keys written), key format and canonical JSON helpers.
+Files: lib/redis/cache.py, lib/redis/__init__.py, tests/unit/test_cache.py
+Next: PRD-011 FastAPI dependency injection for Redis (app/dependencies.py).

@@ -117,7 +117,7 @@
       "Canonicalize args dict with sorted keys before hashing",
       "Write pytest verifying cache hit on second identical search_products call and bypass for create_order"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-011",
