@@ -321,7 +321,7 @@
       "Wire checkpointer into shopping graph compile step",
       "Write integration test verifying state persists across two graph invocations with same thread_id"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-028",
@@ -333,7 +333,7 @@
       "Use structured output or JSON mode for intent classification",
       "Write unit test with mocked genai client verifying discovery intent for 'birthday cake for mom'"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-029",
@@ -345,7 +345,7 @@
       "Add conditional edge skipping stub when intent is tracking or checkout",
       "Write unit test confirming stub returns without Neo4j connection"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-030",
@@ -357,7 +357,7 @@
       "Increment tool_call_count on each invocation; store results in tool_results",
       "Write unit test with mocked KaprukaService verifying search called for discovery intent"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-031",
@@ -369,7 +369,7 @@
       "Render templates/chat/message_assistant.html with response text",
       "Write unit test verifying response_html contains product names from mocked tool_results"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-032",
@@ -381,7 +381,7 @@
       "Escalate to pro when state.checkout_state == 'review' or tool_call_count > 3",
       "Write unit test verifying pro selected after 4th tool call"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-033",
@@ -393,7 +393,7 @@
       "Compile with checkpointer and export get_shopping_graph() factory",
       "Write integration test invoking graph end-to-end with mocked services"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-034",
@@ -405,7 +405,7 @@
       "Store session_id to zep_thread_id mapping in Redis with 7-day TTL",
       "Write unit test verifying new session creates Zep thread and existing resumes"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-035",
@@ -417,7 +417,7 @@
       "Inject last 10 Zep memory facts into generate_response system prompt",
       "Write integration test verifying message persisted to Zep mock after chat turn"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-036",
@@ -429,7 +429,7 @@
       "Merge preferences into hybrid_context hints before MCP search",
       "Write unit test with mocked Zep facts verifying category preference applied"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-037",

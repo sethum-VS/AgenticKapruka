@@ -199,3 +199,85 @@ Next: PRD-026 AgentState TypedDict schema (graphs/state.py).
 - Unit tests: minimal dict type-check, all 12 field keys + messages reducer metadata, fully populated state assignment.
 Files: graphs/{state,__init__}.py, tests/unit/test_agent_state.py, prd.json
 Next: PRD-027 Redis LangGraph checkpointer (lib/redis/checkpointer.py).
+
+## PRD-027 — Redis LangGraph checkpointer
+- Added `lib/redis/checkpointer.py`: `create_checkpointer(redis_client)` binds `AsyncRedisSaver` to the shared pool; `get_checkpointer` calls `asetup()` for RediSearch indices (Memorystore / Redis Stack).
+- Added `langgraph-checkpoint-redis>=0.3,<0.4` to pyproject.toml (compatible with langgraph 0.6.x / checkpoint 3.x).
+- Added `graphs/shopping_graph.py` stub: `build_shopping_graph(checkpointer=…)` + `get_shopping_graph(redis_client)` factory; `bootstrap` placeholder node until PRD-028; helpers `initial_shopping_state` / `append_message_state`.
+- Integration tests (`tests/integration/test_redis_checkpointer.py`): fakeredis + patched `asetup` (no RediSearch in fakeredis); asserts `tool_call_count` and `messages` persist across two `ainvoke` calls with same `thread_id`, and thread isolation.
+Files: lib/redis/{checkpointer,__init__}.py, graphs/{shopping_graph,__init__}.py, pyproject.toml, tests/integration/test_redis_checkpointer.py, prd.json
+Next: PRD-028 analyze_intent LangGraph node (graphs/nodes/analyze_intent.py).
+
+## PRD-028 — analyze_intent LangGraph node
+- Added `graphs/nodes/analyze_intent.py`: async `analyze_intent(state)` extracts latest `HumanMessage`, calls Gemini 2.5 Flash via google-genai with `response_mime_type=application/json` and Pydantic `IntentClassification` schema; sync SDK wrapped in `asyncio.to_thread`.
+- Injectable `genai_client` for tests; `create_genai_client()` reads `GOOGLE_API_KEY` from Settings; empty/whitespace messages short-circuit to `general` without LLM call.
+- Unit tests: discovery for "birthday cake for mom" (mocked genai), empty/no-message general default, JSON text fallback when `parsed` absent.
+- Shopping graph still uses bootstrap stub until PRD-033 wires all nodes.
+Files: graphs/nodes/{__init__,analyze_intent}.py, tests/unit/test_analyze_intent.py, prd.json
+Next: PRD-029 retrieve_hybrid_context stub node (graphs/nodes/retrieve_hybrid_context.py).
+
+## PRD-029 — retrieve_hybrid_context stub node
+- Added `graphs/nodes/retrieve_hybrid_context.py`: async `retrieve_hybrid_context(state)` returns `{"hybrid_context": {}}` stub (Neo4j deferred to PRD-047); `route_after_analyze_intent(state)` routes tracking/checkout directly to `call_mcp_tools`, discovery/general to `retrieve_hybrid_context`.
+- Unit tests: empty dict return without Neo4j imports, routing matrix for all intents, missing intent defaults to retrieve.
+- Graph wiring deferred to PRD-033; routing helper ready for conditional edges.
+Files: graphs/nodes/{retrieve_hybrid_context,__init__}.py, tests/unit/test_retrieve_hybrid_context.py, prd.json
+Next: PRD-030 call_mcp_tools LangGraph node (graphs/nodes/call_mcp_tools.py).
+
+## PRD-030 — call_mcp_tools LangGraph node
+- Added `graphs/nodes/call_mcp_tools.py`: `select_tool_calls(state)` picks explicit `tool_calls` when present, else intent defaults — discovery → search_products (or get_product when Kapruka product id detected in message), general → list_categories; tracking/checkout deferred to later PRDs.
+- `call_mcp_tools(state, kapruka_service=…, client_ip=…)` invokes KaprukaService, merges serialized Pydantic outputs into `tool_results`, increments `tool_call_count` per invocation; requires injected service (graph wiring in PRD-033).
+- Unit tests: discovery search mock, general list_categories, explicit tool_calls override, count increment, product-id routing helper.
+Files: graphs/nodes/{call_mcp_tools,__init__}.py, tests/unit/test_call_mcp_tools.py, prd.json
+Next: PRD-031 generate_response LangGraph node (graphs/nodes/generate_response.py).
+
+## PRD-031 — generate_response LangGraph node
+- Added `graphs/nodes/generate_response.py`: async `generate_response(state)` calls Gemini (flash default, pro when `model_tier=pro`) with faithfulness system prompt + serialized `tool_results` JSON; structured `AssistantReply` schema; renders `templates/chat/message_assistant.html` into `response_html`.
+- Created `templates/chat/message_assistant.html` assistant bubble partial (left-aligned, commerce styling); product carousel slot deferred to PRD-039/055.
+- Injectable `genai_client`; empty user message short-circuits without LLM; `render_assistant_html()` exposed for tests.
+- Unit tests: product names from mocked tool_results appear in response_html, empty message skip, JSON text fallback parsing, template structure.
+Files: graphs/nodes/{generate_response,__init__}.py, templates/chat/message_assistant.html, tests/unit/test_generate_response.py, prd.json
+Next: PRD-032 Model router Flash to Pro escalation (graphs/model_router.py).
+
+## PRD-032 — Model router Flash to Pro escalation
+- Added `graphs/model_router.py`: `select_model(state)` returns `gemini-2.5-flash` or `gemini-2.5-pro`; `select_model_tier(state)` mirrors tier logic for PRD-069 checkout review wiring.
+- Escalation rules: explicit `model_tier=pro`, `checkout_state=review`, or `tool_call_count > 3` (4th tool call onward) → Pro; otherwise Flash.
+- Wired `generate_response` to use central `select_model()` instead of local stub; exported from `graphs/__init__.py`.
+- Unit tests: default flash, review escalation, threshold boundary (3=flash, 4=pro), explicit pro tier.
+Files: graphs/{model_router,__init__}.py, graphs/nodes/generate_response.py, tests/unit/{test_model_router,test_generate_response}.py, prd.json
+Next: PRD-033 Compile main shopping StateGraph (graphs/shopping_graph.py).
+
+## PRD-033 — Compile main shopping StateGraph
+- Replaced bootstrap stub in `graphs/shopping_graph.py` with full StateGraph: START → analyze_intent → conditional (`route_after_analyze_intent`) → retrieve_hybrid_context | call_mcp_tools → call_mcp_tools → generate_response → END.
+- Added `ShoppingGraphDeps` dataclass for injectable `kapruka_service`, `client_ip`, `genai_client`; node wrappers bind deps at compile time for testability and PRD-037 chat route wiring.
+- `build_shopping_graph(checkpointer=…, deps=…)` and `get_shopping_graph(redis_client, deps=…)` export compiled graph with Redis checkpointer.
+- Integration tests (`tests/integration/test_shopping_graph.py`): end-to-end discovery flow, tracking skips hybrid context, astream_events node order assertion.
+- Updated `tests/integration/test_redis_checkpointer.py` to use full graph + mocks (tool_call_count persistence still verified).
+Files: graphs/{shopping_graph,__init__}.py, tests/integration/{test_shopping_graph,test_redis_checkpointer}.py, prd.json
+Next: PRD-034 Zep session create and resume (lib/zep/session.py).
+
+## PRD-034 — Zep session create and resume
+- Added `lib/zep/session.py`: `get_or_create_session(redis_client, zep_client, session_id)` returns `zep_thread_id`; Redis key `zep:session:{session_id}` with 7-day TTL; resume refreshes TTL via EXPIRE; first visit calls `ZepClient.create_session`.
+- Used browser `session_id` as Zep thread id (1:1 mapping) — Redis TTL enables re-init after expiry; PRD-035 can wire into chat route.
+- Unit tests (`tests/unit/test_zep_session.py`): fakeredis + mocked Zep HTTP; asserts create on first visit, resume without second POST, TTL set.
+Files: lib/zep/{session,__init__}.py, tests/unit/test_zep_session.py, prd.json
+Next: PRD-035 Zep memory read and write in graph loop.
+
+## PRD-035 — Zep memory read and write in graph loop
+- Added `lib/zep/memory.py`: `get_session_memory_facts`, `append_session_messages`, `extract_memory_facts`, `format_memory_facts_block` (last 10 facts default).
+- Extended `ZepClient` with `get_memory()` and `add_messages()` wrapping SDK memory.get/add.
+- New graph nodes: `load_zep_memory` (START → before analyze_intent) loads facts into `zep_memory_facts`; `zep_memory_write` (after generate_response → END) persists user/assistant turn.
+- `AgentState` gains `zep_memory_facts` and `assistant_message`; `analyze_intent` and `generate_response` inject facts into system prompts.
+- `ShoppingGraphDeps` accepts optional `zep_client`; graph skips memory I/O when absent (tests without Zep).
+- Integration tests (`tests/integration/test_zep_memory_graph.py`): mocked Zep HTTP verifies GET facts loaded and POST messages persisted after full graph turn.
+Files: lib/zep/{memory,client,__init__}.py, graphs/{state,shopping_graph}.py, graphs/nodes/{load_zep_memory,zep_memory_write,analyze_intent,generate_response,__init__}.py, tests/unit/test_zep_memory.py, tests/integration/test_zep_memory_graph.py, tests/integration/test_shopping_graph.py, tests/unit/test_agent_state.py, prd.json
+Next: PRD-036 Cross-session preference extraction.
+
+## PRD-036 — Cross-session preference extraction
+- Added `lib/zep/preferences.py`: `extract_preferences(zep_client, zep_thread_id)` uses Zep `search_session_memory` (facts scope) with get_memory fallback; `parse_preferences_from_facts` extracts favorite_category, past_occasion, currency; `merge_preferences_into_hybrid_context` builds MCP hints.
+- Extended `ZepClient` with `search_session_memory` wrapping SDK `search_sessions`.
+- Updated `retrieve_hybrid_context` to call extract_preferences (or parse loaded zep_memory_facts) and inject currency into AgentState when unset.
+- Updated `call_mcp_tools.select_tool_calls` to apply category/currency hints from hybrid_context on discovery search.
+- Wired `zep_client` into retrieve_hybrid_context node in shopping graph.
+- Unit tests: `test_zep_preferences.py`, category preference in `test_call_mcp_tools.py`, hybrid context merge in `test_retrieve_hybrid_context.py`.
+Files: lib/zep/{preferences,client,__init__}.py, graphs/nodes/{retrieve_hybrid_context,call_mcp_tools}.py, graphs/shopping_graph.py, tests/unit/{test_zep_preferences,test_retrieve_hybrid_context,test_call_mcp_tools}.py, prd.json
+Next: PRD-037 SSE streaming chat endpoint.

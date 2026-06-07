@@ -35,3 +35,5 @@ class AgentState(TypedDict):
     currency: CurrencyCode | None
     checkout_state: CheckoutStep | None
     response_html: str | None
+    assistant_message: str | None
+    zep_memory_facts: list[str] | None

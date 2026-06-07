@@ -20,6 +20,7 @@ dependencies = [
     "zep-python>=2.0,<3",
     "mcp>=1.6,<2",
     "langgraph>=0.3,<1",
+    "langgraph-checkpoint-redis>=0.3,<0.4",
     "google-genai>=1.0,<2",
     "google-cloud-aiplatform>=1.75,<2",
     "networkx>=3.4,<4",
@@ -83,6 +84,10 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = ["redis", "redis.*"]
 disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = ["langgraph.checkpoint.redis.*"]
+disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
