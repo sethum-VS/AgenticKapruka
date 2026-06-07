@@ -5,6 +5,8 @@ module.exports = {
     "btn-primary",
     "btn-secondary",
     "card-commerce",
+    "chip-filter",
+    "chip-active",
     "bg-kapruka-600",
     "hover:bg-kapruka-700",
     "bg-commerce-parchment",

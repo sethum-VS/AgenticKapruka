@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.4.0] - 2026-06-08
+
+### Added
+
+- Neo4j ontology batch embedding (`lib/neo4j/embed_ontology.py`) and `scripts/embed_ontology.py` CLI
+- Category vector index and similarity search (`lib/neo4j/vector_search.py`)
+- HybridRAG `retrieve_hybrid_context` with Neo4j vector search, 2-hop traversal, and Zep preference merge
+- Graph-informed MCP discovery filters via `build_discovery_search_args` (`lib/neo4j/hybrid_context.py`)
+- UI partials: product card, horizontal carousel, and HTMX category filter chips with `/partials/search` stub
+- Integration test for wedding-flowers → Flowers category hybrid context
+
+### Changed
+
+- Ralph loop: optional `RALPH_TIMEOUT`, live plain-text streaming, graceful abort on Ctrl+C
+
 ## [0.0.3.0] - 2026-06-08
 
 ### Added

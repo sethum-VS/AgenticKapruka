@@ -228,8 +228,28 @@ _build_agent_args() {
   fi
 }
 
+_run_agent_with_optional_timeout() {
+  local agent_bin="$1"
+  shift
+  local -a agent_args=("$@")
+
+  if [[ -n "${RALPH_TIMEOUT:-}" && "$RALPH_TIMEOUT" != "0" ]]; then
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "$RALPH_TIMEOUT" "$agent_bin" "${agent_args[@]}"
+      return $?
+    elif command -v gtimeout >/dev/null 2>&1; then
+      gtimeout "$RALPH_TIMEOUT" "$agent_bin" "${agent_args[@]}"
+      return $?
+    else
+      echo "Warning: RALPH_TIMEOUT=$RALPH_TIMEOUT set but timeout/gtimeout not found; running without limit." >&2
+    fi
+  fi
+
+  "$agent_bin" "${agent_args[@]}"
+}
+
 run_ralph_iteration() {
-  local agent_bin before_sha prompt agent_exit=0
+  local agent_bin before_sha prompt agent_exit=0 iter_start
   local -a agent_args=()
 
   agent_bin="$(cursor_agent_bin)"
@@ -245,22 +265,33 @@ run_ralph_iteration() {
   agent_args=("${RALPH_AGENT_ARGS[@]}")
   prompt="$(build_prompt)"
 
+  iter_start="$SECONDS"
+  if [[ -n "${RALPH_TIMEOUT:-}" && "$RALPH_TIMEOUT" != "0" ]]; then
+    echo "Agent timeout: ${RALPH_TIMEOUT}s (unset or RALPH_TIMEOUT=0 to disable)" >&2
+  fi
+  echo "Agent started at $(date '+%H:%M:%S') — output streams below..." >&2
+
   if [[ -n "$RALPH_INTERACTIVE" ]]; then
     echo "Launching Cursor Agent interactive UI — quit the session when the PRD item is done." >&2
-    "$agent_bin" "${agent_args[@]}" "$prompt"
+    _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt"
     agent_exit=$?
   elif [[ "$RALPH_STREAM" == "1" ]]; then
-    "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"
+    _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"
     agent_exit="${PIPESTATUS[0]}"
   else
-    local result
-    result="$("$agent_bin" "${agent_args[@]}" "$prompt")"
-    printf '%s\n' "$result" | tee "$RALPH_LAST_LOG"
-    agent_exit=$?
+    # Stream plain text live — do NOT use command substitution (buffers until agent exits).
+    _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"
+    agent_exit="${PIPESTATUS[0]}"
   fi
 
+  echo "Agent finished in $((SECONDS - iter_start))s (exit $agent_exit)" >&2
   log_iteration_commit "$before_sha"
   return "$agent_exit"
+}
+
+is_user_abort_exit() {
+  local code="${1:-$?}"
+  [[ "$code" -eq 130 || "$code" -eq 143 ]]
 }
 
 is_complete() {

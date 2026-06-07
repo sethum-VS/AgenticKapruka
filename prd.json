@@ -537,7 +537,7 @@
       "Batch embed via Vertex client and SET n.embedding = $vector",
       "Verify MATCH (c:Category) WHERE c.embedding IS NOT NULL RETURN count(c) > 0"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-046",
@@ -549,7 +549,7 @@
       "Implement vector_search(query_embedding, top_k=5) returning node ids and scores",
       "Write integration test verifying semantically similar category returned for 'birthday gift' query"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-047",
@@ -561,7 +561,7 @@
       "Traverse 2 hops via lib/neo4j/traverse.py collecting related occasions and product types",
       "Write integration test verifying hybrid_context contains category filter for 'wedding flowers'"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-048",
@@ -573,7 +573,7 @@
       "Include relationship type and hop depth in result",
       "Write unit test with fixture graph verifying 2-hop reachability"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-049",
@@ -585,7 +585,7 @@
       "Augment q with occasion keywords when confidence score exceeds threshold",
       "Write unit test verifying search called with category='Birthday' for birthday intent context"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-050",
@@ -597,7 +597,7 @@
       "Render Tailwind card with hover state and stock badge overlay",
       "Snapshot test rendering sample product fixture HTML"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-051",
@@ -609,7 +609,7 @@
       "Include prev/next Alpine buttons for keyboard-accessible navigation",
       "Verify carousel renders 3+ cards without layout overflow on mobile viewport"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-052",
@@ -621,7 +621,7 @@
       "Highlight active chip with distinct Tailwind variant",
       "Test chip click triggers HTMX request without full page reload"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-053",

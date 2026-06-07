@@ -1,0 +1,11 @@
+{
+  "id": "flower00ro001122",
+  "name": "Red Rose Bouquet",
+  "price": {
+    "amount": 3200,
+    "currency": "LKR"
+  },
+  "image_url": "https://cdn.kapruka.com/flowers/red-roses.jpg",
+  "in_stock": false,
+  "url": "https://www.kapruka.com/flowers/red-roses"
+}

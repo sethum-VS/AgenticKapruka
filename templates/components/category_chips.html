@@ -1,0 +1,25 @@
+{# Category filter chips from hybrid_context.categories. Expects categories: list of dicts with display_name. #}
+{% if categories %}
+<nav
+  class="flex flex-wrap gap-2"
+  data-testid="category-chips"
+  aria-label="Filter by category"
+>
+  {% for category in categories %}
+  {% set name = category.display_name %}
+  <button
+    type="button"
+    class="{% if active_category == name %}chip-active{% else %}chip-filter{% endif %}"
+    data-testid="category-chip"
+    data-category="{{ name }}"
+    aria-pressed="{{ 'true' if active_category == name else 'false' }}"
+    hx-get="/partials/search?category={{ name | urlencode }}"
+    hx-target="#results"
+    hx-swap="innerHTML"
+    hx-trigger="click"
+  >
+    {{ name }}
+  </button>
+  {% endfor %}
+</nav>
+{% endif %}

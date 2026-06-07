@@ -12,6 +12,7 @@ from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.neo4j.hybrid_context import build_discovery_search_args
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,6 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
     currency = (
         state.get("currency") or hints.get("currency") or preferences.get("currency") or "LKR"
     )
-    category_hint = hints.get("category") or preferences.get("favorite_category")
 
     if intent == "discovery":
         product_id = _extract_product_id(user_message)
@@ -55,9 +55,11 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
                 },
             ]
         if len(user_message) >= 3:
-            search_args: dict[str, Any] = {"q": user_message, "currency": currency}
-            if category_hint:
-                search_args["category"] = category_hint
+            search_args = build_discovery_search_args(
+                user_message,
+                hybrid_context,
+                currency=currency,
+            )
             return [
                 {
                     "name": SEARCH_PRODUCTS_TOOL,

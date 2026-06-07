@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,20 +12,12 @@ from graphs.nodes.retrieve_hybrid_context import (
     route_after_analyze_intent,
 )
 from graphs.state import AgentState, Intent
-
-
-def test_retrieve_hybrid_context_module_has_no_neo4j_dependency() -> None:
-    """Stub module must not import Neo4j (full implementation is PRD-047)."""
-    module_path = inspect.getsourcefile(retrieve_hybrid_context)
-    assert module_path is not None
-    source = Path(module_path).read_text(encoding="utf-8")
-    assert "from lib.neo4j" not in source
-    assert "import neo4j" not in source
+from lib.neo4j.client import Neo4jClient
 
 
 @pytest.mark.asyncio
-async def test_retrieve_hybrid_context_returns_empty_without_zep() -> None:
-    """No Zep client or facts yields empty hybrid_context."""
+async def test_retrieve_hybrid_context_returns_empty_without_graph_or_zep() -> None:
+    """No Neo4j client or Zep facts yields empty hybrid_context."""
     state: AgentState = {
         "messages": [HumanMessage(content="birthday cake for mom")],
         "intent": "discovery",
@@ -86,6 +76,55 @@ async def test_retrieve_hybrid_context_calls_extract_preferences_with_zep_client
 
     mock_extract.assert_awaited_once_with(zep_client, "thread-hybrid-004")
     assert result["hybrid_context"]["hints"]["category"] == "Flowers"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_merges_graph_and_zep_hints() -> None:
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    with patch(
+        "graphs.nodes.retrieve_hybrid_context._fetch_graph_hybrid_context",
+        new=AsyncMock(
+            return_value={
+                "hints": {"category": "Flowers", "occasion": "Wedding"},
+                "vector_hits": [
+                    {"id": "category:flowers", "score": 0.9, "display_name": "Flowers"},
+                ],
+            }
+        ),
+    ):
+        state: AgentState = {
+            "messages": [HumanMessage(content="wedding flowers")],
+            "intent": "discovery",
+            "session_id": "sess-hybrid-005",
+            "zep_memory_facts": ["User shops in USD"],
+        }
+
+        result = await retrieve_hybrid_context(state, neo4j_client=neo4j_client)
+
+    hints = result["hybrid_context"]["hints"]
+    assert hints["category"] == "Flowers"
+    assert hints["occasion"] == "Wedding"
+    assert hints["currency"] == "USD"
+    assert result["currency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_zep_category_overrides_graph_hint() -> None:
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    with patch(
+        "graphs.nodes.retrieve_hybrid_context._fetch_graph_hybrid_context",
+        new=AsyncMock(return_value={"hints": {"category": "Flowers"}}),
+    ):
+        state: AgentState = {
+            "messages": [HumanMessage(content="wedding flowers")],
+            "intent": "discovery",
+            "session_id": "sess-hybrid-006",
+            "zep_memory_facts": ["User prefers Birthday cakes"],
+        }
+
+        result = await retrieve_hybrid_context(state, neo4j_client=neo4j_client)
+
+    assert result["hybrid_context"]["hints"]["category"] == "Birthday"
 
 
 @pytest.mark.parametrize(

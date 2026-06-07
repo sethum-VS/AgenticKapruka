@@ -25,6 +25,14 @@
     @apply rounded-xl border border-commerce-parchment bg-white shadow-sm;
   }
 
+  .chip-filter {
+    @apply rounded-full border border-commerce-muted/30 bg-white px-3 py-1 text-sm text-commerce-ink transition-colors hover:bg-commerce-parchment;
+  }
+
+  .chip-active {
+    @apply rounded-full border border-kapruka-600 bg-kapruka-600 px-3 py-1 text-sm font-medium text-white;
+  }
+
   /* Assistant bubble typography (standalone Tailwind — no @tailwindcss/typography plugin). */
   .prose-assistant {
     @apply max-w-none text-sm leading-relaxed text-commerce-ink;

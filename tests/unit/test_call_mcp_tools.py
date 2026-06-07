@@ -236,6 +236,80 @@ async def test_call_mcp_tools_clears_stale_tool_results_when_no_tools_selected()
     mock_service.search_products.assert_not_awaited()
 
 
+def test_select_tool_calls_graph_birthday_context_sets_category_filter() -> None:
+    """Graph-informed hybrid_context should map top category to MCP search filter."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="cake for mom")],
+        "intent": "discovery",
+        "hybrid_context": {
+            "hints": {"category": "Birthday", "occasion": "Birthday"},
+            "vector_hits": [
+                {
+                    "id": "category:cakes",
+                    "score": 0.91,
+                    "display_name": "Cakes",
+                },
+            ],
+            "occasions": [{"display_name": "Birthday", "hop": 1}],
+        },
+    }
+
+    selected = select_tool_calls(state)
+
+    assert len(selected) == 1
+    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
+    assert selected[0]["args"]["category"] == "Birthday"
+    assert selected[0]["args"]["q"] == "cake for mom Birthday"
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tools_graph_birthday_context_invokes_search_with_category() -> None:
+    """Discovery search uses graph category filter for birthday intent context."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = _SEARCH_OUTPUT
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="cake for mom")],
+        "intent": "discovery",
+        "session_id": "sess-mcp-graph-049",
+        "hybrid_context": {
+            "hints": {"category": "Birthday", "occasion": "Birthday"},
+            "vector_hits": [
+                {
+                    "id": "category:cakes",
+                    "score": 0.91,
+                    "display_name": "Cakes",
+                },
+            ],
+        },
+    }
+
+    await call_mcp_tools(state, kapruka_service=mock_service, client_ip=_CLIENT_IP)
+
+    mock_service.search_products.assert_awaited_once_with(
+        _CLIENT_IP,
+        q="cake for mom Birthday",
+        currency="LKR",
+        category="Birthday",
+    )
+
+
+def test_select_tool_calls_skips_occasion_augment_when_confidence_low() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="something elegant")],
+        "intent": "discovery",
+        "hybrid_context": {
+            "hints": {"category": "Flowers", "occasion": "Wedding"},
+            "vector_hits": [{"id": "category:flowers", "score": 0.4, "display_name": "Flowers"}],
+        },
+    }
+
+    selected = select_tool_calls(state)
+
+    assert selected[0]["args"]["category"] == "Flowers"
+    assert selected[0]["args"]["q"] == "something elegant"
+
+
 @pytest.mark.asyncio
 async def test_call_mcp_tools_does_not_merge_prior_turn_tool_results() -> None:
     """Each turn stores only the current invocation's MCP outputs."""

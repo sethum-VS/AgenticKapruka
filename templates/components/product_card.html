@@ -1,0 +1,83 @@
+{# Product card for carousel and search results. Expects product dict: id, name, price, image_url, in_stock, url #}
+{% if product.price is mapping %}
+  {% set price_amount = product.price.amount %}
+  {% set price_currency = product.price.currency %}
+{% else %}
+  {% set price_amount = product.price %}
+  {% set price_currency = product.currency | default("LKR") %}
+{% endif %}
+<article
+  class="group card-commerce flex w-56 shrink-0 flex-col overflow-hidden transition-shadow hover:shadow-md"
+  data-product-id="{{ product.id }}"
+  data-testid="product-card"
+>
+  <a
+    href="{{ product.url }}"
+    class="relative block aspect-[4/3] overflow-hidden bg-commerce-parchment"
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label="View {{ product.name }}"
+  >
+    {% if product.image_url %}
+    <img
+      src="{{ product.image_url }}"
+      alt="{{ product.name }}"
+      class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+      loading="lazy"
+      width="224"
+      height="168"
+    />
+    {% else %}
+    <div
+      class="flex h-full w-full items-center justify-center text-xs text-commerce-muted"
+      aria-hidden="true"
+    >
+      No image
+    </div>
+    {% endif %}
+    {% if product.in_stock %}
+    <span
+      class="absolute left-2 top-2 rounded-full bg-emerald-600/90 px-2 py-0.5 text-xs font-medium text-white shadow-sm"
+      data-testid="stock-badge"
+    >
+      In Stock
+    </span>
+    {% else %}
+    <span
+      class="absolute inset-0 flex items-center justify-center bg-commerce-ink/40"
+      data-testid="stock-overlay"
+      aria-hidden="true"
+    >
+      <span class="rounded-full bg-commerce-muted/90 px-2 py-0.5 text-xs font-medium text-white">
+        Out of Stock
+      </span>
+    </span>
+    {% endif %}
+  </a>
+  <div class="flex flex-1 flex-col gap-2 p-3">
+    <h3 class="line-clamp-2 text-sm font-medium leading-snug text-commerce-ink">
+      <a
+        href="{{ product.url }}"
+        class="hover:text-kapruka-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-kapruka-500/30"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {{ product.name }}
+      </a>
+    </h3>
+    <p class="text-sm font-semibold text-kapruka-700" data-testid="product-price">
+      {{ price_amount | format_currency(price_currency) }}
+    </p>
+    <button
+      type="button"
+      class="btn-primary mt-auto w-full text-sm disabled:cursor-not-allowed disabled:opacity-50"
+      hx-post="/cart/add"
+      hx-vals='{"product_id": "{{ product.id }}"}'
+      hx-target="#cart-panel"
+      hx-swap="outerHTML"
+      {% if not product.in_stock %}disabled aria-disabled="true"{% endif %}
+    >
+      Add to cart
+    </button>
+  </div>
+</article>
