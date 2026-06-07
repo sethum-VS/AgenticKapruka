@@ -17,7 +17,12 @@ from lib.chat.deps import (
     get_compiled_chat_graph,
     resolve_turn_state,
 )
-from lib.chat.page_context import currency_template_context, resolve_page_currency
+from lib.chat.page_context import (
+    cart_template_context,
+    currency_template_context,
+    resolve_page_cart,
+    resolve_page_currency,
+)
 from lib.chat.session import SESSION_COOKIE_NAME, cookie_params, resolve_chat_thread_id
 from lib.chat.sse import format_sse_event
 from lib.chat.streaming import iter_chat_sse_events
@@ -89,12 +94,14 @@ async def chat_index(request: Request, redis_client: RedisDep) -> Response:
     """Full-screen chat viewport with welcome empty state."""
     templates = get_templates()
     currency = await resolve_page_currency(request, redis_client)
+    cart_items = await resolve_page_cart(request, redis_client)
     return templates.TemplateResponse(
         request,
         "chat/index.html",
         {
             "title": "Chat — AgenticKapruka",
             **currency_template_context(currency),
+            **cart_template_context(cart_items),
         },
     )
 

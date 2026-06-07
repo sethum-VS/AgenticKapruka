@@ -16,7 +16,7 @@ from app.main import create_app
 from app.templating import SUPPORTED_CURRENCY_CODES, _create_templates, get_templates
 from graphs.nodes.generate_response import render_assistant_html
 from graphs.shopping_graph import ShoppingGraphDeps
-from lib.chat.page_context import currency_template_context
+from lib.chat.page_context import cart_template_context, currency_template_context
 from lib.redis.client import RedisClient
 
 
@@ -50,6 +50,7 @@ def test_chat_index_template_renders_empty_state() -> None:
         {
             "title": "Chat — AgenticKapruka",
             **currency_template_context("LKR"),
+            **cart_template_context([]),
         },
     )
 
@@ -82,6 +83,10 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert "/static/js/chat-sse.js" in html
     assert "/static/js/chat-helpers.js" in html
     assert "/static/js/lazy-image.js" in html
+    assert "/static/js/cart-drawer.js" in html
+    assert 'data-testid="cart-drawer"' in html
+    assert 'data-testid="cart-icon"' in html
+    assert 'id="cart-panel"' in html
     assert 'data-testid="header-currency"' in html
     assert 'hx-post="/session/currency"' in html
     assert 'hx-swap="none"' in html

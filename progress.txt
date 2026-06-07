@@ -470,3 +470,12 @@ Next: PRD-060 Cart HTMX partial swaps.
 - Tests: `tests/unit/test_cart_partial.py` (HTMX attrs, stepper bounds, empty state); `tests/integration/test_cart_flow.py` (add returns product name HTML, update/remove swap partial + Redis state).
 Files: templates/checkout/cart_partial.html, app/routes/cart.py, app/templating.py, tests/unit/test_cart_partial.py, tests/integration/test_cart_flow.py, prd.json
 Next: PRD-061 Alpine cart drawer.
+
+## PRD-061 — Alpine cart drawer
+- Added `static/js/cart-drawer.js`: Alpine `cartDrawer` with open/close, slide/fade transitions, badge `itemCount` synced from `#cart-panel[data-item-count]` on `htmx:afterSwap` (document.body listener, same pattern as chatHelpers).
+- Added `templates/components/cart_drawer.html`: header cart icon + badge, fixed backdrop/panel slide-over embedding `cart_partial.html`; included from `base.html` beside currency selector with `cart-drawer.js` loaded before deferred Alpine.
+- Extended `lib/chat/page_context.py`: `resolve_page_cart`, `cart_template_context`; chat GET passes cart lines for server-rendered badge and drawer content.
+- Added `render_cart_drawer()` in `app/templating.py`.
+- Tests: `test_cart_drawer.py` (Alpine markup, badge count, base.html wiring); `test_cart_drawer_browser.py` Playwright (open, backdrop close, Escape close, HTMX badge sync).
+Files: static/js/cart-drawer.js, templates/{base,components/cart_drawer}.html, lib/chat/page_context.py, app/{routes/chat,templating}.py, tests/unit/{test_cart_drawer,test_cart_drawer_browser,test_chat,test_templating}.py, prd.json
+Next: PRD-062 Delivery city debounced autocomplete.

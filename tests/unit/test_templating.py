@@ -11,7 +11,7 @@ from app.templating import (
     format_currency,
     get_templates,
 )
-from lib.chat.page_context import currency_template_context
+from lib.chat.page_context import cart_template_context, currency_template_context
 
 
 def _make_request() -> Request:
@@ -52,7 +52,11 @@ def test_template_response_renders_base_html() -> None:
     response = templates.TemplateResponse(
         request,
         "base.html",
-        {"title": "AgenticKapruka", **currency_template_context("LKR")},
+        {
+            "title": "AgenticKapruka",
+            **currency_template_context("LKR"),
+            **cart_template_context([]),
+        },
     )
 
     html = response.body.decode()
@@ -65,6 +69,8 @@ def test_template_response_renders_base_html() -> None:
     assert "alpinejs" in html
     assert 'hx-ext="sse"' in html
     assert 'href="/static/css/app.css"' in html
+    assert "/static/js/cart-drawer.js" in html
+    assert 'data-testid="cart-drawer"' in html
     assert 'data-testid="header-currency"' in html
     assert 'hx-post="/session/currency"' in html
     assert len(SUPPORTED_CURRENCY_CODES) == 6

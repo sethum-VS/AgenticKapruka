@@ -729,7 +729,7 @@
       "Cart icon shows badge count from server-rendered cart item total",
       "Verify drawer opens/closes with escape key and backdrop click"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-062",

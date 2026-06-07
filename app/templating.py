@@ -107,6 +107,21 @@ def render_cart_partial(
     return template.render(items=items, currency=currency)
 
 
+def render_cart_drawer(
+    *,
+    items: list[StoredCartItem],
+    currency: str = "LKR",
+) -> str:
+    """Render templates/components/cart_drawer.html for header cart slide-over."""
+    templates = get_templates()
+    template = templates.env.get_template("components/cart_drawer.html")
+    return template.render(
+        cart_items=items,
+        cart_item_count=sum(item.quantity for item in items),
+        currency=currency,
+    )
+
+
 def render_currency_selector(*, currency: str = "LKR") -> str:
     """Render templates/components/currency_selector.html for the site header."""
     templates = get_templates()
