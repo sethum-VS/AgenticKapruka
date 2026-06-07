@@ -9,8 +9,8 @@ import fakeredis.aioredis
 import pytest
 from langchain_core.messages import HumanMessage
 
-from graphs.nodes.analyze_intent import PROCEED_CHECKOUT_MESSAGE, IntentClassification
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
+from graphs.nodes.analyze_intent import PROCEED_CHECKOUT_MESSAGE, IntentClassification
 from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initial_shopping_state
 from graphs.state import AgentState
 from lib.redis.cart import add_item

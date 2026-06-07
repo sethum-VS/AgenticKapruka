@@ -55,11 +55,22 @@ async def run_checkout_graph(
 
     current_step = result.get("current_step")
     resolved_cart_items: list[dict[str, Any]] = list(result.get("cart_items") or [])
-    payload = {
+    payload: dict[str, Any] = {
         "current_step": current_step,
         "cart_items": resolved_cart_items,
         "step_valid": result.get("step_valid") or {},
         "validation_errors": result.get("validation_errors"),
+        "delivery_city": result.get("delivery_city"),
+        "delivery_address": result.get("delivery_address"),
+        "delivery_location_type": result.get("delivery_location_type"),
+        "delivery_date": result.get("delivery_date"),
+        "delivery_instructions": result.get("delivery_instructions"),
+        "recipient_name": result.get("recipient_name"),
+        "recipient_phone": result.get("recipient_phone"),
+        "sender_name": result.get("sender_name"),
+        "sender_anonymous": result.get("sender_anonymous"),
+        "gift_message": result.get("gift_message"),
+        "review_html": result.get("response_html"),
     }
 
     logger.info(
@@ -69,7 +80,11 @@ async def run_checkout_graph(
         len(resolved_cart_items),
     )
 
-    return {
+    updates: dict[str, Any] = {
         "checkout_state": current_step,
         "tool_results": {CHECKOUT_TOOL_KEY: payload},
     }
+    if current_step == "review":
+        updates["model_tier"] = "pro"
+
+    return updates

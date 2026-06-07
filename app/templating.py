@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 from lib.checkout.delivery import DeliveryFormValues
 from lib.checkout.recipient import RecipientFormValues
+from lib.checkout.review import CheckoutReviewContext
 from lib.checkout.sender import SenderFormValues
 from lib.kapruka.types import LOCATION_TYPES, CheckDeliveryOutput
 from lib.redis.cart import StoredCartItem
@@ -277,6 +278,13 @@ def render_sender_form_validation_response(
         render_sender_field_error(field=field, message=message) for field, message in errors.items()
     )
     return form_html + oob_errors
+
+
+def render_checkout_review(*, review: CheckoutReviewContext) -> str:
+    """Render templates/checkout/review.html order summary for the review step."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/review.html")
+    return template.render(review=review)
 
 
 def render_currency_selector(*, currency: str = "LKR") -> str:

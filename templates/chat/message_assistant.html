@@ -17,5 +17,15 @@
       {{ products_html | safe }}
     </div>
     {% endif %}
+    {% if checkout_review_html %}
+    <div
+      class="assistant-checkout-review mt-3 border-t border-commerce-parchment/60 pt-3"
+      data-slot="checkout-review"
+      role="region"
+      aria-label="Order review"
+    >
+      {{ checkout_review_html | safe }}
+    </div>
+    {% endif %}
   </div>
 </div>

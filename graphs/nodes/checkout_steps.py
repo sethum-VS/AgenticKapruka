@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, cast
 
+from app.templating import render_checkout_review
 from graphs.checkout_state import (
     CHECKOUT_STEP_ORDER,
     CheckoutState,
@@ -16,6 +17,7 @@ from graphs.checkout_state import (
 from graphs.state import CheckoutStep
 from lib.checkout.delivery import DeliveryFormValues, parse_delivery_form
 from lib.checkout.recipient import RecipientFormValues, parse_recipient_form
+from lib.checkout.review import review_context_from_checkout_state
 from lib.checkout.sender import SenderFormValues, parse_sender_form
 from lib.kapruka.service import KaprukaService
 from lib.redis.cart import get_cart
@@ -244,6 +246,14 @@ async def process_checkout_step(
         "step_valid": step_valid,
         **extra,
     }
+
+    if step == "review":
+        merged_state = dict(state)
+        merged_state.update(updates)
+        merged_state.update(extra)
+        review_context = review_context_from_checkout_state(cast(CheckoutState, merged_state))
+        if review_context is not None:
+            updates["response_html"] = render_checkout_review(review=review_context)
 
     if action == "advance":
         nxt = next_checkout_step(current)

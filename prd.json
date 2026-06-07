@@ -825,7 +825,7 @@
       "Force model_tier=pro on review step",
       "Verify model_router returns pro when checkout_state is review"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-070",

@@ -12,14 +12,25 @@ from google.genai import types
 from pydantic import BaseModel, ValidationError
 
 from app.templating import get_templates, render_product_carousel
+from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message, create_genai_client
-from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.state import AgentState
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
+
+CHECKOUT_REVIEW_SYSTEM_INSTRUCTION = (
+    "You are the Kapruka gift shopping assistant at the final checkout review step.\n\n"
+    "Synthesize a clear, warm confirmation message using ONLY the checkout summary "
+    "JSON provided.\n\n"
+    "Rules:\n"
+    "- Summarize cart items, delivery, recipient, and sender without inventing facts.\n"
+    "- Ask the customer to confirm the order looks correct before payment.\n"
+    "- Mention that the next step will provide a secure Kapruka checkout link.\n"
+    "- Keep the reply under 150 words.\n"
+)
 
 SYSTEM_INSTRUCTION = """You are the Kapruka gift shopping assistant.
 
@@ -98,13 +109,18 @@ def _generate_reply_sync(
     model: str,
     user_prompt: str,
     zep_memory_facts: list[str] | None = None,
+    system_instruction: str | None = None,
 ) -> str:
     """Blocking Gemini call; run via asyncio.to_thread from generate_response."""
+    instruction = system_instruction or _build_response_system_instruction(zep_memory_facts)
+    if system_instruction is not None and zep_memory_facts:
+        instruction += format_memory_facts_block(zep_memory_facts)
+
     response = client.models.generate_content(
         model=model,
         contents=user_prompt,
         config=types.GenerateContentConfig(
-            system_instruction=_build_response_system_instruction(zep_memory_facts),
+            system_instruction=instruction,
             response_mime_type="application/json",
             response_schema=AssistantReply,
             temperature=0.2,
@@ -169,11 +185,53 @@ def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> st
     return "Continuing your Kapruka checkout."
 
 
-def render_assistant_html(message: str, *, products_html: str | None = None) -> str:
+def render_assistant_html(
+    message: str,
+    *,
+    products_html: str | None = None,
+    checkout_review_html: str | None = None,
+) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
     template = templates.env.get_template("chat/message_assistant.html")
-    return template.render(message=message, products_html=products_html)
+    return template.render(
+        message=message,
+        products_html=products_html,
+        checkout_review_html=checkout_review_html,
+    )
+
+
+def _extract_checkout_payload(tool_results: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not tool_results:
+        return None
+    checkout = tool_results.get(CHECKOUT_TOOL_KEY)
+    if isinstance(checkout, dict):
+        return checkout
+    return None
+
+
+def _build_checkout_review_prompt(user_message: str, checkout: dict[str, Any]) -> str:
+    summary = {
+        key: checkout.get(key)
+        for key in (
+            "cart_items",
+            "delivery_address",
+            "delivery_city",
+            "delivery_location_type",
+            "delivery_date",
+            "delivery_instructions",
+            "recipient_name",
+            "recipient_phone",
+            "sender_name",
+            "sender_anonymous",
+            "gift_message",
+        )
+    }
+    context = json.dumps(summary, indent=2, ensure_ascii=False)
+    return (
+        f"Customer message:\n{user_message}\n\n"
+        f"checkout_summary (sole source of truth for order facts):\n{context}"
+    )
 
 
 async def generate_response(
@@ -194,6 +252,40 @@ async def generate_response(
         }
 
     if state.get("intent") == "checkout":
+        checkout = _extract_checkout_payload(tool_results)
+        if state.get("checkout_state") == "review" and checkout:
+            review_html = checkout.get("review_html")
+            review_html_str = (
+                review_html if isinstance(review_html, str) and review_html.strip() else None
+            )
+
+            client = genai_client or create_genai_client()
+            model = select_model(state)
+            user_prompt = _build_checkout_review_prompt(user_message, checkout)
+            zep_memory_facts = state.get("zep_memory_facts")
+            reply_text = await asyncio.to_thread(
+                _generate_reply_sync,
+                client,
+                model=model,
+                user_prompt=user_prompt,
+                zep_memory_facts=zep_memory_facts,
+                system_instruction=CHECKOUT_REVIEW_SYSTEM_INSTRUCTION,
+            )
+            if not reply_text:
+                reply_text = (
+                    "Please review your order summary below and "
+                    "confirm when everything looks correct."
+                )
+
+            return {
+                "response_html": render_assistant_html(
+                    reply_text,
+                    checkout_review_html=review_html_str,
+                ),
+                "assistant_message": reply_text,
+                "model_tier": "pro",
+            }
+
         checkout_reply = _build_checkout_assistant_message(tool_results)
         if checkout_reply:
             return {
