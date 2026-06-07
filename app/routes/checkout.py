@@ -14,10 +14,12 @@ from app.templating import (
     render_delivery_date_status,
     render_delivery_form_validation_response,
     render_recipient_form_validation_response,
+    render_sender_form_validation_response,
 )
 from lib.chat.deps import client_ip_from_request, ensure_kapruka_service
 from lib.checkout.delivery import DeliveryFormValues, parse_delivery_form
 from lib.checkout.recipient import RecipientFormValues, parse_recipient_form
+from lib.checkout.sender import SenderFormValues, parse_sender_form
 from lib.kapruka.errors import KaprukaError
 from lib.kapruka.types import CheckDeliveryOutput
 from lib.redis.client import RedisClient
@@ -117,6 +119,26 @@ async def validate_recipient_form(
     _recipient, errors = parse_recipient_form(values)
     return HTMLResponse(
         render_recipient_form_validation_response(
+            values=values,
+            errors=errors,
+            valid=not errors,
+        )
+    )
+
+
+@router.post("/validate-sender", response_class=HTMLResponse)
+async def validate_sender_form(
+    name: Annotated[str, Form()] = "",
+    anonymous: Annotated[str | None, Form()] = None,
+) -> HTMLResponse:
+    """Validate sender name and anonymous flag; return form with OOB field errors on failure."""
+    values = SenderFormValues(
+        name=name,
+        anonymous=anonymous in ("true", "on", "1"),
+    )
+    _sender, errors = parse_sender_form(values)
+    return HTMLResponse(
+        render_sender_form_validation_response(
             values=values,
             errors=errors,
             valid=not errors,

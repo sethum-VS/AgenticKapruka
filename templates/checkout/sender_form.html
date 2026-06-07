@@ -1,0 +1,86 @@
+{# Sender gift-card form — server-validated via Pydantic Sender model (name + anonymous only). #}
+<form
+  id="sender-form"
+  class="flex flex-col gap-4"
+  hx-post="/checkout/validate-sender"
+  hx-target="#sender-form"
+  hx-swap="outerHTML"
+  data-testid="sender-form"
+  x-data="{
+    anonymous: {{ 'true' if values.anonymous else 'false' }},
+    senderName: ''
+  }"
+  x-init="senderName = $refs.nameInput.value"
+>
+  <div class="flex flex-col gap-1">
+    <label for="sender-name" class="text-sm font-medium text-commerce-ink">Your name</label>
+    <input
+      id="sender-name"
+      name="name"
+      type="text"
+      required
+      minlength="1"
+      maxlength="80"
+      value="{{ values.name }}"
+      x-ref="nameInput"
+      x-model="senderName"
+      placeholder="Name printed on the gift card"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      data-testid="sender-name-input"
+    />
+    <div
+      id="sender-name-error"
+      class="empty:hidden"
+      data-testid="sender-name-error-slot"
+      aria-live="polite"
+    ></div>
+  </div>
+
+  <div class="flex items-start gap-2">
+    <input
+      id="sender-anonymous"
+      name="anonymous"
+      type="checkbox"
+      value="true"
+      class="mt-1 h-4 w-4 rounded border-commerce-parchment text-kapruka-600 focus:ring-kapruka-500/40"
+      data-testid="sender-anonymous-toggle"
+      x-model="anonymous"
+      {% if values.anonymous %}checked{% endif %}
+    />
+    <div class="flex flex-col gap-0.5">
+      <label for="sender-anonymous" class="text-sm font-medium text-commerce-ink">
+        Send anonymously
+      </label>
+      <p class="text-xs text-commerce-muted">
+        When checked, the gift card shows &ldquo;Anonymous&rdquo; instead of your name.
+      </p>
+    </div>
+  </div>
+
+  <div
+    class="rounded-lg border border-commerce-parchment bg-commerce-cream/40 px-4 py-3"
+    data-testid="gift-card-preview"
+    aria-live="polite"
+  >
+    <p class="text-xs font-medium uppercase tracking-wide text-commerce-muted">Gift card preview</p>
+    <p
+      class="mt-1 text-sm font-medium text-commerce-ink"
+      data-testid="gift-card-sender-preview"
+      x-text="anonymous ? 'Anonymous' : (senderName.trim() || 'Your name')"
+    ></p>
+  </div>
+
+  {% if valid %}
+  <p class="text-sm text-green-700" data-testid="sender-form-valid" role="status">
+    Sender details look good.
+  </p>
+  {% endif %}
+
+  <button
+    type="submit"
+    class="rounded-lg bg-kapruka-600 px-4 py-2 text-sm font-medium text-white hover:bg-kapruka-700 focus:outline-none focus:ring-2 focus:ring-kapruka-500/40"
+    data-testid="sender-form-submit"
+  >
+    Continue
+  </button>
+</form>

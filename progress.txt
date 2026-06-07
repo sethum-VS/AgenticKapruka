@@ -515,3 +515,11 @@ Next: PRD-065 Recipient name and phone validation.
 - Tests: `test_recipient_form.py` (parametrized valid/invalid phones, OOB fragments); `test_recipient_form_flow.py` integration (invalid phone preserves name; valid → success marker).
 Files: lib/kapruka/types.py, lib/checkout/{recipient,__init__}.py, templates/checkout/{recipient_form,recipient_field_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_recipient_form.py, tests/integration/test_recipient_form_flow.py, prd.json
 Next: PRD-066 Sender form with anonymous toggle.
+
+## PRD-066 — Sender form with anonymous toggle
+- Added `lib/checkout/sender.py`: `SenderFormValues` + `parse_sender_form` via Kapruka `Sender` model (name 1–80, anonymous bool; no email).
+- Added `templates/checkout/sender_form.html`: name input, anonymous checkbox, Alpine `x-model` gift-card preview (`Anonymous` vs entered name); `sender_field_error.html` OOB fragments.
+- Implemented `POST /checkout/validate-sender`; `render_sender_form` / `render_sender_field_error` / `render_sender_form_validation_response` in `app/templating.py`.
+- Tests: `test_sender_form.py` (HTMX attrs, Sender schema fields only, Alpine preview binding, Pydantic bounds); `test_sender_form_flow.py` integration (empty name OOB + anonymous preserved; valid with/without checkbox).
+Files: lib/checkout/{sender,__init__}.py, templates/checkout/{sender_form,sender_field_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_sender_form.py, tests/integration/test_sender_form_flow.py, prd.json
+Next: PRD-067 Checkout sub-graph state machine definition.

@@ -789,7 +789,7 @@
       "When anonymous checked, display preview showing 'Anonymous' on gift card",
       "Verify form schema matches Sender Pydantic model with name and anonymous only"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-067",
