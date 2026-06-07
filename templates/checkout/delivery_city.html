@@ -1,0 +1,27 @@
+{# Delivery city input with debounced HTMX autocomplete suggestions. #}
+<div class="relative flex flex-col gap-1" data-testid="delivery-city-field">
+  <label for="delivery-city" class="text-sm font-medium text-commerce-ink">Delivery city</label>
+  <input
+    id="delivery-city"
+    name="q"
+    type="text"
+    autocomplete="off"
+    placeholder="Start typing a city…"
+    class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+    hx-get="/partials/delivery-cities"
+    hx-trigger="keyup changed delay:300ms"
+    hx-target="#delivery-city-suggestions"
+    hx-swap="innerHTML"
+    aria-autocomplete="list"
+    aria-controls="delivery-city-suggestions"
+    aria-expanded="false"
+    data-testid="delivery-city-input"
+  />
+  <ul
+    id="delivery-city-suggestions"
+    role="listbox"
+    aria-label="City suggestions"
+    class="absolute left-0 right-0 top-full z-10 mt-1 max-h-48 overflow-y-auto rounded-lg border border-commerce-parchment bg-white shadow-sm empty:hidden"
+    data-testid="delivery-city-suggestions"
+  ></ul>
+</div>

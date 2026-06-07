@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 from starlette.requests import Request
 
-from app.templating import _create_templates, format_currency, get_templates
+from app.templating import (
+    SUPPORTED_CURRENCY_CODES,
+    _create_templates,
+    format_currency,
+    get_templates,
+)
+from lib.chat.page_context import cart_template_context, currency_template_context
 
 
 def _make_request() -> Request:
@@ -28,8 +34,8 @@ def clear_templates_cache() -> None:
     _create_templates.cache_clear()
 
 
-def test_format_currency_stub() -> None:
-    assert format_currency(1500, "LKR") == "LKR 1,500"
+def test_format_currency_filter_registered() -> None:
+    assert format_currency(1500, "LKR") == "Rs. 1,500"
 
 
 def test_get_templates_returns_singleton() -> None:
@@ -46,7 +52,11 @@ def test_template_response_renders_base_html() -> None:
     response = templates.TemplateResponse(
         request,
         "base.html",
-        {"title": "AgenticKapruka"},
+        {
+            "title": "AgenticKapruka",
+            **currency_template_context("LKR"),
+            **cart_template_context([]),
+        },
     )
 
     html = response.body.decode()
@@ -59,3 +69,8 @@ def test_template_response_renders_base_html() -> None:
     assert "alpinejs" in html
     assert 'hx-ext="sse"' in html
     assert 'href="/static/css/app.css"' in html
+    assert "/static/js/cart-drawer.js" in html
+    assert 'data-testid="cart-drawer"' in html
+    assert 'data-testid="header-currency"' in html
+    assert 'hx-post="/session/currency"' in html
+    assert len(SUPPORTED_CURRENCY_CODES) == 6

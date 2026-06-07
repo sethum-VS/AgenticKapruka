@@ -1,0 +1,28 @@
+{# HTMX fragment — delivery availability after kapruka_check_delivery. #}
+{% if result.available %}
+<div
+  class="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900"
+  data-testid="delivery-date-available"
+  data-available="true"
+>
+  <p class="font-medium">Delivery available on {{ result.checked_date }}</p>
+  <p>Flat delivery rate: {{ result.rate | format_currency(result.currency) }} per order.</p>
+  {% if result.perishable_warning %}
+  <p class="mt-1 text-amber-800">{{ result.perishable_warning }}</p>
+  {% endif %}
+</div>
+{% else %}
+<div
+  class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+  data-testid="delivery-date-unavailable"
+  data-available="false"
+>
+  <p class="font-medium">Delivery not available on {{ result.checked_date }}</p>
+  {% if result.reason %}
+  <p>{{ result.reason }}</p>
+  {% endif %}
+  {% if result.next_available_date %}
+  <p class="mt-1">Next available date: <strong>{{ result.next_available_date }}</strong></p>
+  {% endif %}
+</div>
+{% endif %}

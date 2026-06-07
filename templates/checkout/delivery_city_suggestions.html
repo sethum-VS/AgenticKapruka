@@ -1,0 +1,9 @@
+{# HTMX fragment — li items swapped into #delivery-city-suggestions. #}
+{% for city in cities %}
+<li
+  class="cursor-pointer px-3 py-2 text-sm text-commerce-ink hover:bg-commerce-cream"
+  role="option"
+  data-testid="delivery-city-suggestion"
+  data-city="{{ city }}"
+>{{ city }}</li>
+{% endfor %}

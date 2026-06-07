@@ -13,9 +13,10 @@ from tests.unit.test_settings import _VALID_ENV, _apply_env
 
 from app.config import get_settings
 from app.main import create_app
-from app.templating import _create_templates, get_templates
+from app.templating import SUPPORTED_CURRENCY_CODES, _create_templates, get_templates
 from graphs.nodes.generate_response import render_assistant_html
 from graphs.shopping_graph import ShoppingGraphDeps
+from lib.chat.page_context import cart_template_context, currency_template_context
 from lib.redis.client import RedisClient
 
 
@@ -46,7 +47,11 @@ def test_chat_index_template_renders_empty_state() -> None:
     response = templates.TemplateResponse(
         request,
         "chat/index.html",
-        {"title": "Chat — AgenticKapruka"},
+        {
+            "title": "Chat — AgenticKapruka",
+            **currency_template_context("LKR"),
+            **cart_template_context([]),
+        },
     )
 
     html = response.body.decode()
@@ -77,6 +82,16 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'x-ref="input"' in html
     assert "/static/js/chat-sse.js" in html
     assert "/static/js/chat-helpers.js" in html
+    assert "/static/js/lazy-image.js" in html
+    assert "/static/js/cart-drawer.js" in html
+    assert 'data-testid="cart-drawer"' in html
+    assert 'data-testid="cart-icon"' in html
+    assert 'id="cart-panel"' in html
+    assert 'data-testid="header-currency"' in html
+    assert 'hx-post="/session/currency"' in html
+    assert 'hx-swap="none"' in html
+    for code in SUPPORTED_CURRENCY_CODES:
+        assert f'<option value="{code}"' in html
 
 
 def _mock_streaming_graph() -> MagicMock:
@@ -229,10 +244,19 @@ async def test_chat_stream_rejects_empty_message(chat_stream_env: RedisClient) -
     assert response.status_code == 422
 
 
+@pytest.fixture
+def chat_index_env(monkeypatch: pytest.MonkeyPatch) -> RedisClient:
+    get_settings.cache_clear()
+    _apply_env(monkeypatch, _VALID_ENV)
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    return RedisClient("redis://localhost:6379/0", client=fake)
+
+
 @pytest.mark.asyncio
-async def test_chat_index_returns_200_html_with_empty_state() -> None:
+async def test_chat_index_returns_200_html_with_empty_state(chat_index_env: RedisClient) -> None:
     """GET /chat renders HTML with empty state visible."""
     application = create_app()
+    application.state.redis = chat_index_env
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/chat")
@@ -251,3 +275,6 @@ async def test_chat_index_returns_200_html_with_empty_state() -> None:
     assert 'x-data="chatHelpers()"' in html
     assert "/static/js/chat-sse.js" in html
     assert "/static/js/chat-helpers.js" in html
+    assert "/static/js/lazy-image.js" in html
+    assert 'data-testid="header-currency"' in html
+    assert '<option value="LKR" selected>LKR</option>' in html

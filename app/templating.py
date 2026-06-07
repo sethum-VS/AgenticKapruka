@@ -12,12 +12,14 @@ from urllib.parse import quote
 import jinja2
 from fastapi.templating import Jinja2Templates
 
+from lib.kapruka.types import CheckDeliveryOutput
+from lib.redis.cart import StoredCartItem
+from lib.utils.currency import SUPPORTED_CURRENCIES, format_currency
+from lib.utils.timezone import colombo_today_iso
+
+SUPPORTED_CURRENCY_CODES: tuple[str, ...] = tuple(sorted(SUPPORTED_CURRENCIES))
+
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
-
-
-def format_currency(amount: float | int, currency: str = "LKR") -> str:
-    """Stub currency filter; full formatting lands in PRD-056."""
-    return f"{currency} {amount:,}"
 
 
 def urlencode_filter(value: str) -> str:
@@ -45,6 +47,13 @@ def _create_templates() -> Jinja2Templates:
 def get_templates() -> Jinja2Templates:
     """FastAPI dependency returning the shared Jinja2 template environment."""
     return _create_templates()
+
+
+def render_stock_badge(*, in_stock: bool, stock_level: str = "high") -> str:
+    """Render templates/components/stock_badge.html for product image overlays."""
+    templates = get_templates()
+    template = templates.env.get_template("components/stock_badge.html")
+    return template.render(in_stock=in_stock, stock_level=stock_level)
 
 
 def render_product_card(product: dict[str, Any]) -> str:
@@ -87,6 +96,77 @@ def render_category_chips(
     templates = get_templates()
     template = templates.env.get_template("components/category_chips.html")
     return template.render(categories=categories, active_category=active_category)
+
+
+def render_cart_partial(
+    *,
+    items: list[StoredCartItem],
+    currency: str = "LKR",
+) -> str:
+    """Render templates/checkout/cart_partial.html for HTMX outerHTML swaps."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/cart_partial.html")
+    return template.render(items=items, currency=currency)
+
+
+def render_cart_drawer(
+    *,
+    items: list[StoredCartItem],
+    currency: str = "LKR",
+) -> str:
+    """Render templates/components/cart_drawer.html for header cart slide-over."""
+    templates = get_templates()
+    template = templates.env.get_template("components/cart_drawer.html")
+    return template.render(
+        cart_items=items,
+        cart_item_count=sum(item.quantity for item in items),
+        currency=currency,
+    )
+
+
+def render_delivery_city() -> str:
+    """Render templates/checkout/delivery_city.html for checkout city autocomplete."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_city.html")
+    return template.render()
+
+
+def render_delivery_city_suggestions(cities: list[str]) -> str:
+    """Render li suggestion items for HTMX swap into #delivery-city-suggestions."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_city_suggestions.html")
+    return template.render(cities=cities)
+
+
+def render_delivery_date(*, min_date: str | None = None) -> str:
+    """Render templates/checkout/delivery_date.html with Colombo min date."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_date.html")
+    return template.render(min_date=min_date or colombo_today_iso())
+
+
+def render_delivery_date_status(*, result: CheckDeliveryOutput) -> str:
+    """Render delivery availability partial after kapruka_check_delivery."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_date_status.html")
+    return template.render(result=result)
+
+
+def render_delivery_date_error(*, title: str, message: str) -> str:
+    """Render user-friendly delivery date validation error partial."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_date_error.html")
+    return template.render(title=title, message=message)
+
+
+def render_currency_selector(*, currency: str = "LKR") -> str:
+    """Render templates/components/currency_selector.html for the site header."""
+    templates = get_templates()
+    template = templates.env.get_template("components/currency_selector.html")
+    return template.render(
+        currency=currency,
+        supported_currencies=SUPPORTED_CURRENCY_CODES,
+    )
 
 
 def normalize_html_snapshot(html: str) -> str:

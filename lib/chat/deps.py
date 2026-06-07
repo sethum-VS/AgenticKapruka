@@ -101,15 +101,17 @@ async def resolve_turn_state(
     session_id: str,
     zep_thread_id: str | None,
     config: RunnableConfig,
+    currency: str | None = None,
 ) -> AgentState:
     """Use checkpoint thread state for follow-ups; seed session on first turn."""
     from graphs.shopping_graph import append_message_state, initial_shopping_state
 
     snapshot = await graph.aget_state(config)
     if snapshot.values:
-        return append_message_state(message)
+        return append_message_state(message, currency=currency)
     return initial_shopping_state(
         message=message,
         session_id=session_id,
         zep_thread_id=zep_thread_id,
+        currency=currency,
     )

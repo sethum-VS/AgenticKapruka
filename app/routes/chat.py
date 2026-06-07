@@ -17,10 +17,17 @@ from lib.chat.deps import (
     get_compiled_chat_graph,
     resolve_turn_state,
 )
+from lib.chat.page_context import (
+    cart_template_context,
+    currency_template_context,
+    resolve_page_cart,
+    resolve_page_currency,
+)
 from lib.chat.session import SESSION_COOKIE_NAME, cookie_params, resolve_chat_thread_id
 from lib.chat.sse import format_sse_event
 from lib.chat.streaming import iter_chat_sse_events
 from lib.redis.client import RedisClient
+from lib.redis.session import get_session_currency
 from lib.zep.session import get_or_create_session
 
 logger = logging.getLogger(__name__)
@@ -62,12 +69,14 @@ async def _chat_event_stream(
         zep_thread_id = await get_or_create_session(redis_client, zep_client, thread_id)
 
     config = cast(RunnableConfig, {"configurable": {"thread_id": thread_id}})
+    currency = await get_session_currency(redis_client, thread_id)
     state = await resolve_turn_state(
         graph,
         message=message,
         session_id=thread_id,
         zep_thread_id=zep_thread_id,
         config=config,
+        currency=currency,
     )
     user_html = _render_user_turn_html(message)
 
@@ -81,13 +90,19 @@ async def _chat_event_stream(
 
 
 @router.get("")
-async def chat_index(request: Request) -> Response:
+async def chat_index(request: Request, redis_client: RedisDep) -> Response:
     """Full-screen chat viewport with welcome empty state."""
     templates = get_templates()
+    currency = await resolve_page_currency(request, redis_client)
+    cart_items = await resolve_page_cart(request, redis_client)
     return templates.TemplateResponse(
         request,
         "chat/index.html",
-        {"title": "Chat — AgenticKapruka"},
+        {
+            "title": "Chat — AgenticKapruka",
+            **currency_template_context(currency),
+            **cart_template_context(cart_items),
+        },
     )
 
 

@@ -410,3 +410,90 @@ Next: PRD-052 Category filter chips partial.
 - Tests: `test_category_chips.py` (HTMX attrs, active variant, URL encoding, hybrid_context extraction, partials route); `test_category_chips_browser.py` Playwright harness via routed `http://localhost/` (HTMX 2 requires real document URL, not `about:blank` from `set_content`) — chip click swaps `#results` without navigation.
 Files: templates/components/category_chips.html, app/templating.py, app/routes/partials.py, static/css/input.css, tailwind.config.js, tests/fixtures/hybrid_context/sample_categories.json, tests/unit/{test_category_chips,test_category_chips_browser}.py, prd.json
 Next: PRD-053 Stock badge overlay component.
+
+## PRD-053 — Stock badge overlay component
+- Added `templates/components/stock_badge.html`: green "In Stock" badge (`data-stock-level`), amber "Low Stock" when `stock_level=low`, gray full-image overlay for out-of-stock with `data-stock-level` metadata.
+- Refactored `product_card.html` to `{% include %}` stock_badge via `{% with in_stock, stock_level %}`; added `render_stock_badge()` in `app/templating.py`.
+- Fixtures gained `stock_level`; snapshot updated with `data-stock-level="high"`.
+- Tests: `tests/unit/test_stock_badge.py` (partial isolation + product_card integration for both stock states).
+Files: templates/components/{stock_badge,product_card}.html, app/templating.py, tests/unit/test_stock_badge.py, tests/fixtures/products/{sample_in_stock,sample_out_of_stock}.json, tests/fixtures/snapshots/product_card_in_stock.html, prd.json
+Next: PRD-054 Alpine lazy-load image animations.
+
+## PRD-054 — Alpine lazy-load image animations
+- Added `static/js/lazy-image.js`: Alpine `lazyImage` component with `IntersectionObserver` (64px rootMargin), pulse skeleton until load, `opacity-0` → `opacity-100` transition on `@load`.
+- `product_card.html`: optional `lazy_image` flag wraps image in lazy loader (`x-if="inView"` defers `<img>` until scroll); standalone cards keep native `loading="lazy"`.
+- `product_carousel.html` passes `lazy_image=true` per card; `chat/index.html` loads lazy-image.js globally for embedded carousels.
+- Tests: `test_lazy_image_js.py`; carousel structure asserts lazy markup; Playwright scroll test stubs delayed PNGs and verifies off-screen cards defer load then fade in after `scrollLeft`.
+Files: static/js/lazy-image.js, templates/components/{product_card,product_carousel}.html, templates/chat/index.html, tests/unit/{test_lazy_image_js,test_product_carousel,test_product_carousel_browser,test_chat}.py, prd.json
+Next: PRD-055 Embed product carousel in assistant messages.
+
+## PRD-055 — Embed product carousel in assistant messages
+- Added `extract_search_products` and `build_products_carousel_html` in `graphs/nodes/generate_response.py`: reads `kapruka_search_products` from `tool_results`, renders `product_carousel` via `render_product_carousel`, passes `products_html` into `message_assistant.html` below assistant prose.
+- `message_assistant.html` already had `products_html` slot from PRD-039; no template change required.
+- Unit tests: carousel markup in `test_generate_response.py` (extract, build, empty-results skip); integration test `test_chat_flow.py` mocks search with product fixture and asserts `data-testid="product-carousel"` in SSE stream.
+Files: graphs/nodes/generate_response.py, tests/unit/test_generate_response.py, tests/integration/test_chat_flow.py, prd.json
+Next: PRD-056 Currency formatting Jinja filter.
+
+## PRD-056 — Currency formatting Jinja filter
+- Added `lib/utils/currency.py`: `format_currency(amount, currency)` for LKR, USD, GBP, AUD, CAD, EUR; LKR renders as `Rs. {n:,}` (no decimals, rounded); decimal currencies use symbol prefix with `,.2f`.
+- `app/templating.py` imports `format_currency` from `lib.utils.currency` (Jinja filter registration unchanged).
+- Tests: `tests/unit/test_currency.py` (PRD assertion + decimal/rounding/validation); updated product card snapshot and carousel tests to `Rs.` LKR display.
+Files: lib/utils/{__init__,currency}.py, app/templating.py, tests/unit/{test_currency,test_templating,test_product_card,test_product_carousel}.py, tests/fixtures/snapshots/product_card_in_stock.html, prd.json
+## PRD-057 — Header currency selector with HTMX
+- Added `lib/redis/session.py`: `get_session_currency` / `set_session_currency` with Redis key `session:{id}:currency` (7-day TTL).
+- Added `POST /session/currency` (`app/routes/session.py`): HTMX form post, validates against `SUPPORTED_CURRENCIES`, sets signed `ak_session` cookie on first visit.
+- `templates/components/currency_selector.html` in `base.html` header (`hx-post`, `hx-swap="none"`, `hx-trigger="change"`); chat page uses `header_start` / `content` / `footer` blocks.
+- `lib/chat/page_context.py` loads currency for GET `/chat` from Redis when session cookie present.
+- Tests: `tests/unit/test_session_currency.py` (Redis get/set, HTMX attrs, POST persistence, refresh retains EUR selection).
+Files: lib/redis/session.py, lib/chat/page_context.py, app/routes/{session,chat}.py, app/main.py, app/templating.py, templates/{base,chat/index}.html, templates/components/currency_selector.html, tests/unit/{test_session_currency,test_chat,test_templating}.py, prd.json
+Next: PRD-058 Propagate session currency to all MCP calls.
+
+## PRD-058 — Propagate session currency to all MCP calls
+- `_chat_event_stream` loads `get_session_currency(redis, thread_id)` before graph invocation; `resolve_turn_state` seeds/refreshes `AgentState.currency` on every turn (first + follow-up via `initial_shopping_state` / `append_message_state`).
+- `call_mcp_tools`: `_resolve_currency` prefers session state; `_inject_currency_args` ensures `search_products` and `get_product` always receive currency (explicit LLM tool_calls included).
+- Tests: `test_chat_deps` currency seed/refresh; `test_call_mcp_tools_injects_session_currency_into_explicit_tool_calls`; integration `test_chat_stream_search_uses_session_currency_after_update` (POST /session/currency USD → POST /chat/stream → search_products currency=USD).
+Files: app/routes/chat.py, lib/chat/deps.py, graphs/{shopping_graph,nodes/call_mcp_tools}.py, tests/unit/{test_chat_deps,test_call_mcp_tools}.py, tests/integration/test_chat_flow.py, prd.json
+Next: PRD-059 Redis server-side cart state.
+
+## PRD-059 — Redis server-side cart state
+- Added `lib/redis/cart.py`: Redis hash `cart:{session_id}` stores JSON-serialized `StoredCartItem` rows (product_id, quantity, icing_text, name, price snapshot); 7-day TTL aligned with session prefs.
+- API: `add_item` (merge qty for existing product_id), `remove_item`, `update_quantity`, `get_cart`, `clear_cart`; `CartLimitExceeded` on 31st distinct line; quantity bounded 1–99.
+- Exported cart helpers from `lib/redis/__init__.py`.
+- Tests: `tests/unit/test_redis_cart.py` (CRUD, merge, limit, quantity bounds, clear).
+Files: lib/redis/{cart,__init__}.py, tests/unit/test_redis_cart.py, prd.json
+Next: PRD-060 Cart HTMX partial swaps.
+
+## PRD-060 — Cart HTMX partial swaps
+- Added `templates/checkout/cart_partial.html`: `#cart-panel` root with line items, quantity stepper (+/− via `/cart/update`), remove buttons (`/cart/remove`), line totals via `format_currency`, empty state, `data-item-count` for badge wiring in PRD-061.
+- Implemented `app/routes/cart.py`: `POST /cart/add` fetches product via KaprukaService + session currency, persists to Redis cart, returns partial; `/cart/remove` and `/cart/update` (qty&lt;1 removes) also return refreshed partial with session cookie on first visit.
+- Added `render_cart_partial()` in `app/templating.py`.
+- Tests: `tests/unit/test_cart_partial.py` (HTMX attrs, stepper bounds, empty state); `tests/integration/test_cart_flow.py` (add returns product name HTML, update/remove swap partial + Redis state).
+Files: templates/checkout/cart_partial.html, app/routes/cart.py, app/templating.py, tests/unit/test_cart_partial.py, tests/integration/test_cart_flow.py, prd.json
+Next: PRD-061 Alpine cart drawer.
+
+## PRD-061 — Alpine cart drawer
+- Added `static/js/cart-drawer.js`: Alpine `cartDrawer` with open/close, slide/fade transitions, badge `itemCount` synced from `#cart-panel[data-item-count]` on `htmx:afterSwap` (document.body listener, same pattern as chatHelpers).
+- Added `templates/components/cart_drawer.html`: header cart icon + badge, fixed backdrop/panel slide-over embedding `cart_partial.html`; included from `base.html` beside currency selector with `cart-drawer.js` loaded before deferred Alpine.
+- Extended `lib/chat/page_context.py`: `resolve_page_cart`, `cart_template_context`; chat GET passes cart lines for server-rendered badge and drawer content.
+- Added `render_cart_drawer()` in `app/templating.py`.
+- Tests: `test_cart_drawer.py` (Alpine markup, badge count, base.html wiring); `test_cart_drawer_browser.py` Playwright (open, backdrop close, Escape close, HTMX badge sync).
+Files: static/js/cart-drawer.js, templates/{base,components/cart_drawer}.html, lib/chat/page_context.py, app/{routes/chat,templating}.py, tests/unit/{test_cart_drawer,test_cart_drawer_browser,test_chat,test_templating}.py, prd.json
+Next: PRD-062 Delivery city debounced autocomplete.
+
+## PRD-062 — Delivery city debounced autocomplete
+- Added `templates/checkout/delivery_city.html`: city input with `hx-get /partials/delivery-cities`, `hx-trigger="keyup changed delay:300ms"`, swaps suggestions into `#delivery-city-suggestions`.
+- Added `templates/checkout/delivery_city_suggestions.html`: `li` suggestion rows from Kapruka city names.
+- Extended `app/routes/partials.py`: `GET /partials/delivery-cities` calls `KaprukaService.list_delivery_cities` (min 2-char query); `render_delivery_city` / `render_delivery_city_suggestions` in `app/templating.py`.
+- Tests: `test_delivery_city.py` (HTMX debounce attrs, li partial); `test_delivery_city_flow.py` integration (`q=Col` → Colombo HTML, short query skips MCP).
+Files: templates/checkout/{delivery_city,delivery_city_suggestions}.html, app/{routes/partials,templating}.py, tests/unit/test_delivery_city.py, tests/integration/test_delivery_city_flow.py, prd.json
+Next: PRD-063 Colombo timezone delivery date picker.
+
+## PRD-063 — Colombo timezone delivery date picker
+- Added `lib/utils/timezone.py`: `colombo_today` / `colombo_today_iso` via `zoneinfo.ZoneInfo("Asia/Colombo")`; `is_past_colombo_date` for server-side past-date gate before MCP.
+- Added `templates/checkout/delivery_date.html`: date input `min` from Colombo today, `hx-post /checkout/check-delivery` on change with city via `hx-include`; status target `#delivery-date-status`.
+- Added `delivery_date_status.html` (available/unavailable + rate/reason) and `delivery_date_error.html` (user-friendly validation alerts).
+- Implemented `POST /checkout/check-delivery` in `app/routes/checkout.py`: rejects past dates and invalid input with error partial; calls `KaprukaService.check_delivery` for valid requests.
+- `render_delivery_date` / `render_delivery_date_status` / `render_delivery_date_error` in `app/templating.py`.
+- Tests: `test_delivery_date.py` (zoneinfo, HTMX attrs, partials); `test_delivery_date_flow.py` integration (past date → error HTML, no MCP; valid date → availability partial).
+Files: lib/utils/{timezone,__init__}.py, templates/checkout/{delivery_date,delivery_date_status,delivery_date_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_delivery_date.py, tests/integration/test_delivery_date_flow.py, prd.json
+Next: PRD-064 Delivery address and instructions form.

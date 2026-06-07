@@ -47,7 +47,9 @@
   >
     {% for product in products %}
     <div class="snap-start shrink-0">
-      {% include "components/product_card.html" %}
+      {% with lazy_image=true %}
+        {% include "components/product_card.html" %}
+      {% endwith %}
     </div>
     {% endfor %}
   </div>

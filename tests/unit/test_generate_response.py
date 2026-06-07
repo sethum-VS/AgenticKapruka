@@ -9,6 +9,8 @@ from langchain_core.messages import HumanMessage
 
 from graphs.nodes.generate_response import (
     AssistantReply,
+    build_products_carousel_html,
+    extract_search_products,
     generate_response,
     render_assistant_html,
 )
@@ -92,6 +94,9 @@ async def test_generate_response_html_contains_product_names_from_tool_results()
     assert "Chocolate Birthday Cake" in html
     assert "Vanilla Celebration Cake" in html
     assert 'aria-label="Assistant message"' in html
+    assert 'data-slot="product-carousel"' in html
+    assert 'data-testid="product-carousel"' in html
+    assert 'data-product-id="cake00ka002034"' in html
 
     mock_client.models.generate_content.assert_called_once()
     call_kwargs = mock_client.models.generate_content.call_args.kwargs
@@ -145,3 +150,41 @@ def test_render_assistant_html_structure() -> None:
     assert 'role="assistant"' in html
     assert "prose-assistant" in html
     assert "justify-start" in html
+
+
+def test_extract_search_products_from_tool_results() -> None:
+    products = extract_search_products(_SEARCH_TOOL_RESULTS)
+    assert len(products) == 2
+    assert products[0]["id"] == "cake00ka002034"
+    assert extract_search_products({}) == []
+    assert extract_search_products(None) == []
+
+
+def test_build_products_carousel_html_renders_carousel() -> None:
+    html = build_products_carousel_html(_SEARCH_TOOL_RESULTS)
+    assert html is not None
+    assert 'data-testid="product-carousel"' in html
+    assert "Chocolate Birthday Cake" in html
+
+
+def test_build_products_carousel_html_empty_when_no_results() -> None:
+    assert build_products_carousel_html({SEARCH_PRODUCTS_TOOL: {"results": []}}) is None
+
+
+@pytest.mark.asyncio
+async def test_generate_response_no_carousel_when_search_empty() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(message="No cakes matched your search.")
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="obscure cake query")],
+        "tool_results": {SEARCH_PRODUCTS_TOOL: {"results": []}},
+        "session_id": "sess-gen-004",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert 'data-testid="product-carousel"' not in result["response_html"]

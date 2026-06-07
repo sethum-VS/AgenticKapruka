@@ -1,0 +1,18 @@
+{# Header currency select — hx-post updates Redis session preference. #}
+<div class="flex shrink-0 items-center gap-2">
+  <label for="header-currency" class="text-xs font-medium text-commerce-muted">Currency</label>
+  <select
+    id="header-currency"
+    name="currency"
+    data-testid="header-currency"
+    class="rounded-lg border border-commerce-parchment bg-white px-2 py-1.5 text-sm text-commerce-ink focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+    hx-post="/session/currency"
+    hx-swap="none"
+    hx-trigger="change"
+    aria-label="Display currency"
+  >
+    {% for code in supported_currencies %}
+    <option value="{{ code }}"{% if currency == code %} selected{% endif %}>{{ code }}</option>
+    {% endfor %}
+  </select>
+</div>

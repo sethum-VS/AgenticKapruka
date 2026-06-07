@@ -120,19 +120,23 @@ def initial_shopping_state(
     session_id: str,
     thread_id: str | None = None,
     zep_thread_id: str | None = None,
+    currency: str | None = None,
 ) -> AgentState:
     """Build initial AgentState for a new chat turn."""
     resolved_thread = zep_thread_id if zep_thread_id is not None else thread_id
-    return cast(
-        AgentState,
-        {
-            "messages": [HumanMessage(content=message)],
-            "session_id": session_id,
-            "zep_thread_id": resolved_thread,
-        },
-    )
+    state: dict[str, Any] = {
+        "messages": [HumanMessage(content=message)],
+        "session_id": session_id,
+        "zep_thread_id": resolved_thread,
+    }
+    if currency is not None:
+        state["currency"] = currency
+    return cast(AgentState, state)
 
 
-def append_message_state(message: str) -> AgentState:
+def append_message_state(message: str, *, currency: str | None = None) -> AgentState:
     """Delta state for a follow-up turn; checkpoint carries prior fields."""
-    return cast(AgentState, {"messages": [HumanMessage(content=message)]})
+    delta: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
+    if currency is not None:
+        delta["currency"] = currency
+    return cast(AgentState, delta)

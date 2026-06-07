@@ -633,7 +633,7 @@
       "Render gray 'Out of Stock' overlay when in_stock false",
       "Include partial in product_card and verify both states render correctly"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-054",
@@ -645,7 +645,7 @@
       "Apply to product_card img tags in carousel",
       "Verify images fade in on scroll in browser devtools throttled network"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-055",
@@ -657,7 +657,7 @@
       "Render carousel below assistant text in message partial",
       "Integration test verifying carousel HTML present after product search turn"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-056",
@@ -669,7 +669,7 @@
       "Register format_currency filter in Jinja environment",
       "Write unit test: format_currency(1500, 'LKR') returns 'Rs. 1,500'"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-057",
@@ -681,7 +681,7 @@
       "POST updates Redis session currency key session:{id}:currency",
       "Verify currency change persists across page refresh within same session"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-058",
@@ -693,7 +693,7 @@
       "Pass currency param in all MCP tool calls via call_mcp_tools node",
       "Write test verifying search_products called with currency='USD' after session update"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-059",
@@ -705,7 +705,7 @@
       "Enforce max 30 items and quantity 1-99 per item",
       "Write unit test adding 31st item raises CartLimitExceeded"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-060",
@@ -717,7 +717,7 @@
       "Each action returns updated partial without full page reload",
       "Integration test POST /cart/add returns HTML with product name"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-061",
@@ -729,7 +729,7 @@
       "Cart icon shows badge count from server-rendered cart item total",
       "Verify drawer opens/closes with escape key and backdrop click"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-062",
@@ -741,7 +741,7 @@
       "Debounce input with hx-trigger delay:300ms",
       "Integration test typing 'Col' returns Colombo suggestion HTML"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-063",
@@ -753,7 +753,7 @@
       "POST selected date and city to check_delivery endpoint returning availability partial",
       "Write test verifying past date rejected with user-friendly error partial"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-064",
@@ -986,6 +986,18 @@
   {
     "id": "PRD-083",
     "category": "ops",
+    "title": "Local .env bootstrap via gcloud CLI",
+    "description": "Create scripts/bootstrap_env.sh that generates a gitignored .env for local development using gcloud (GCP_PROJECT_ID, GCP_LOCATION, Generative Language API key via services api-keys) and python (SESSION_SECRET). Leave Neo4j AuraDB and Zep Cloud as documented placeholders. Verify .env is listed in .gitignore.",
+    "steps": [
+      "Add scripts/bootstrap_env.sh using gcloud config get-value project, api-keys create/get-key-string for generativelanguage.googleapis.com, and python secrets.token_urlsafe for SESSION_SECRET",
+      "Write REDIS_URL=redis://localhost:6379/0 and KAPRUKA_MCP_URL default; Neo4j and ZEP_API_KEY remain manual placeholders",
+      "Confirm .env and .env.* are gitignored with !.env.example exception; run bootstrap script and verify Settings loads without validation errors"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-084",
+    "category": "ops",
     "title": "Google Cloud Run deployment with gcloud",
     "description": "Create scripts/deploy_cloud_run.sh and docs/DEPLOY.md with step-by-step gcloud commands: build image, push to Artifact Registry, deploy Cloud Run with VPC connector for Memorystore, Secret Manager env vars.",
     "steps": [
@@ -996,7 +1008,7 @@
     "passes": false
   },
   {
-    "id": "PRD-084",
+    "id": "PRD-085",
     "category": "ops",
     "title": "Playwright E2E smoke tests",
     "description": "Implement tests/e2e/test_smoke.py with Playwright testing chat page load, product search flow with mocked MCP, cart add partial, and checkout form render stopping before real create_order.",
@@ -1008,7 +1020,7 @@
     "passes": false
   },
   {
-    "id": "PRD-085",
+    "id": "PRD-086",
     "category": "ops",
     "title": "IaC bash script for GitHub Actions secrets and Cloud Run CI/CD",
     "description": "Write an infrastructure-as-code bash script utilizing the GitHub CLI (gh) to programmatically configure repository secrets (gh secret set) and scaffold a complete .github/workflows/main.yml CI/CD pipeline that triggers the gcloud Cloud Run deployment automatically on push to main.",
