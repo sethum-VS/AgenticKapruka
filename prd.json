@@ -621,7 +621,7 @@
       "Highlight active chip with distinct Tailwind variant",
       "Test chip click triggers HTMX request without full page reload"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-053",

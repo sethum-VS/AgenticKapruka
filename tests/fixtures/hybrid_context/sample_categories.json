@@ -1,0 +1,26 @@
+[
+  {
+    "id": "category:flowers",
+    "display_name": "Flowers",
+    "hop": 0,
+    "relationship_type": "seed",
+    "weight": 1.0,
+    "seed_id": "category:flowers"
+  },
+  {
+    "id": "category:cakes",
+    "display_name": "Cakes",
+    "hop": 1,
+    "relationship_type": "CATEGORY_TO_PRODUCT_TYPE",
+    "weight": 0.85,
+    "seed_id": "category:flowers"
+  },
+  {
+    "id": "category:gifts",
+    "display_name": "Gifts",
+    "hop": 1,
+    "relationship_type": "OCCASION_TO_CATEGORY",
+    "weight": 0.72,
+    "seed_id": "category:flowers"
+  }
+]

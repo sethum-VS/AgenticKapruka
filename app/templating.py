@@ -7,6 +7,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import jinja2
 from fastapi.templating import Jinja2Templates
@@ -17,6 +18,11 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 def format_currency(amount: float | int, currency: str = "LKR") -> str:
     """Stub currency filter; full formatting lands in PRD-056."""
     return f"{currency} {amount:,}"
+
+
+def urlencode_filter(value: str) -> str:
+    """URL-encode query parameter values for HTMX hx-get URLs."""
+    return quote(str(value), safe="")
 
 
 def _is_dev_environment() -> bool:
@@ -32,6 +38,7 @@ def _create_templates() -> Jinja2Templates:
         auto_reload=_is_dev_environment(),
     )
     env.filters["format_currency"] = format_currency
+    env.filters["urlencode"] = urlencode_filter
     return Jinja2Templates(env=env)
 
 
@@ -52,6 +59,17 @@ def render_product_carousel(products: list[dict[str, Any]]) -> str:
     templates = get_templates()
     template = templates.env.get_template("components/product_carousel.html")
     return template.render(products=products)
+
+
+def render_category_chips(
+    categories: list[dict[str, Any]],
+    *,
+    active_category: str | None = None,
+) -> str:
+    """Render templates/components/category_chips.html for hybrid_context category filters."""
+    templates = get_templates()
+    template = templates.env.get_template("components/category_chips.html")
+    return template.render(categories=categories, active_category=active_category)
 
 
 def normalize_html_snapshot(html: str) -> str:
