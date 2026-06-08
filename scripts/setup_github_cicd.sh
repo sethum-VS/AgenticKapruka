@@ -366,7 +366,7 @@ jobs:
             --region="${GCP_REGION}" \
             --format='value(status.url)')"
           echo "Service URL: ${SERVICE_URL}"
-          curl -fsS "${SERVICE_URL}/health"
+          curl -fsS "${SERVICE_URL}/health" | grep -q '"status":"healthy"'
 WORKFLOW_EOF
 
   echo "Wrote ${WORKFLOW_FILE}" >&2
