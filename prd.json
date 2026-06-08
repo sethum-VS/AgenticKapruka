@@ -933,7 +933,7 @@
       "Create tests/fixtures/mcp_mock.py returning deterministic JSON for all 7 tools",
       "Add CI job running ragas_eval with thresholds context_precision >= 0.7"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-079",

@@ -622,3 +622,12 @@ Next: PRD-077 Ragas evaluation golden dataset.
 - Tests: `tests/unit/test_golden_dataset.py` (fixture loader, ≥20 cases, scenario coverage, PRD anchor cases, unknown-tool rejection).
 Files: evals/{__init__,golden_dataset,golden_dataset.json}, tests/unit/test_golden_dataset.py, prd.json
 Next: PRD-078 Ragas eval script and CI mock MCP fixture.
+
+## PRD-078 — Ragas eval script and CI mock MCP fixture
+- Added `tests/fixtures/mcp_mock.py`: `MockMCPHttpClient` + `mock_mcp_response()` with deterministic JSON for all 7 Kapruka MCP tools; query/order/city params reflected in payloads.
+- Added `evals/ragas_eval.py`: `run_ragas_eval()` / `run_full_ragas_eval()` run shopping graph per golden case with mock MCP + intent-specific Gemini mock; score context_precision, answer_relevancy, faithfulness via Ragas; `--ci` gate enforces context_precision ≥ 0.7 (24-case run ~0.96).
+- Added `evals/ragas_ci_llm.py`: `CiRagasChatModel` deterministic judge LLM for CI (no API keys).
+- Added `.github/workflows/ci.yml` `ragas-eval` job: `python -m evals.ragas_eval --ci`.
+- Tests: `tests/unit/test_mcp_mock.py`, `tests/unit/test_ragas_eval.py` (graph row collection, full golden dataset threshold).
+Files: tests/fixtures/mcp_mock.py, evals/{ragas_eval,ragas_ci_llm,__init__}.py, .github/workflows/ci.yml, tests/unit/{test_mcp_mock,test_ragas_eval}.py, prd.json
+Next: PRD-079 Ruff and mypy CI gate.

@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main, ralph/sprint-1]
+  pull_request:
+
+jobs:
+  ragas-eval:
+    name: Ragas golden dataset eval
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run Ragas evaluation (mock MCP)
+        run: python -m evals.ragas_eval --ci
