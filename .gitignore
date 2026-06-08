@@ -64,6 +64,10 @@ Thumbs.db
 # Cursor — local IDE state only
 .cursor/
 .gstack/
+.cursorrules
+
+# Release notes — maintained locally, not pushed to GitHub
+CHANGELOG.md
 
 # Ralph loops — local agent workflow (not pushed to GitHub)
 ralph-iter.*
