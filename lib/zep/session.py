@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Final, cast
 
 from lib.redis.client import RedisClient
 from lib.zep.client import ZepClient
+
+logger = logging.getLogger(__name__)
 
 SESSION_TTL_SECONDS: Final = 7 * 24 * 60 * 60  # 7 days
 
@@ -35,7 +38,7 @@ async def get_or_create_session(
         nx=True,
     )
     if claimed:
-        await zep_client.create_session(zep_thread_id)
+        await _create_zep_session(zep_client, zep_thread_id)
         return zep_thread_id
 
     existing = cast(str | None, await redis_client.client.get(key))
@@ -43,6 +46,18 @@ async def get_or_create_session(
         await redis_client.client.expire(key, SESSION_TTL_SECONDS)
         return existing
 
-    await zep_client.create_session(zep_thread_id)
+    await _create_zep_session(zep_client, zep_thread_id)
     await redis_client.client.set(key, zep_thread_id, ex=SESSION_TTL_SECONDS)
     return zep_thread_id
+
+
+async def _create_zep_session(zep_client: ZepClient, zep_thread_id: str) -> None:
+    """Create Zep memory session; log and continue when Zep is unreachable."""
+    try:
+        await zep_client.create_session(zep_thread_id)
+    except Exception:
+        logger.warning(
+            "Zep session create failed for %s; continuing without memory",
+            zep_thread_id,
+            exc_info=True,
+        )

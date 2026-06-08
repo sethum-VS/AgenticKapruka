@@ -34,7 +34,8 @@ def test_deploy_script_contract() -> None:
     assert "REDIS_URL=" in content
     assert "NEO4J_URI=" in content
     assert "ZEP_API_KEY=" in content
-    assert "GOOGLE_API_KEY=" in content
+    assert "GEMINI_BACKEND=vertex" in content
+    assert "--service-account" in content
     assert "GCP_PROJECT_ID=" in content
 
 
@@ -52,7 +53,7 @@ def test_deploy_doc_contract() -> None:
     assert "REDIS_URL" in content
     assert "NEO4J_URI" in content
     assert "ZEP_API_KEY" in content
-    assert "GOOGLE_API_KEY" in content
+    assert "GEMINI_BACKEND" in content or "Vertex" in content
     assert "GCP_PROJECT_ID" in content
     assert "vpc-access connectors create" in content
 
@@ -82,6 +83,7 @@ def test_deploy_dry_run_prints_gcloud_commands() -> None:
     assert "REDIS_URL=redis-url:latest" in output
     assert "NEO4J_URI=neo4j-uri:latest" in output
     assert "ZEP_API_KEY=zep-api-key:latest" in output
-    assert "GOOGLE_API_KEY=google-api-key:latest" in output
+    assert "GEMINI_BACKEND=vertex" in output
+    assert "--service-account=vertexai-api@mock-gcp-project.iam.gserviceaccount.com" in output
     assert "GCP_PROJECT_ID=mock-gcp-project" in output
     assert "Dry run complete" in output

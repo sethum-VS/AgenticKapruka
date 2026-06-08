@@ -14,9 +14,10 @@ from pydantic import BaseModel, ValidationError
 from app.templating import get_templates, render_product_carousel, render_tracking_status
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
-from graphs.nodes.analyze_intent import _extract_latest_user_message, create_genai_client
+from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.checkout.tracking import extract_order_number, tracking_output_from_tool_results
+from lib.genai.client import create_genai_client
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.zep.memory import format_memory_facts_block
 

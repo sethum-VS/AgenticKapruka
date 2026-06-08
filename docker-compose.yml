@@ -1,0 +1,14 @@
+# Local development dependencies for AgenticKapruka.
+# Redis Stack (RediSearch) is required for LangGraph checkpointer + sessions/cart.
+services:
+  redis:
+    image: redis/redis-stack-server:latest
+    container_name: agentic-kapruka-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s

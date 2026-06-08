@@ -13,7 +13,6 @@ _VALID_ENV: dict[str, str] = {
     "NEO4J_USER": "neo4j",
     "NEO4J_PASSWORD": "test-password",
     "ZEP_API_KEY": "zep-test-key",
-    "GOOGLE_API_KEY": "google-test-key",
     "GCP_PROJECT_ID": "test-project",
     "GCP_LOCATION": "us-central1",
     "KAPRUKA_MCP_URL": "https://mcp.kapruka.com/mcp",
@@ -24,6 +23,7 @@ _VALID_ENV: dict[str, str] = {
 def _apply_env(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
 
 def test_settings_loads_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,7 +38,7 @@ def test_settings_loads_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.neo4j_user == "neo4j"
     assert settings.neo4j_password == "test-password"
     assert settings.zep_api_key == "zep-test-key"
-    assert settings.google_api_key == "google-test-key"
+    assert settings.gemini_backend == "vertex"
     assert settings.gcp_project_id == "test-project"
     assert settings.gcp_location == "us-central1"
     assert settings.kapruka_mcp_url == "https://mcp.kapruka.com/mcp"
