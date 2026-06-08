@@ -969,7 +969,7 @@
       "Return 503 degraded when any critical service fails",
       "Write test with mocked services verifying response schema"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-082",

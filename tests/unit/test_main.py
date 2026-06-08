@@ -19,13 +19,33 @@ async def test_root_redirects_to_chat() -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_stub_returns_200() -> None:
+async def test_health_returns_aggregated_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /health exposes status and per-service probes (mocked in test_health.py)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setattr(
+        "lib.health.aggregator.list_categories",
+        AsyncMock(return_value=MagicMock()),
+    )
+
     application = create_app()
+    application.state.redis = MagicMock()
+    application.state.redis.ping = AsyncMock(return_value=True)
+    application.state.neo4j = MagicMock()
+    application.state.neo4j.health_check = AsyncMock(return_value=True)
+    application.state.zep = MagicMock()
+    application.state.zep.health_check = AsyncMock(return_value=True)
+    application.state.mcp_client = MagicMock()
+
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/health")
+
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    payload = response.json()
+    assert payload["status"] == "healthy"
+    assert set(payload["services"]) == {"redis", "neo4j", "zep", "mcp"}
+    assert all(svc["status"] == "up" for svc in payload["services"].values())
 
 
 @pytest.mark.asyncio

@@ -1,13 +1,20 @@
-"""Health check routes (stub until PRD-081)."""
+"""Aggregated health check routes."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+from lib.health.aggregator import AggregatedHealthResponse, aggregate_health
 
 router = APIRouter()
 
 
-@router.get("/health")
-async def health() -> dict[str, str]:
-    """Basic liveness probe until aggregated health lands in PRD-081."""
-    return {"status": "ok"}
+@router.get("/health", response_model=AggregatedHealthResponse)
+async def health(request: Request) -> JSONResponse:
+    """Readiness probe: Redis, Neo4j, Zep, and Kapruka MCP."""
+    body, status_code = await aggregate_health(request.app)
+    return JSONResponse(
+        status_code=status_code,
+        content=body.model_dump(),
+    )

@@ -646,3 +646,11 @@ Next: PRD-080 Multi-stage production Dockerfile.
 - README: production `docker build` / `docker run` / `curl /health` snippet.
 Files: Dockerfile, .dockerignore, tests/unit/test_dockerfile.py, README.md, prd.json
 Next: PRD-081 Aggregated health check endpoint.
+
+## PRD-081 — Aggregated health check endpoint
+- Added `lib/health/aggregator.py`: Pydantic `AggregatedHealthResponse` probes Redis `ping()`, Neo4j `health_check()`, Zep `health_check()`, and MCP `list_categories(depth=1)`; returns `healthy` + 200 when all up, `degraded` + 503 otherwise.
+- `GET /health` in `app/routes/health.py` returns JSON `{status, services: {redis, neo4j, zep, mcp}}` with per-service `up`/`down`.
+- Extended `app/lifespan.py`: optional connect for Redis, Neo4j, Zep, and Kapruka MCP on startup (`_connect_optional` logs and sets None on failure); closes MCP on shutdown.
+- Tests: `tests/unit/test_health.py` (aggregator + endpoint schema, 503 degraded path); updated `test_main.py`, `test_dependencies.py` lifespan coverage.
+Files: lib/health/{__init__,aggregator}.py, app/{routes/health,lifespan}.py, tests/unit/{test_health,test_main,test_dependencies}.py, README.md, prd.json
+Next: PRD-082 Gunicorn Uvicorn production entrypoint.

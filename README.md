@@ -42,6 +42,7 @@ Build and run the production image (slim CPU runtime for Cloud Run):
 docker build -t agentic-kapruka .
 docker run --rm -p 8080:8080 --env-file .env agentic-kapruka
 curl -s http://localhost:8080/health
+# {"status":"healthy","services":{"redis":{"status":"up"},"neo4j":{"status":"up"},"zep":{"status":"up"},"mcp":{"status":"up"}}}
 ```
 
 ## Development
