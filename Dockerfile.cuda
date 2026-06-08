@@ -1,0 +1,28 @@
+# Optional GPU development image for local cuGraph analytics experiments.
+# NOT used for Cloud Run production deploy — production uses NetworkX only
+# (lib/analytics/networkx_worker.py). Build with:
+#   docker build -f Dockerfile.cuda -t agentic-kapruka:cuda .
+# Requires NVIDIA Container Toolkit and a CUDA-capable GPU at runtime:
+#   docker run --gpus all agentic-kapruka:cuda
+
+FROM rapidsai/base:25.02-cuda12.8-py3.12 AS cuda-dev
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    USE_CUGRAPH=1
+
+COPY pyproject.toml README.md ./
+COPY app/ app/
+COPY lib/ lib/
+COPY graphs/ graphs/
+
+RUN pip install --upgrade pip && \
+    pip install '.[dev]' && \
+    pip install 'cugraph-cu12>=25.2,<26' --extra-index-url=https://pypi.nvidia.com
+
+RUN python -c "from lib.analytics.cugraph_optional import preferred_backend; print(preferred_backend())"
+
+CMD ["python", "-c", "from lib.analytics.cugraph_optional import cugraph_available; print('cugraph:', cugraph_available())"]

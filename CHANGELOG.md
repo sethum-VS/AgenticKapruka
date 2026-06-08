@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.7.0] - 2026-06-08
+
+### Added
+
+- 429 rate limit HTMX alert banner with Alpine.js Retry-After countdown and auto-dismiss (PRD-074)
+- NetworkX Louvain community detection background worker with Neo4j co-purchase and category-proximity fallback (PRD-075)
+- Optional cuGraph CUDA Dockerfile stage and lazy GPU backend for local dev (PRD-076)
+- Ragas golden evaluation dataset with 24 cases covering discovery, checkout, and tracking (PRD-077)
+
+### Fixed
+
+- Missing comma in `prd.json` PRD-078 entry that broke JSON parsing for Ralph
+
 ## [0.0.6.0] - 2026-06-08
 
 ### Added

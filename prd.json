@@ -885,7 +885,7 @@
       "Render templates/partials/rate_limit_banner.html with Alpine countdown",
       "Write test simulating 429 returns banner with data-retry-after attribute"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-075",
@@ -897,7 +897,7 @@
       "Run networkx.community.louvain_communities in thread executor",
       "Store community recommendations back to Neo4j RECOMMENDS relationships"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-076",
@@ -909,7 +909,7 @@
       "Create lib/analytics/cugraph_optional.py importing cugraph only when CUDA available",
       "Document in README that cuGraph stage is dev-only; Cloud Run uses NetworkX"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-077",
@@ -921,7 +921,7 @@
       "Cover birthday cake search, flower delivery check, and order tracking cases",
       "Validate JSON schema with pytest fixture loader"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-078",
