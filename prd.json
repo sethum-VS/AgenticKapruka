@@ -945,7 +945,7 @@
       "Run ruff and mypy with zero errors required to pass",
       "Run pytest tests/unit excluding integration tests requiring live services"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-080",

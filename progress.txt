@@ -631,3 +631,10 @@ Next: PRD-078 Ragas eval script and CI mock MCP fixture.
 - Tests: `tests/unit/test_mcp_mock.py`, `tests/unit/test_ragas_eval.py` (graph row collection, full golden dataset threshold).
 Files: tests/fixtures/mcp_mock.py, evals/{ragas_eval,ragas_ci_llm,__init__}.py, .github/workflows/ci.yml, tests/unit/{test_mcp_mock,test_ragas_eval}.py, prd.json
 Next: PRD-079 Ruff and mypy CI gate.
+
+## PRD-079 — Ruff and mypy CI gate
+- Extended `.github/workflows/ci.yml` with `lint-and-test` job: Python 3.12 matrix, `ruff check`, `ruff format --check`, `mypy app/ lib/ graphs/`, `pytest tests/unit -q` on push/PR (unit-only; integration tests excluded).
+- Kept existing `ragas-eval` job from PRD-078; both jobs share `pip install -e ".[dev]"` pattern.
+- Verified locally: ruff, mypy, and 441 unit tests pass.
+Files: .github/workflows/ci.yml, prd.json
+Next: PRD-080 Multi-stage production Dockerfile.
