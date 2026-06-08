@@ -191,6 +191,72 @@ A `degraded` response means one or more backends (Redis, Neo4j, Zep, MCP) is unr
 | MCP `down` | Egress blocked or wrong `KAPRUKA_MCP_URL` |
 | Container fails to start | Missing secret or IAM `secretAccessor` on Run service account |
 
-## CI/CD
+## CI/CD — GitHub Actions → Cloud Run
 
-Automated GitHub Actions deployment on push to `main` is covered in PRD-086 (`scripts/setup_github_cicd.sh`).
+Automated deployment on push to `main` is configured via `scripts/setup_github_cicd.sh`. The script uses the GitHub CLI to set repository secrets and scaffolds `.github/workflows/main.yml` with quality gates (Ruff, mypy, unit tests, Playwright E2E, Ragas eval) followed by a Cloud Run deploy job.
+
+### Prerequisites
+
+| Tool | Purpose |
+|------|---------|
+| [GitHub CLI (`gh`)](https://cli.github.com/) | `gh auth login` with permission to set repository secrets |
+| [gcloud CLI](https://cloud.google.com/sdk/docs/install) | Read `GCP_PROJECT_ID` / region defaults; create deploy service account |
+| GCP service account JSON key | CI deploy identity with `roles/run.admin`, `roles/artifactregistry.writer`, `roles/cloudbuild.builds.editor`, `roles/secretmanager.secretAccessor`, `roles/iam.serviceAccountUser` |
+
+Create a deploy service account (example):
+
+```bash
+export GCP_PROJECT_ID="$(gcloud config get-value project)"
+export DEPLOY_SA="github-actions-deploy@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud iam service-accounts create github-actions-deploy \
+  --display-name="GitHub Actions Cloud Run deploy"
+
+for role in run.admin artifactregistry.writer cloudbuild.builds.editor \
+  secretmanager.secretAccessor iam.serviceAccountUser; do
+  gcloud projects add-iam-policy-binding "${GCP_PROJECT_ID}" \
+    --member="serviceAccount:${DEPLOY_SA}" \
+    --role="roles/${role}"
+done
+
+gcloud iam service-accounts keys create sa-key.json \
+  --iam-account="${DEPLOY_SA}"
+```
+
+Ensure GCP Secret Manager secrets and the VPC connector exist (sections 3–4 above) before the first deploy.
+
+### One-time setup
+
+```bash
+export GCP_SA_KEY_FILE=./sa-key.json
+./scripts/setup_github_cicd.sh
+```
+
+This configures these GitHub repository secrets:
+
+| Secret | Value |
+|--------|-------|
+| `GCP_SA_KEY` | Service account JSON key (full file contents) |
+| `GCP_PROJECT_ID` | GCP project ID |
+| `GCP_REGION` | Deploy region (e.g. `us-central1`) |
+| `GCP_SERVICE_NAME` | Cloud Run service name (default `agentic-kapruka`) |
+| `GCP_AR_REPO` | Artifact Registry repository (default `agentic-kapruka`) |
+| `GCP_VPC_CONNECTOR` | VPC Access connector name (default `agentic-kapruka-connector`) |
+
+Options:
+
+```bash
+./scripts/setup_github_cicd.sh --dry-run          # preview gh secret set + workflow path
+./scripts/setup_github_cicd.sh --secrets-only       # secrets only, skip workflow write
+./scripts/setup_github_cicd.sh --workflow-only -f   # regenerate main.yml
+```
+
+### Workflow behavior
+
+On every push to `main`, `.github/workflows/main.yml`:
+
+1. Runs lint, type-check, unit tests, Playwright E2E smoke tests, and Ragas eval (mock MCP).
+2. When all jobs pass, builds the production image with `gcloud builds submit`, pushes to Artifact Registry, and runs `gcloud run deploy` with Secret Manager env vars (same mapping as `scripts/deploy_cloud_run.sh`).
+3. Verifies deployment with `curl` against `/health`.
+
+Pull requests continue to use `.github/workflows/ci.yml` for faster feedback without deploy.

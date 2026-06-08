@@ -1,0 +1,170 @@
+name: Main
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: main-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: Ruff, mypy, and unit tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Ruff check
+        run: ruff check .
+
+      - name: Ruff format
+        run: ruff format --check .
+
+      - name: Mypy
+        run: mypy app/ lib/ graphs/
+
+      - name: Unit tests
+        run: pytest tests/unit -q
+
+  e2e-smoke:
+    name: Playwright E2E smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Install Playwright Chromium
+        run: playwright install --with-deps chromium
+
+      - name: E2E smoke tests
+        run: pytest tests/e2e -q
+
+  ragas-eval:
+    name: Ragas golden dataset eval
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run Ragas evaluation (mock MCP)
+        run: python -m evals.ragas_eval --ci
+
+  deploy:
+    name: Deploy to Cloud Run
+    needs: [lint-and-test, e2e-smoke, ragas-eval]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ secrets.GCP_REGION }}
+      SERVICE_NAME: ${{ secrets.GCP_SERVICE_NAME }}
+      AR_REPO: ${{ secrets.GCP_AR_REPO }}
+      VPC_CONNECTOR: ${{ secrets.GCP_VPC_CONNECTOR }}
+      KAPRUKA_MCP_URL: https://mcp.kapruka.com/mcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Enable required APIs
+        run: |
+          gcloud services enable \
+            artifactregistry.googleapis.com \
+            cloudbuild.googleapis.com \
+            run.googleapis.com \
+            secretmanager.googleapis.com \
+            vpcaccess.googleapis.com \
+            --project="${GCP_PROJECT_ID}"
+
+      - name: Ensure Artifact Registry repository
+        run: |
+          if ! gcloud artifacts repositories describe "${AR_REPO}" \
+            --project="${GCP_PROJECT_ID}" \
+            --location="${GCP_REGION}" >/dev/null 2>&1; then
+            gcloud artifacts repositories create "${AR_REPO}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${GCP_REGION}" \
+              --repository-format=docker \
+              --description="AgenticKapruka container images"
+          fi
+
+      - name: Build and push image
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::7}"
+          IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${AR_REPO}/${SERVICE_NAME}:${IMAGE_TAG}"
+          echo "IMAGE_URI=${IMAGE_URI}" >> "${GITHUB_ENV}"
+          gcloud builds submit --project="${GCP_PROJECT_ID}" --tag "${IMAGE_URI}" .
+
+      - name: Deploy to Cloud Run
+        run: |
+          SECRETS="REDIS_URL=redis-url:latest"
+          SECRETS+=",NEO4J_URI=neo4j-uri:latest"
+          SECRETS+=",NEO4J_USER=neo4j-user:latest"
+          SECRETS+=",NEO4J_PASSWORD=neo4j-password:latest"
+          SECRETS+=",ZEP_API_KEY=zep-api-key:latest"
+          SECRETS+=",GOOGLE_API_KEY=google-api-key:latest"
+          SECRETS+=",SESSION_SECRET=session-secret:latest"
+          ENV_VARS="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},KAPRUKA_MCP_URL=${KAPRUKA_MCP_URL}"
+
+          gcloud run deploy "${SERVICE_NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --platform=managed \
+            --image="${IMAGE_URI}" \
+            --allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=10 \
+            --memory=1Gi \
+            --cpu=1 \
+            --concurrency=80 \
+            --timeout=120 \
+            --port=8080 \
+            --vpc-connector="${VPC_CONNECTOR}" \
+            --vpc-egress=private-ranges-only \
+            --set-secrets="${SECRETS}" \
+            --set-env-vars="${ENV_VARS}"
+
+      - name: Verify deployment health
+        run: |
+          SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --format='value(status.url)')"
+          echo "Service URL: ${SERVICE_URL}"
+          curl -fsS "${SERVICE_URL}/health"

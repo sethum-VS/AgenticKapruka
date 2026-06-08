@@ -689,3 +689,12 @@ Next: PRD-085 Playwright E2E smoke tests.
 - Tests: `tests/unit/test_e2e_app.py`; 4 E2E + 462 unit tests pass.
 Files: tests/e2e/*, tests/fixtures/mcp_mock.py, tests/unit/test_e2e_app.py, tests/unit/test_cart_partial.py, static/js/{chat-sse,cart-drawer}.js, templates/chat/index.html, templates/checkout/cart_partial.html, pyproject.toml, .github/workflows/ci.yml, prd.json
 Next: PRD-086 IaC bash script for GitHub Actions secrets and Cloud Run CI/CD.
+
+## PRD-086 — IaC bash script for GitHub Actions secrets and Cloud Run CI/CD
+- Added `scripts/setup_github_cicd.sh`: `gh secret set` for GCP_SA_KEY, GCP_PROJECT_ID, GCP_REGION, GCP_SERVICE_NAME, GCP_AR_REPO, GCP_VPC_CONNECTOR; scaffolds `.github/workflows/main.yml` with quality gates (ruff, mypy, unit, E2E, Ragas) + deploy job (`google-github-actions/auth`, `gcloud builds submit`, `gcloud run deploy`, `/health` curl).
+- Flags: `--dry-run`, `--force`, `--secrets-only`, `--workflow-only`; `GITHUB_WORKFLOW_FILE` override for tests; built-in YAML structural validation.
+- Scaffolded `.github/workflows/main.yml` committed; `ci.yml` remains for PRs / `ralph/sprint-1`, `main.yml` runs full pipeline on push to `main`.
+- Extended `docs/DEPLOY.md` with gh/gcloud prerequisites, deploy SA IAM roles, secret table, and workflow behavior; README links setup command.
+- Tests: `tests/unit/test_setup_github_cicd.py` (script contract, main.yml YAML, dry-run, mocked gh secrets, workflow-only scaffold).
+Files: scripts/setup_github_cicd.sh, .github/workflows/main.yml, docs/DEPLOY.md, README.md, tests/unit/test_setup_github_cicd.py, prd.json
+Next: All PRDs complete.

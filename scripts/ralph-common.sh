@@ -291,8 +291,9 @@ run_ralph_iteration() {
 
   if [[ -n "$RALPH_INTERACTIVE" ]]; then
     echo "Launching Cursor Agent interactive UI — quit the session when the PRD item is done." >&2
-    _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"
-    agent_exit="${PIPESTATUS[0]}"
+    # Must not pipe stdout (e.g. tee): cursor-agent needs a TTY for the full-screen UI.
+    _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt"
+    agent_exit=$?
   else
     # Stream live via tee — do NOT use command substitution (buffers until agent exits).
     _run_agent_with_optional_timeout "$agent_bin" "${agent_args[@]}" "$prompt" | tee "$RALPH_LAST_LOG"

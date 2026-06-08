@@ -75,6 +75,12 @@ Production deploy steps (Artifact Registry, VPC connector, Secret Manager, `gclo
 ./scripts/deploy_cloud_run.sh              # build, push, deploy
 ```
 
+GitHub Actions CI/CD (secrets + `main` branch deploy workflow):
+
+```bash
+GCP_SA_KEY_FILE=./sa-key.json ./scripts/setup_github_cicd.sh
+```
+
 Full walkthrough: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Ralph autonomous workflow

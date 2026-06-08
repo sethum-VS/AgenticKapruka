@@ -1029,6 +1029,6 @@
       "Script scaffolds .github/workflows/main.yml with quality gates and a deploy job that builds, pushes to Artifact Registry, and runs gcloud run deploy on push to main",
       "Document script prerequisites (gh auth, gcloud) in docs/DEPLOY.md and verify workflow YAML syntax"
     ],
-    "passes": false
+    "passes": true
   }
 ]
