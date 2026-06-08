@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal, Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+GeminiBackend = Literal["vertex", "api_key"]
 
 
 class Settings(BaseSettings):
@@ -23,7 +26,14 @@ class Settings(BaseSettings):
     neo4j_user: str = Field(..., min_length=1)
     neo4j_password: str = Field(..., min_length=1)
     zep_api_key: str = Field(..., min_length=1)
-    google_api_key: str = Field(..., min_length=1)
+    gemini_backend: GeminiBackend = Field(
+        default="vertex",
+        description="vertex (ADC + Vertex AI) or api_key (Gemini Developer API)",
+    )
+    google_api_key: str | None = Field(
+        default=None,
+        description="Gemini Developer API key; required only when GEMINI_BACKEND=api_key",
+    )
     gcp_project_id: str = Field(..., min_length=1)
     gcp_location: str = Field(..., min_length=1)
     kapruka_mcp_url: str = Field(
@@ -60,7 +70,6 @@ class Settings(BaseSettings):
         "neo4j_user",
         "neo4j_password",
         "zep_api_key",
-        "google_api_key",
         "gcp_project_id",
         "gcp_location",
         "session_secret",
@@ -73,6 +82,21 @@ class Settings(BaseSettings):
             msg = "Production configuration value must not be empty"
             raise ValueError(msg)
         return stripped
+
+    @field_validator("google_api_key", mode="before")
+    @classmethod
+    def empty_google_api_key_to_none(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = str(value).strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def validate_gemini_backend(self) -> Self:
+        if self.gemini_backend == "api_key" and not self.google_api_key:
+            msg = "GOOGLE_API_KEY is required when GEMINI_BACKEND=api_key"
+            raise ValueError(msg)
+        return self
 
 
 @lru_cache

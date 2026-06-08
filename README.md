@@ -21,9 +21,14 @@ Bootstrap a local `.env` from gcloud (or copy `.env.example` and fill values man
 
 ```bash
 ./scripts/bootstrap_env.sh
+gcloud auth application-default login   # Vertex AI Gemini (service account ADC)
+# Start Redis Stack locally (LangGraph checkpointer needs RediSearch):
+docker run -d --name agentic-kapruka-redis -p 6379:6379 redis/redis-stack-server:latest
 # Edit NEO4J_* and ZEP_API_KEY in .env, then:
 uvicorn app.main:app --reload
 ```
+
+Gemini chat uses **Vertex AI** (`GEMINI_BACKEND=vertex`, default) with Application Default Credentials — not the Gemini API key / AI Studio prepaid quota. Set `GEMINI_BACKEND=api_key` and `GOOGLE_API_KEY` only if you need the Developer API.
 
 ## Graph analytics backends
 

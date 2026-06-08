@@ -23,7 +23,6 @@ _VALID_ENV: dict[str, str] = {
     "NEO4J_USER": "neo4j",
     "NEO4J_PASSWORD": "test-password",
     "ZEP_API_KEY": "zep-test-key",
-    "GOOGLE_API_KEY": "google-test-key",
     "GCP_PROJECT_ID": "test-project",
     "GCP_LOCATION": "us-central1",
     "KAPRUKA_MCP_URL": "https://mcp.kapruka.com/mcp",

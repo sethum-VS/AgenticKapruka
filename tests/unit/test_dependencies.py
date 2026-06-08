@@ -95,6 +95,7 @@ async def test_lifespan_stores_service_clients_on_app_state(
     @classmethod
     async def mock_zep_connect(cls, api_key: str, **kwargs: Any) -> ZepClient:
         client = ZepClient(api_key, client=MagicMock())
+        client.health_check = AsyncMock(return_value=True)  # type: ignore[method-assign]
         captured["zep"] = client
         return client
 

@@ -12,8 +12,8 @@ from google.genai import types
 from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel, ValidationError
 
-from app.config import get_settings
 from graphs.state import AgentState, Intent
+from lib.genai.client import create_genai_client
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
@@ -40,12 +40,6 @@ class IntentClassification(BaseModel):
     """Structured Gemini response for intent routing."""
 
     intent: Intent
-
-
-def create_genai_client(*, api_key: str | None = None) -> genai.Client:
-    """Build a google-genai client; inject api_key in tests."""
-    key = api_key if api_key is not None else get_settings().google_api_key
-    return genai.Client(api_key=key)
 
 
 def _extract_latest_user_message(messages: list[BaseMessage]) -> str:

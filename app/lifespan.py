@@ -59,10 +59,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings.neo4j_password,
         ),
     )
-    app.state.zep = await _connect_optional(
+    zep_client = await _connect_optional(
         "Zep",
         lambda: ZepClient.connect(settings.zep_api_key),
     )
+    if zep_client is not None and not await zep_client.health_check():
+        logger.warning("Zep health check failed; chat will run without memory")
+        await _close_client(zep_client, "Zep")
+        zep_client = None
+    app.state.zep = zep_client
     app.state.mcp_client = await _connect_optional(
         "Kapruka MCP",
         lambda: MCPHttpClient.connect(settings.kapruka_mcp_url),

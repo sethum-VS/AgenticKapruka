@@ -59,9 +59,15 @@ Thumbs.db
 
 # Logs and temp
 *.log
-ralph-iter.*
+.dev/
 
-# Cursor — keep project skills, ignore local IDE state
-.cursor/*
-!.cursor/skills/
-!.cursor/skills/**
+# Cursor — local IDE state only
+.cursor/
+.gstack/
+
+# Ralph loops — local agent workflow (not pushed to GitHub)
+ralph-iter.*
+scripts/ralph*.sh
+RALPH_PROMPT.md
+prd.json
+progress.txt

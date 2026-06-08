@@ -22,10 +22,10 @@ def _settings() -> Settings:
         neo4j_user="neo4j",
         neo4j_password="test-password",
         zep_api_key="zep-test-key",
-        google_api_key="google-test-key",
         gcp_project_id="test-project",
         gcp_location="us-central1",
         session_secret="x" * 32,
+        _env_file=None,
     )
 
 
