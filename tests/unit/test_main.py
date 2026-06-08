@@ -27,6 +27,14 @@ async def test_health_returns_aggregated_json(monkeypatch: pytest.MonkeyPatch) -
         "lib.health.aggregator.list_categories",
         AsyncMock(return_value=MagicMock()),
     )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_category_embeddings",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_category_vector_index",
+        AsyncMock(return_value=True),
+    )
 
     application = create_app()
     application.state.redis = MagicMock()
@@ -44,7 +52,13 @@ async def test_health_returns_aggregated_json(monkeypatch: pytest.MonkeyPatch) -
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "healthy"
-    assert set(payload["services"]) == {"redis", "neo4j", "zep", "mcp"}
+    assert set(payload["services"]) == {
+        "redis",
+        "neo4j",
+        "neo4j_graphrag",
+        "zep",
+        "mcp",
+    }
     assert all(svc["status"] == "up" for svc in payload["services"].values())
 
 

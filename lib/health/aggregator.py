@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.tools.list_categories import list_categories
 from lib.neo4j.client import Neo4jClient
+from lib.neo4j.embed_ontology import has_category_embeddings
+from lib.neo4j.vector_search import has_category_vector_index
 from lib.redis.client import RedisClient
 from lib.zep.client import ZepClient
 
@@ -31,6 +33,7 @@ class ServicesHealth(BaseModel):
 
     redis: ServiceHealth
     neo4j: ServiceHealth
+    neo4j_graphrag: ServiceHealth
     zep: ServiceHealth
     mcp: ServiceHealth
 
@@ -66,6 +69,21 @@ async def _check_neo4j(client: Neo4jClient | None) -> ServiceHealth:
     return ServiceHealth(status="up" if ok else "down")
 
 
+async def _check_neo4j_graphrag(client: Neo4jClient | None) -> ServiceHealth:
+    if client is None:
+        return ServiceHealth(status="down")
+    try:
+        if not await client.health_check():
+            return ServiceHealth(status="down")
+        has_embeddings = await has_category_embeddings(client)
+        has_index = await has_category_vector_index(client)
+    except Exception:
+        logger.exception("Neo4j GraphRAG health probe failed")
+        return ServiceHealth(status="down")
+    ready = has_embeddings and has_index
+    return ServiceHealth(status="up" if ready else "down")
+
+
 async def _check_zep(client: ZepClient | None) -> ServiceHealth:
     if client is None:
         return ServiceHealth(status="down")
@@ -98,6 +116,7 @@ async def aggregate_health(app: FastAPI) -> tuple[AggregatedHealthResponse, int]
     services = ServicesHealth(
         redis=await _check_redis(redis_client),
         neo4j=await _check_neo4j(neo4j_client),
+        neo4j_graphrag=await _check_neo4j_graphrag(neo4j_client),
         zep=await _check_zep(zep_client),
         mcp=await _check_mcp(mcp_client),
     )
@@ -107,6 +126,7 @@ async def aggregate_health(app: FastAPI) -> tuple[AggregatedHealthResponse, int]
         for svc in (
             services.redis,
             services.neo4j,
+            services.neo4j_graphrag,
             services.zep,
             services.mcp,
         )

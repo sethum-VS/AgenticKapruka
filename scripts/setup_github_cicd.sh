@@ -28,6 +28,7 @@ WORKFLOW_ONLY=false
 SERVICE_NAME="${SERVICE_NAME:-agentic-kapruka}"
 AR_REPO="${AR_REPO:-agentic-kapruka}"
 VPC_CONNECTOR="${VPC_CONNECTOR:-agentic-kapruka-connector}"
+RUN_SERVICE_ACCOUNT="${RUN_SERVICE_ACCOUNT:-vertexai-api}"
 
 usage() {
   cat <<'EOF'
@@ -48,6 +49,7 @@ Environment:
   SERVICE_NAME           Cloud Run service name (default: agentic-kapruka)
   AR_REPO                Artifact Registry repo (default: agentic-kapruka)
   VPC_CONNECTOR          VPC Access connector name (default: agentic-kapruka-connector)
+  RUN_SERVICE_ACCOUNT    Cloud Run runtime SA short name (default: vertexai-api)
 
 Options:
   --dry-run, -n       Print planned gh/gcloud actions without applying
@@ -175,9 +177,10 @@ set_github_secrets() {
   run_cmd gh secret set GCP_SERVICE_NAME --body "${SERVICE_NAME}"
   run_cmd gh secret set GCP_AR_REPO --body "${AR_REPO}"
   run_cmd gh secret set GCP_VPC_CONNECTOR --body "${VPC_CONNECTOR}"
+  run_cmd gh secret set GCP_RUN_SERVICE_ACCOUNT --body "${RUN_SERVICE_ACCOUNT}"
 
   echo "GitHub secrets configured: GCP_SA_KEY, GCP_PROJECT_ID, GCP_REGION," >&2
-  echo "  GCP_SERVICE_NAME, GCP_AR_REPO, GCP_VPC_CONNECTOR" >&2
+  echo "  GCP_SERVICE_NAME, GCP_AR_REPO, GCP_VPC_CONNECTOR, GCP_RUN_SERVICE_ACCOUNT" >&2
 }
 
 write_workflow_file() {
@@ -236,7 +239,7 @@ jobs:
         run: mypy app/ lib/ graphs/
 
       - name: Unit tests
-        run: pytest tests/unit -q
+        run: pytest tests/unit -q -m "not browser"
 
   e2e-smoke:
     name: Playwright E2E smoke tests
@@ -258,6 +261,9 @@ jobs:
 
       - name: E2E smoke tests
         run: pytest tests/e2e -q
+
+      - name: Browser component harness tests
+        run: pytest tests/unit -q -m browser
 
   ragas-eval:
     name: Ragas golden dataset eval
@@ -288,6 +294,7 @@ jobs:
       SERVICE_NAME: ${{ secrets.GCP_SERVICE_NAME }}
       AR_REPO: ${{ secrets.GCP_AR_REPO }}
       VPC_CONNECTOR: ${{ secrets.GCP_VPC_CONNECTOR }}
+      RUN_SERVICE_ACCOUNT: ${{ secrets.GCP_RUN_SERVICE_ACCOUNT }}
       KAPRUKA_MCP_URL: https://mcp.kapruka.com/mcp
     steps:
       - name: Checkout
@@ -304,6 +311,7 @@ jobs:
       - name: Enable required APIs
         run: |
           gcloud services enable \
+            aiplatform.googleapis.com \
             artifactregistry.googleapis.com \
             cloudbuild.googleapis.com \
             run.googleapis.com \
@@ -332,14 +340,15 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
+          RUN_SA="${RUN_SERVICE_ACCOUNT:-vertexai-api}"
+          RUN_SA_EMAIL="${RUN_SA}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
           SECRETS="REDIS_URL=redis-url:latest"
           SECRETS+=",NEO4J_URI=neo4j-uri:latest"
           SECRETS+=",NEO4J_USER=neo4j-user:latest"
           SECRETS+=",NEO4J_PASSWORD=neo4j-password:latest"
           SECRETS+=",ZEP_API_KEY=zep-api-key:latest"
-          SECRETS+=",GOOGLE_API_KEY=google-api-key:latest"
           SECRETS+=",SESSION_SECRET=session-secret:latest"
-          ENV_VARS="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},KAPRUKA_MCP_URL=${KAPRUKA_MCP_URL}"
+          ENV_VARS="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},GEMINI_BACKEND=vertex,KAPRUKA_MCP_URL=${KAPRUKA_MCP_URL}"
 
           gcloud run deploy "${SERVICE_NAME}" \
             --project="${GCP_PROJECT_ID}" \
@@ -354,6 +363,7 @@ jobs:
             --concurrency=80 \
             --timeout=120 \
             --port=8080 \
+            --service-account="${RUN_SA_EMAIL}" \
             --vpc-connector="${VPC_CONNECTOR}" \
             --vpc-egress=private-ranges-only \
             --set-secrets="${SECRETS}" \

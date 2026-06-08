@@ -14,6 +14,10 @@ from lib.neo4j.embed_ontology import (
     has_category_embeddings,
 )
 from lib.neo4j.ontology import LABEL_CATEGORY, LABEL_OCCASION, LABEL_PRODUCT_TYPE
+from lib.neo4j.vector_search import (
+    create_category_vector_index,
+    has_category_vector_index,
+)
 
 
 async def _run() -> int:
@@ -29,9 +33,15 @@ async def _run() -> int:
             print("ERROR: no Category nodes with embedding after embed run", file=sys.stderr)
             return 1
 
+        await create_category_vector_index(client)
+        if not await has_category_vector_index(client):
+            print("ERROR: vector index missing after create", file=sys.stderr)
+            return 1
+
         print(
             f"Embedded {stats.nodes_embedded} ontology nodes in {stats.batches_written} batch(es)."
         )
+        print("Vector index ontology_category_embedding OK.")
         for label in (LABEL_CATEGORY, LABEL_OCCASION, LABEL_PRODUCT_TYPE):
             count = await count_nodes_with_embedding(client, label=label)
             print(f"  {label} with embedding: {count}")
