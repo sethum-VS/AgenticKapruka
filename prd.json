@@ -933,7 +933,7 @@
       "Create tests/fixtures/mcp_mock.py returning deterministic JSON for all 7 tools",
       "Add CI job running ragas_eval with thresholds context_precision >= 0.7"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-079",
@@ -945,7 +945,7 @@
       "Run ruff and mypy with zero errors required to pass",
       "Run pytest tests/unit excluding integration tests requiring live services"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-080",
@@ -957,7 +957,7 @@
       "Runtime stage uses python:3.12-slim with gunicorn app.main:app -k uvicorn.workers.UvicornWorker",
       "docker build succeeds and container starts on PORT 8080"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-081",
@@ -969,7 +969,7 @@
       "Return 503 degraded when any critical service fails",
       "Write test with mocked services verifying response schema"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-082",
@@ -981,7 +981,7 @@
       "Set graceful_timeout and keepalive for Cloud Run request patterns",
       "Verify gunicorn starts and serves /health with 200"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-083",
@@ -993,7 +993,7 @@
       "Write REDIS_URL=redis://localhost:6379/0 and KAPRUKA_MCP_URL default; Neo4j and ZEP_API_KEY remain manual placeholders",
       "Confirm .env and .env.* are gitignored with !.env.example exception; run bootstrap script and verify Settings loads without validation errors"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-084",
@@ -1005,7 +1005,7 @@
       "Document gcloud run deploy with --vpc-connector, --set-secrets, --min-instances 0",
       "Include env var checklist for REDIS_URL, NEO4J_URI, ZEP_API_KEY, GOOGLE_API_KEY, GCP_PROJECT_ID"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-085",
@@ -1017,7 +1017,7 @@
       "Test: load /chat, submit search message, verify product card appears in DOM",
       "Test: add to cart and verify cart drawer shows item; mock create_order in test env"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-086",
@@ -1029,6 +1029,6 @@
       "Script scaffolds .github/workflows/main.yml with quality gates and a deploy job that builds, pushes to Artifact Registry, and runs gcloud run deploy on push to main",
       "Document script prerequisites (gh auth, gcloud) in docs/DEPLOY.md and verify workflow YAML syntax"
     ],
-    "passes": false
+    "passes": true
   }
 ]

@@ -622,3 +622,79 @@ Next: PRD-077 Ragas evaluation golden dataset.
 - Tests: `tests/unit/test_golden_dataset.py` (fixture loader, ≥20 cases, scenario coverage, PRD anchor cases, unknown-tool rejection).
 Files: evals/{__init__,golden_dataset,golden_dataset.json}, tests/unit/test_golden_dataset.py, prd.json
 Next: PRD-078 Ragas eval script and CI mock MCP fixture.
+
+## PRD-078 — Ragas eval script and CI mock MCP fixture
+- Added `tests/fixtures/mcp_mock.py`: `MockMCPHttpClient` + `mock_mcp_response()` with deterministic JSON for all 7 Kapruka MCP tools; query/order/city params reflected in payloads.
+- Added `evals/ragas_eval.py`: `run_ragas_eval()` / `run_full_ragas_eval()` run shopping graph per golden case with mock MCP + intent-specific Gemini mock; score context_precision, answer_relevancy, faithfulness via Ragas; `--ci` gate enforces context_precision ≥ 0.7 (24-case run ~0.96).
+- Added `evals/ragas_ci_llm.py`: `CiRagasChatModel` deterministic judge LLM for CI (no API keys).
+- Added `.github/workflows/ci.yml` `ragas-eval` job: `python -m evals.ragas_eval --ci`.
+- Tests: `tests/unit/test_mcp_mock.py`, `tests/unit/test_ragas_eval.py` (graph row collection, full golden dataset threshold).
+Files: tests/fixtures/mcp_mock.py, evals/{ragas_eval,ragas_ci_llm,__init__}.py, .github/workflows/ci.yml, tests/unit/{test_mcp_mock,test_ragas_eval}.py, prd.json
+Next: PRD-079 Ruff and mypy CI gate.
+
+## PRD-079 — Ruff and mypy CI gate
+- Extended `.github/workflows/ci.yml` with `lint-and-test` job: Python 3.12 matrix, `ruff check`, `ruff format --check`, `mypy app/ lib/ graphs/`, `pytest tests/unit -q` on push/PR (unit-only; integration tests excluded).
+- Kept existing `ragas-eval` job from PRD-078; both jobs share `pip install -e ".[dev]"` pattern.
+- Verified locally: ruff, mypy, and 441 unit tests pass.
+Files: .github/workflows/ci.yml, prd.json
+Next: PRD-080 Multi-stage production Dockerfile.
+
+## PRD-080 — Multi-stage production Dockerfile
+- Added `Dockerfile`: builder stage (`python:3.12-slim`) venv `pip install .`, Tailwind standalone compile to `static/css/app.css`, copies `templates/` + `static/` into site-packages (paths resolve via `app/*` → `parent.parent`); runtime stage non-root `app` user, `PORT=8080`, `gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080`.
+- Added `.dockerignore` excluding tests, evals, secrets, dev CUDA image, and generated `bin/`.
+- Tests: `tests/unit/test_dockerfile.py` (multi-stage contract); verified `docker build` + container `/health` → `{"status":"ok"}` on port 8080.
+- README: production `docker build` / `docker run` / `curl /health` snippet.
+Files: Dockerfile, .dockerignore, tests/unit/test_dockerfile.py, README.md, prd.json
+Next: PRD-081 Aggregated health check endpoint.
+
+## PRD-081 — Aggregated health check endpoint
+- Added `lib/health/aggregator.py`: Pydantic `AggregatedHealthResponse` probes Redis `ping()`, Neo4j `health_check()`, Zep `health_check()`, and MCP `list_categories(depth=1)`; returns `healthy` + 200 when all up, `degraded` + 503 otherwise.
+- `GET /health` in `app/routes/health.py` returns JSON `{status, services: {redis, neo4j, zep, mcp}}` with per-service `up`/`down`.
+- Extended `app/lifespan.py`: optional connect for Redis, Neo4j, Zep, and Kapruka MCP on startup (`_connect_optional` logs and sets None on failure); closes MCP on shutdown.
+- Tests: `tests/unit/test_health.py` (aggregator + endpoint schema, 503 degraded path); updated `test_main.py`, `test_dependencies.py` lifespan coverage.
+Files: lib/health/{__init__,aggregator}.py, app/{routes/health,lifespan}.py, tests/unit/{test_health,test_main,test_dependencies}.py, README.md, prd.json
+Next: PRD-082 Gunicorn Uvicorn production entrypoint.
+
+## PRD-082 — Gunicorn Uvicorn production entrypoint
+- Added `gunicorn.conf.py`: `workers = 2 * cpu_count + 1`, `worker_class = uvicorn.workers.UvicornWorker`, `bind` from `PORT` (default 8080), `timeout=120` for SSE streams, `graceful_timeout=30`, `keepalive=5` for Cloud Run drain/LB reuse.
+- Updated `Dockerfile` CMD to `gunicorn -c gunicorn.conf.py app.main:app`; copies config into runtime image with comment documenting entrypoint.
+- README documents local `gunicorn -c gunicorn.conf.py` equivalent.
+- Tests: `tests/unit/test_gunicorn_conf.py` (config values, PORT bind, subprocess serves `/health` JSON); updated `test_dockerfile.py` for new CMD contract.
+- Verified: ruff, mypy, 452 unit tests pass; gunicorn subprocess integration test reaches `/health` (200 or 503 without live backends).
+Files: gunicorn.conf.py, Dockerfile, README.md, tests/unit/{test_gunicorn_conf,test_dockerfile}.py, prd.json
+Next: PRD-083 Local .env bootstrap via gcloud CLI.
+
+## PRD-083 — Local .env bootstrap via gcloud CLI
+- Added `scripts/bootstrap_env.sh`: reads `GCP_PROJECT_ID` and `GCP_LOCATION` from gcloud config; creates or reuses a `generativelanguage.googleapis.com` API key via `gcloud services api-keys`; generates `SESSION_SECRET` with `secrets.token_urlsafe(48)`; writes `REDIS_URL` and `KAPRUKA_MCP_URL` defaults; leaves Neo4j and Zep as documented placeholders from `.env.example`.
+- `BOOTSTRAP_ENV_FILE` override for tests; `--force` to overwrite existing `.env`; chmod 600 on output.
+- Confirmed `.gitignore` already ignores `.env` / `.env.*` with `!.env.example`.
+- Tests: `tests/unit/test_bootstrap_env.py` (gitignore contract, script contract, mocked gcloud run + Settings load, overwrite guard).
+- README quick start documents `./scripts/bootstrap_env.sh`.
+Files: scripts/bootstrap_env.sh, tests/unit/test_bootstrap_env.py, README.md, prd.json
+Next: PRD-084 Google Cloud Run deployment with gcloud.
+
+## PRD-084 — Google Cloud Run deployment with gcloud
+- Added `scripts/deploy_cloud_run.sh`: enables required GCP APIs, creates Artifact Registry repo if missing, builds via `gcloud builds submit` (documents local `docker build`/`push` alternative), deploys with `--vpc-connector`, `--vpc-egress=private-ranges-only`, `--set-secrets` for all runtime credentials, `--set-env-vars` for GCP_PROJECT_ID/GCP_LOCATION/KAPRUKA_MCP_URL, `--min-instances=0`; supports `--dry-run` and `--skip-build`.
+- Added `docs/DEPLOY.md`: step-by-step gcloud walkthrough (Artifact Registry, Cloud Build / docker push, VPC connector for Memorystore, Secret Manager setup + IAM, env var checklist, manual `gcloud run deploy`, verify `/health`).
+- README links to deploy script and DEPLOY.md.
+- Tests: `tests/unit/test_deploy_cloud_run.py` (script + doc contract, dry-run output).
+Files: scripts/deploy_cloud_run.sh, docs/DEPLOY.md, tests/unit/test_deploy_cloud_run.py, README.md, prd.json
+Next: PRD-085 Playwright E2E smoke tests.
+
+## PRD-085 — Playwright E2E smoke tests
+- Added `tests/e2e/`: `e2e_app.py` (fakeredis + MockMCPHttpClient + mock Gemini), `e2e_server.py` (uvicorn on :8080), `conftest.py` (session server + pytest-playwright `base_url`), `test_smoke.py` (chat load, search→product card, cart drawer add, checkout delivery form without create_order).
+- Extended `tests/fixtures/mcp_mock.py` with `call_log`; E2E-only `GET /e2e/mcp-calls` asserts `kapruka_create_order` never invoked.
+- `pyproject.toml`: `base_url = http://localhost:8080`, `e2e`/`browser` markers; CI job `e2e-smoke` runs `playwright install chromium` + `pytest tests/e2e`.
+- Bug fixes found during E2E: `chat-sse.js` strips HTMX attrs before htmx init (inline prep script), processes only new SSE fragments; `cart-drawer.js` reads live `#cart-panel` count after outerHTML swap + delegated proceed-checkout clicks; `cart_partial.html` drops Alpine `@click` on HTMX-swapped button.
+- Tests: `tests/unit/test_e2e_app.py`; 4 E2E + 462 unit tests pass.
+Files: tests/e2e/*, tests/fixtures/mcp_mock.py, tests/unit/test_e2e_app.py, tests/unit/test_cart_partial.py, static/js/{chat-sse,cart-drawer}.js, templates/chat/index.html, templates/checkout/cart_partial.html, pyproject.toml, .github/workflows/ci.yml, prd.json
+Next: PRD-086 IaC bash script for GitHub Actions secrets and Cloud Run CI/CD.
+
+## PRD-086 — IaC bash script for GitHub Actions secrets and Cloud Run CI/CD
+- Added `scripts/setup_github_cicd.sh`: `gh secret set` for GCP_SA_KEY, GCP_PROJECT_ID, GCP_REGION, GCP_SERVICE_NAME, GCP_AR_REPO, GCP_VPC_CONNECTOR; scaffolds `.github/workflows/main.yml` with quality gates (ruff, mypy, unit, E2E, Ragas) + deploy job (`google-github-actions/auth`, `gcloud builds submit`, `gcloud run deploy`, `/health` curl).
+- Flags: `--dry-run`, `--force`, `--secrets-only`, `--workflow-only`; `GITHUB_WORKFLOW_FILE` override for tests; built-in YAML structural validation.
+- Scaffolded `.github/workflows/main.yml` committed; `ci.yml` remains for PRs / `ralph/sprint-1`, `main.yml` runs full pipeline on push to `main`.
+- Extended `docs/DEPLOY.md` with gh/gcloud prerequisites, deploy SA IAM roles, secret table, and workflow behavior; README links setup command.
+- Tests: `tests/unit/test_setup_github_cicd.py` (script contract, main.yml YAML, dry-run, mocked gh secrets, workflow-only scaffold).
+Files: scripts/setup_github_cicd.sh, .github/workflows/main.yml, docs/DEPLOY.md, README.md, tests/unit/test_setup_github_cicd.py, prd.json
+Next: All PRDs complete.

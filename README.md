@@ -17,9 +17,11 @@ source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
-Copy `.env.example` to `.env` once PRD-004 lands, then:
+Bootstrap a local `.env` from gcloud (or copy `.env.example` and fill values manually):
 
 ```bash
+./scripts/bootstrap_env.sh
+# Edit NEO4J_* and ZEP_API_KEY in .env, then:
 uvicorn app.main:app --reload
 ```
 
@@ -36,7 +38,20 @@ docker build -f Dockerfile.cuda -t agentic-kapruka:cuda .
 docker run --gpus all agentic-kapruka:cuda
 ```
 
-The production Dockerfile (PRD-080) builds the slim CPU runtime used for Cloud Run.
+Build and run the production image (slim CPU runtime for Cloud Run):
+
+```bash
+docker build -t agentic-kapruka .
+docker run --rm -p 8080:8080 --env-file .env agentic-kapruka
+curl -s http://localhost:8080/health
+# {"status":"healthy","services":{"redis":{"status":"up"},"neo4j":{"status":"up"},"zep":{"status":"up"},"mcp":{"status":"up"}}}
+```
+
+The container starts Gunicorn with Uvicorn workers via `gunicorn.conf.py` (`workers = 2 * cpu_count + 1`, `timeout = 120` for SSE streams, `graceful_timeout` / `keepalive` tuned for Cloud Run). Local equivalent:
+
+```bash
+gunicorn -c gunicorn.conf.py app.main:app
+```
 
 ## Development
 
@@ -50,6 +65,23 @@ pytest tests/unit -q
 ```
 
 See [AGENTS.md](AGENTS.md) for agent and contributor conventions.
+
+## Cloud Run deployment
+
+Production deploy steps (Artifact Registry, VPC connector, Secret Manager, `gcloud run deploy`):
+
+```bash
+./scripts/deploy_cloud_run.sh --dry-run   # preview commands
+./scripts/deploy_cloud_run.sh              # build, push, deploy
+```
+
+GitHub Actions CI/CD (secrets + `main` branch deploy workflow):
+
+```bash
+GCP_SA_KEY_FILE=./sa-key.json ./scripts/setup_github_cicd.sh
+```
+
+Full walkthrough: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Ralph autonomous workflow
 

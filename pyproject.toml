@@ -101,3 +101,8 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+base_url = "http://localhost:8080"
+markers = [
+    "e2e: Playwright end-to-end smoke tests (tests/e2e)",
+    "browser: Playwright component harness tests (tests/unit)",
+]

@@ -1,0 +1,44 @@
+# Git and CI
+.git
+.github
+.cursor
+
+# Python local env and caches
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+dist
+build
+*.egg-info
+
+# Secrets and local env
+.env
+.env.*
+!.env.example
+
+# Tests and eval tooling (not needed in production image)
+tests
+evals
+playwright-report
+test-results
+.playwright
+
+# Dev-only assets and scripts
+Dockerfile.cuda
+bin
+node_modules
+ralph-iter.*
+scripts/ralph*.sh
+progress.txt
+prd.json
+
+# Docs (README.md required for pip install metadata)
+CHANGELOG.md
+AGENTS.md
+docs

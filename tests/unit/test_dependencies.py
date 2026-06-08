@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any
+from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
 import pytest
@@ -13,7 +14,10 @@ from tests.unit.test_settings import _VALID_ENV, _apply_env
 from app.config import get_settings
 from app.dependencies import get_redis
 from app.lifespan import lifespan
+from lib.kapruka.mcp_client import MCPHttpClient
+from lib.neo4j.client import Neo4jClient
 from lib.redis.client import RedisClient
+from lib.zep.client import ZepClient
 
 RedisDep = Annotated[RedisClient, Depends(get_redis)]
 
@@ -58,24 +62,61 @@ async def test_get_redis_returns_503_when_unavailable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lifespan_stores_redis_on_app_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Lifespan connects RedisClient and assigns it to app.state.redis."""
+async def test_lifespan_stores_service_clients_on_app_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lifespan connects Redis, Neo4j, Zep, and MCP clients on app.state."""
     get_settings.cache_clear()
     _apply_env(monkeypatch, _VALID_ENV)
 
-    captured: dict[str, RedisClient] = {}
+    captured: dict[str, object] = {}
     fake = fakeredis.aioredis.FakeRedis()
 
     @classmethod
-    async def mock_connect(cls, url: str, **kwargs: Any) -> RedisClient:
+    async def mock_redis_connect(cls, url: str, **kwargs: Any) -> RedisClient:
         client = RedisClient(url, client=fake)
-        captured["client"] = client
+        captured["redis"] = client
         return client
 
-    monkeypatch.setattr(RedisClient, "connect", mock_connect)
+    @classmethod
+    async def mock_neo4j_connect(
+        cls,
+        uri: str,
+        user: str,
+        password: str,
+        **kwargs: Any,
+    ) -> Neo4jClient:
+        driver = MagicMock()
+        driver.close = AsyncMock()
+        client = Neo4jClient(uri, user, password, driver=driver)
+        captured["neo4j"] = client
+        return client
+
+    @classmethod
+    async def mock_zep_connect(cls, api_key: str, **kwargs: Any) -> ZepClient:
+        client = ZepClient(api_key, client=MagicMock())
+        captured["zep"] = client
+        return client
+
+    @classmethod
+    async def mock_mcp_connect(
+        cls,
+        url: str = "https://mcp.kapruka.com/mcp",
+        **kwargs: Any,
+    ) -> MCPHttpClient:
+        client = MCPHttpClient(url)
+        captured["mcp"] = client
+        return client
+
+    monkeypatch.setattr(RedisClient, "connect", mock_redis_connect)
+    monkeypatch.setattr(Neo4jClient, "connect", mock_neo4j_connect)
+    monkeypatch.setattr(ZepClient, "connect", mock_zep_connect)
+    monkeypatch.setattr(MCPHttpClient, "connect", mock_mcp_connect)
 
     application = FastAPI()
     async with lifespan(application):
-        assert "client" in captured
-        assert application.state.redis is captured["client"]
+        assert application.state.redis is captured["redis"]
+        assert application.state.neo4j is captured["neo4j"]
+        assert application.state.zep is captured["zep"]
+        assert application.state.mcp_client is captured["mcp"]
         assert await application.state.redis.ping() is True

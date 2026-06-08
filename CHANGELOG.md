@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.8.0] - 2026-06-08
+
+### Added
+
+- Ragas CI evaluation with mock MCP fixture and `context_precision` gate (PRD-078)
+- GitHub Actions CI: ruff, mypy, unit tests, Playwright E2E smoke, and Ragas eval (PRD-079)
+- Multi-stage production Dockerfile with Tailwind compile and non-root runtime (PRD-080)
+- Aggregated `/health` endpoint probing Redis, Neo4j, Zep, and Kapruka MCP (PRD-081)
+- Gunicorn + Uvicorn production entrypoint tuned for Cloud Run SSE (PRD-082)
+- Local `.env` bootstrap script via gcloud API keys (PRD-083)
+- Cloud Run deploy script and step-by-step `docs/DEPLOY.md` (PRD-084)
+- Playwright E2E smoke tests for chat search, cart drawer, and checkout form (PRD-085)
+- GitHub Actions secrets + `main.yml` CI/CD pipeline scaffolding for Cloud Run deploy (PRD-086)
+
+### Fixed
+
+- HTMX SSE fragment handling in `chat-sse.js` and cart drawer count after partial swaps (found during E2E)
+- Deploy health verification now asserts `"status":"healthy"` instead of any HTTP 2xx
+
 ## [0.0.7.0] - 2026-06-08
 
 ### Added

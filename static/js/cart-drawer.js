@@ -10,6 +10,17 @@ document.addEventListener("alpine:init", () => {
       document.body.addEventListener("htmx:afterSwap", (event) => {
         this.syncCountFromPanel(event);
       });
+      // HTMX outerHTML swaps do not activate Alpine @click on injected cart partials.
+      document.body.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+          return;
+        }
+        if (!target.closest('[data-testid="cart-proceed-checkout"]')) {
+          return;
+        }
+        this.proceedToCheckout();
+      });
     },
 
     openDrawer() {
@@ -36,7 +47,9 @@ document.addEventListener("alpine:init", () => {
       if (!target || target.id !== "cart-panel") {
         return;
       }
-      const raw = target.getAttribute("data-item-count") ?? "0";
+      // outerHTML swap: detail.target is the removed node (stale count); read live panel.
+      const panel = document.getElementById("cart-panel");
+      const raw = panel?.getAttribute("data-item-count") ?? "0";
       const count = parseInt(raw, 10);
       this.itemCount = Number.isNaN(count) ? 0 : count;
     },

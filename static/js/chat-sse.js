@@ -43,6 +43,25 @@
     return form.querySelector("[sse-swap]");
   }
 
+  function prepareChatForm(form) {
+    const path = form.getAttribute("sse-connect") || CHAT_STREAM_PATH;
+    form.dataset.chatStreamPath = path;
+    // HTMX must not own this form — our fetch/SSE bridge replaces sse-connect POST.
+    form.removeAttribute("hx-post");
+    form.removeAttribute("hx-trigger");
+    form.removeAttribute("sse-connect");
+    form.removeAttribute("hx-ext");
+  }
+
+  function initChatForm() {
+    const form = findChatForm();
+    if (!form || form.dataset.chatSseReady === "true") {
+      return;
+    }
+    prepareChatForm(form);
+    form.dataset.chatSseReady = "true";
+  }
+
   function parseSseChunk(buffer) {
     const events = [];
     const parts = buffer.split("\n\n");
@@ -76,7 +95,12 @@
       return;
     }
     const swapStyle = listener.getAttribute("hx-swap") || "beforeend";
+    const childCountBefore = target.children.length;
     htmx.swap(target, html, { swapStyle });
+    // Activate hx-* on streamed fragments only (not the whole message log / form).
+    for (const node of Array.from(target.children).slice(childCountBefore)) {
+      htmx.process(node);
+    }
     document.body.dispatchEvent(
       new CustomEvent("htmx:afterSwap", { detail: { target } }),
     );
@@ -103,7 +127,7 @@
       .split(",")
       .map((name) => name.trim())
       .filter(Boolean);
-    const connectPath = form.getAttribute("sse-connect") || CHAT_STREAM_PATH;
+    const connectPath = form.dataset.chatStreamPath || CHAT_STREAM_PATH;
     const formData = new FormData(form);
 
     toggleRequestState(form, true);
@@ -171,6 +195,8 @@
       toggleRequestState(form, false);
     }
   }
+
+  initChatForm();
 
   document.addEventListener(
     "submit",

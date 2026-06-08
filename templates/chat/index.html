@@ -3,7 +3,6 @@
 {% block title %}{{ title | default("Chat — AgenticKapruka") }}{% endblock %}
 
 {% block head_extra %}
-<script src="/static/js/chat-sse.js"></script>
 <script src="/static/js/chat-helpers.js"></script>
 <script src="/static/js/lazy-image.js"></script>
 <script src="/static/js/payment-countdown.js"></script>
@@ -151,4 +150,22 @@
     </form>
   </div>
 </footer>
+<script>
+  (function () {
+    const form = document.getElementById("chat-form");
+    if (!form) {
+      return;
+    }
+    form.dataset.chatStreamPath = form.getAttribute("sse-connect") || "/chat/stream";
+    form.removeAttribute("hx-post");
+    form.removeAttribute("hx-trigger");
+    form.removeAttribute("sse-connect");
+    form.removeAttribute("hx-ext");
+    form.dataset.chatSseReady = "true";
+  })();
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/chat-sse.js"></script>
 {% endblock %}
