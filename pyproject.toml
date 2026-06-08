@@ -89,6 +89,10 @@ disallow_untyped_calls = false
 module = ["langgraph.checkpoint.redis.*"]
 disallow_untyped_defs = false
 
+[[tool.mypy.overrides]]
+module = ["networkx", "networkx.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

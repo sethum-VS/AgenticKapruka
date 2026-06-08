@@ -598,3 +598,11 @@ Next: PRD-074 429 rate limit alert banner with countdown.
 - Tests: `test_rate_limit_banner_renders_retry_after_countdown`, updated 429 middleware tests for `data-retry-after`; `test_rate_limit_countdown_js.py`.
 Files: app/middleware/errors.py, app/templating.py, templates/{partials/rate_limit_banner,base}.html, static/js/rate-limit-countdown.js, tests/unit/{test_error_middleware,test_rate_limit_countdown_js}.py, prd.json
 Next: PRD-075 NetworkX community detection background worker.
+
+## PRD-075 — NetworkX community detection background worker
+- Added `lib/analytics/networkx_worker.py`: fetches `CO_PURCHASED_WITH` Product edges; falls back to synthesizing ProductType pairs sharing a parent Category; builds weighted NetworkX graph; runs `louvain_communities` via `asyncio.to_thread`; MERGEs bidirectional `RECOMMENDS` with score/community_id/source in batches.
+- `NetworkXCommunityWorker` exposes `run_once()`, `start()` / `stop()` periodic asyncio loop (default 3600s interval); lifespan wiring deferred until Neo4j client is connected in app startup (PRD-081).
+- Mypy override for `networkx.*` missing stubs in `pyproject.toml`.
+- Tests: `tests/unit/test_networkx_worker.py` (Louvain partition, co-purchase vs category-proximity fallback, RECOMMENDS persist, worker start/stop).
+Files: lib/analytics/{__init__,networkx_worker}.py, tests/unit/test_networkx_worker.py, pyproject.toml, prd.json
+Next: PRD-076 Optional cuGraph CUDA Dockerfile stage.

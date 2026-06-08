@@ -897,7 +897,7 @@
       "Run networkx.community.louvain_communities in thread executor",
       "Store community recommendations back to Neo4j RECOMMENDS relationships"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-076",
