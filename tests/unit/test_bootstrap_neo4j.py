@@ -6,7 +6,22 @@ import argparse
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from app.config import Settings
 from scripts import bootstrap_neo4j
+
+
+def _bootstrap_settings() -> Settings:
+    return Settings(
+        redis_url="redis://localhost:6379/0",
+        neo4j_uri="bolt://localhost:7687",
+        neo4j_user="neo4j",
+        neo4j_password="test-password",
+        zep_api_key="zep-test-key",
+        gcp_project_id="test-project",
+        gcp_location="us-central1",
+        session_secret="x" * 32,
+        _env_file=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -36,6 +51,7 @@ async def test_bootstrap_runs_all_steps_in_order() -> None:
         return True
 
     with (
+        patch.object(bootstrap_neo4j, "get_settings", return_value=_bootstrap_settings()),
         patch.object(bootstrap_neo4j, "Neo4jClient") as mock_client_cls,
         patch.object(bootstrap_neo4j, "_run_migrate", side_effect=track_migrate),
         patch.object(bootstrap_neo4j, "_run_ingest", side_effect=track_ingest),
@@ -66,6 +82,7 @@ async def test_bootstrap_honors_skip_flags() -> None:
     call_order: list[str] = []
 
     with (
+        patch.object(bootstrap_neo4j, "get_settings", return_value=_bootstrap_settings()),
         patch.object(bootstrap_neo4j, "Neo4jClient") as mock_client_cls,
         patch.object(
             bootstrap_neo4j,
@@ -114,6 +131,7 @@ async def test_bootstrap_exits_nonzero_when_verify_fails() -> None:
     client = MagicMock()
 
     with (
+        patch.object(bootstrap_neo4j, "get_settings", return_value=_bootstrap_settings()),
         patch.object(bootstrap_neo4j, "Neo4jClient") as mock_client_cls,
         patch.object(bootstrap_neo4j, "_run_migrate", AsyncMock(return_value=True)),
         patch.object(bootstrap_neo4j, "_run_ingest", AsyncMock(return_value=True)),
@@ -141,6 +159,7 @@ async def test_bootstrap_exits_nonzero_when_index_step_fails() -> None:
     client = MagicMock()
 
     with (
+        patch.object(bootstrap_neo4j, "get_settings", return_value=_bootstrap_settings()),
         patch.object(bootstrap_neo4j, "Neo4jClient") as mock_client_cls,
         patch.object(bootstrap_neo4j, "_run_migrate", AsyncMock(return_value=True)),
         patch.object(bootstrap_neo4j, "_run_ingest", AsyncMock(return_value=True)),

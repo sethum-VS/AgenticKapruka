@@ -43,7 +43,18 @@ def _carousel_harness_html(carousel_html: str) -> str:
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>{css}</style>
+    <style>
+{css}
+      /* Pin carousel width so overflow is deterministic on all CI runners. */
+      [data-testid="product-carousel-track"] {{
+        width: 240px;
+        max-width: 240px;
+      }}
+      [data-testid="product-card"] {{
+        width: 14rem;
+        flex-shrink: 0;
+      }}
+    </style>
     <script>{LAZY_IMAGE_JS}</script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
   </head>
@@ -97,8 +108,7 @@ def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
 @pytest.mark.browser
 def test_lazy_images_defer_load_until_carousel_scroll() -> None:
     """Off-screen carousel images load and fade in after scrolling into view."""
-    # Repeat fixtures so the last card is fully outside the track viewport on all runners.
-    carousel_html = render_product_carousel(_load_products() * 3)
+    carousel_html = render_product_carousel(_load_products())
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
