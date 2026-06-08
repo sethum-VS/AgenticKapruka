@@ -97,7 +97,8 @@ def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
 @pytest.mark.browser
 def test_lazy_images_defer_load_until_carousel_scroll() -> None:
     """Off-screen carousel images load and fade in after scrolling into view."""
-    carousel_html = render_product_carousel(_load_products())
+    # Repeat fixtures so the last card is fully outside the track viewport on all runners.
+    carousel_html = render_product_carousel(_load_products() * 3)
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
