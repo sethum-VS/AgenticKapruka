@@ -680,3 +680,12 @@ Next: PRD-084 Google Cloud Run deployment with gcloud.
 - Tests: `tests/unit/test_deploy_cloud_run.py` (script + doc contract, dry-run output).
 Files: scripts/deploy_cloud_run.sh, docs/DEPLOY.md, tests/unit/test_deploy_cloud_run.py, README.md, prd.json
 Next: PRD-085 Playwright E2E smoke tests.
+
+## PRD-085 — Playwright E2E smoke tests
+- Added `tests/e2e/`: `e2e_app.py` (fakeredis + MockMCPHttpClient + mock Gemini), `e2e_server.py` (uvicorn on :8080), `conftest.py` (session server + pytest-playwright `base_url`), `test_smoke.py` (chat load, search→product card, cart drawer add, checkout delivery form without create_order).
+- Extended `tests/fixtures/mcp_mock.py` with `call_log`; E2E-only `GET /e2e/mcp-calls` asserts `kapruka_create_order` never invoked.
+- `pyproject.toml`: `base_url = http://localhost:8080`, `e2e`/`browser` markers; CI job `e2e-smoke` runs `playwright install chromium` + `pytest tests/e2e`.
+- Bug fixes found during E2E: `chat-sse.js` strips HTMX attrs before htmx init (inline prep script), processes only new SSE fragments; `cart-drawer.js` reads live `#cart-panel` count after outerHTML swap + delegated proceed-checkout clicks; `cart_partial.html` drops Alpine `@click` on HTMX-swapped button.
+- Tests: `tests/unit/test_e2e_app.py`; 4 E2E + 462 unit tests pass.
+Files: tests/e2e/*, tests/fixtures/mcp_mock.py, tests/unit/test_e2e_app.py, tests/unit/test_cart_partial.py, static/js/{chat-sse,cart-drawer}.js, templates/chat/index.html, templates/checkout/cart_partial.html, pyproject.toml, .github/workflows/ci.yml, prd.json
+Next: PRD-086 IaC bash script for GitHub Actions secrets and Cloud Run CI/CD.

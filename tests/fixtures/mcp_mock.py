@@ -262,6 +262,7 @@ class MockMCPHttpClient:
 
     def __init__(self, url: str = "mock://kapruka/mcp") -> None:
         self._url = url
+        self.call_log: list[str] = []
 
     @classmethod
     async def connect(
@@ -276,6 +277,7 @@ class MockMCPHttpClient:
 
     async def call_tool(self, name: str, params: dict[str, Any] | None = None) -> str:
         """Return JSON text for the requested Kapruka MCP tool."""
+        self.call_log.append(name)
         payload = mock_mcp_response(name, params)
         return json.dumps(payload, ensure_ascii=False)
 

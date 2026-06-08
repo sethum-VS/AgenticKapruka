@@ -1017,7 +1017,7 @@
       "Test: load /chat, submit search message, verify product card appears in DOM",
       "Test: add to cart and verify cart drawer shows item; mock create_order in test env"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-086",
