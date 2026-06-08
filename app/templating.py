@@ -314,6 +314,24 @@ def render_error_banner(
     return template.render(error_code=error_code, message=message, title=title)
 
 
+def render_rate_limit_banner(
+    *,
+    error_code: str,
+    message: str,
+    retry_after_seconds: int,
+    title: str = "Rate limit reached",
+) -> str:
+    """Render templates/partials/rate_limit_banner.html with Retry-After countdown."""
+    templates = get_templates()
+    template = templates.env.get_template("partials/rate_limit_banner.html")
+    return template.render(
+        error_code=error_code,
+        message=message,
+        title=title,
+        retry_after_seconds=retry_after_seconds,
+    )
+
+
 def render_currency_selector(*, currency: str = "LKR") -> str:
     """Render templates/components/currency_selector.html for the site header."""
     templates = get_templates()

@@ -14,7 +14,7 @@ from lib.kapruka.errors import (
     KaprukaRateLimitError,
     KaprukaValidationError,
 )
-from lib.redis.rate_limit import RateLimitExceeded, retry_after_header
+from lib.redis.rate_limit import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,24 @@ def _render_error_banner_html(
     return render_error_banner(error_code=error_code, message=message, title=title)
 
 
+def _render_rate_limit_banner_html(
+    *,
+    error_code: str,
+    message: str,
+    title: str,
+    retry_after_seconds: int,
+) -> str:
+    """Lazy import avoids app.templating ↔ graphs circular import at startup."""
+    from app.templating import render_rate_limit_banner
+
+    return render_rate_limit_banner(
+        error_code=error_code,
+        message=message,
+        title=title,
+        retry_after_seconds=retry_after_seconds,
+    )
+
+
 def _html_error_response(
     *,
     status_code: int,
@@ -74,6 +92,51 @@ def _html_error_response(
         title=title,
     )
     return HTMLResponse(html, status_code=status_code, headers=headers)
+
+
+def _html_rate_limit_response(
+    *,
+    error_code: str,
+    message: str,
+    title: str,
+    retry_after_seconds: int,
+    headers: dict[str, str] | None = None,
+) -> HTMLResponse:
+    html = _render_rate_limit_banner_html(
+        error_code=error_code,
+        message=message,
+        title=title,
+        retry_after_seconds=retry_after_seconds,
+    )
+    return HTMLResponse(html, status_code=429, headers=headers)
+
+
+def _rate_limit_response(
+    request: Request,
+    *,
+    error_code: str,
+    message: str,
+    retry_after_seconds: int,
+    title: str = "Rate limit reached",
+) -> Response:
+    headers = {"Retry-After": str(retry_after_seconds)}
+    if _wants_html_response(request):
+        return _html_rate_limit_response(
+            error_code=error_code,
+            message=message,
+            title=title,
+            retry_after_seconds=retry_after_seconds,
+            headers=headers,
+        )
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error_code": error_code,
+            "message": message,
+            "retry_after_seconds": retry_after_seconds,
+        },
+        headers=headers,
+    )
 
 
 def _error_response(
@@ -133,13 +196,11 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request,
         exc: KaprukaRateLimitError,
     ) -> Response:
-        return _error_response(
+        return _rate_limit_response(
             request,
-            status_code=429,
             error_code=exc.code,
             message=human_readable_message(exc),
-            title="Rate limit reached",
-            headers={"Retry-After": str(exc.retry_after_seconds)},
+            retry_after_seconds=exc.retry_after_seconds,
         )
 
     @app.exception_handler(RateLimitExceeded)
@@ -147,13 +208,11 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request,
         exc: RateLimitExceeded,
     ) -> Response:
-        return _error_response(
+        return _rate_limit_response(
             request,
-            status_code=429,
             error_code="rate_limit_exceeded",
             message="Too many requests. Please wait a moment and try again.",
-            title="Rate limit reached",
-            headers=retry_after_header(exc),
+            retry_after_seconds=exc.retry_after_seconds,
         )
 
     @app.exception_handler(KaprukaError)

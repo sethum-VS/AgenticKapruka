@@ -1,0 +1,25 @@
+{# HTMX-compatible 429 alert with Alpine countdown until the rate window resets. #}
+<div
+  class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+  data-testid="rate-limit-banner"
+  data-error-code="{{ error_code }}"
+  data-retry-after="{{ retry_after_seconds }}"
+  role="alert"
+  aria-live="polite"
+  x-data="rateLimitCountdown($el.dataset.retryAfter)"
+  x-show="!dismissed"
+  x-transition:leave="transition ease-in duration-200"
+  x-transition:leave-start="opacity-100"
+  x-transition:leave-end="opacity-0"
+>
+  <p class="font-medium">{{ title }}</p>
+  <p>{{ message }}</p>
+  <p class="mt-1 text-xs text-amber-800">
+  You can try again in
+  <span
+    class="font-mono font-semibold tabular-nums"
+    data-testid="rate-limit-countdown-display"
+    x-text="display"
+  >00:00</span>
+  </p>
+</div>

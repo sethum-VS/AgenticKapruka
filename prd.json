@@ -885,7 +885,7 @@
       "Render templates/partials/rate_limit_banner.html with Alpine countdown",
       "Write test simulating 429 returns banner with data-retry-after attribute"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-075",

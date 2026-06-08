@@ -6,7 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import create_app
-from app.templating import _create_templates, render_error_banner
+from app.templating import _create_templates, render_error_banner, render_rate_limit_banner
 from lib.kapruka.errors import (
     KaprukaError,
     KaprukaNotFoundError,
@@ -34,6 +34,21 @@ def test_error_banner_renders_code_and_message() -> None:
     assert 'data-error-code="empty_cart"' in html
     assert "Your cart is empty" in html
     assert 'role="alert"' in html
+
+
+def test_rate_limit_banner_renders_retry_after_countdown() -> None:
+    """Rate limit partial exposes data-retry-after for Alpine countdown."""
+    html = render_rate_limit_banner(
+        error_code="429",
+        message="Too many requests. Please wait a moment and try again.",
+        retry_after_seconds=45,
+    )
+    assert 'data-testid="rate-limit-banner"' in html
+    assert 'data-error-code="429"' in html
+    assert 'data-retry-after="45"' in html
+    assert 'x-data="rateLimitCountdown($el.dataset.retryAfter)"' in html
+    assert 'data-testid="rate-limit-countdown-display"' in html
+    assert "You can try again in" in html
 
 
 @pytest.mark.asyncio
@@ -103,7 +118,9 @@ async def test_kapruka_rate_limit_error_returns_429_with_retry_after() -> None:
 
     assert response.status_code == 429
     assert response.headers["retry-after"] == "45"
+    assert 'data-testid="rate-limit-banner"' in response.text
     assert 'data-error-code="429"' in response.text
+    assert 'data-retry-after="45"' in response.text
 
 
 @pytest.mark.asyncio
@@ -149,7 +166,9 @@ async def test_rate_limit_exceeded_returns_429_html() -> None:
 
     assert response.status_code == 429
     assert response.headers["retry-after"] == "30"
+    assert 'data-testid="rate-limit-banner"' in response.text
     assert 'data-error-code="rate_limit_exceeded"' in response.text
+    assert 'data-retry-after="30"' in response.text
 
 
 @pytest.mark.asyncio

@@ -589,3 +589,12 @@ Next: PRD-073 Exception middleware for MCP errors.
 - Tests: `tests/unit/test_error_middleware.py` (400 HTML not JSON for validation, 429/404/502 paths, generic 500 without leak).
 Files: app/middleware/{__init__,errors}.py, app/{main,templating}.py, templates/partials/error_banner.html, tests/unit/test_error_middleware.py, prd.json
 Next: PRD-074 429 rate limit alert banner with countdown.
+
+## PRD-074 — 429 rate limit alert banner with countdown
+- Extended `app/middleware/errors.py`: `_rate_limit_response` maps KaprukaRateLimitError and RateLimitExceeded to dedicated HTML banner (429 + Retry-After); JSON clients receive `retry_after_seconds` in payload.
+- Added `templates/partials/rate_limit_banner.html`: amber alert with `data-retry-after`, Alpine `rateLimitCountdown`, MM:SS display, fade-out auto-dismiss when window resets.
+- Added `static/js/rate-limit-countdown.js`; loaded globally from `templates/base.html` before deferred Alpine.
+- `render_rate_limit_banner()` in `app/templating.py`.
+- Tests: `test_rate_limit_banner_renders_retry_after_countdown`, updated 429 middleware tests for `data-retry-after`; `test_rate_limit_countdown_js.py`.
+Files: app/middleware/errors.py, app/templating.py, templates/{partials/rate_limit_banner,base}.html, static/js/rate-limit-countdown.js, tests/unit/{test_error_middleware,test_rate_limit_countdown_js}.py, prd.json
+Next: PRD-075 NetworkX community detection background worker.
