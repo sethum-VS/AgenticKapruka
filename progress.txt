@@ -615,3 +615,10 @@ Next: PRD-076 Optional cuGraph CUDA Dockerfile stage.
 - Tests: `tests/unit/test_cugraph_optional.py` (CUDA detection, import fallback, mocked GPU Louvain partition).
 Files: Dockerfile.cuda, lib/analytics/{__init__,cugraph_optional}.py, tests/unit/test_cugraph_optional.py, README.md, pyproject.toml, prd.json
 Next: PRD-077 Ragas evaluation golden dataset.
+
+## PRD-077 — Ragas evaluation golden dataset
+- Added `evals/golden_dataset.json`: 24 golden cases (12 discovery, 8 checkout guidance, 4 tracking) with `user_query`, `expected_tools`, `reference_answer`; covers birthday cake search, Colombo flower delivery check, and VIMP order tracking per PRD.
+- Added `evals/golden_dataset.py`: Pydantic v2 `GoldenCase` / `GoldenDataset` schema, `KNOWN_MCP_TOOLS` allowlist for all 7 Kapruka MCP tools, `load_golden_dataset()` + cached `get_golden_dataset()`.
+- Tests: `tests/unit/test_golden_dataset.py` (fixture loader, ≥20 cases, scenario coverage, PRD anchor cases, unknown-tool rejection).
+Files: evals/{__init__,golden_dataset,golden_dataset.json}, tests/unit/test_golden_dataset.py, prd.json
+Next: PRD-078 Ragas eval script and CI mock MCP fixture.

@@ -1,0 +1,173 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "id": "disc-001-birthday-cake-mom",
+      "scenario": "discovery",
+      "user_query": "Show me birthday cakes for my mom",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll search Kapruka for birthday cakes that would make a lovely gift for your mom, including popular flavors, sizes, and current prices in your session currency."
+    },
+    {
+      "id": "disc-002-wedding-flowers",
+      "scenario": "discovery",
+      "user_query": "I need wedding flowers delivered in Colombo",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll look for wedding flower arrangements and bouquets available on Kapruka that can be delivered in Colombo, and share options with prices and stock status."
+    },
+    {
+      "id": "disc-003-chocolate-gifts",
+      "scenario": "discovery",
+      "user_query": "What chocolate gift boxes do you have under 5000 rupees?",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll search Kapruka for chocolate gift boxes priced at or below Rs. 5,000 and list what's in stock with images and links."
+    },
+    {
+      "id": "disc-004-gift-for-dad",
+      "scenario": "discovery",
+      "user_query": "Find a gift for my dad's retirement",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll search Kapruka for retirement gift ideas for your dad, such as gourmet hampers, keepsakes, or celebration cakes, based on what's currently available."
+    },
+    {
+      "id": "disc-005-anniversary-roses",
+      "scenario": "discovery",
+      "user_query": "Red roses for our 10th anniversary",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll find red rose bouquets and anniversary flower arrangements on Kapruka and show you in-stock options with delivery details."
+    },
+    {
+      "id": "disc-006-tea-hamper",
+      "scenario": "discovery",
+      "user_query": "Ceylon tea gift hamper for a colleague",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll search Kapruka for Ceylon tea gift hampers suitable for a colleague and present matching products with prices."
+    },
+    {
+      "id": "disc-007-product-by-id",
+      "scenario": "discovery",
+      "user_query": "Tell me about product cake00ka002034",
+      "expected_tools": ["kapruka_get_product"],
+      "reference_answer": "I'll fetch the full Kapruka product details for cake00ka002034, including description, price, variants, images, and stock availability."
+    },
+    {
+      "id": "disc-008-browse-categories",
+      "scenario": "discovery",
+      "user_query": "Hi, what kinds of gifts can I buy here?",
+      "expected_tools": ["kapruka_list_categories"],
+      "reference_answer": "I'll list Kapruka's top gift categories—such as cakes, flowers, chocolates, and combos—so you can browse what we offer."
+    },
+    {
+      "id": "disc-009-in-stock-cakes",
+      "scenario": "discovery",
+      "user_query": "Show in-stock chocolate cakes only",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll search Kapruka for chocolate cakes that are currently in stock and filter out unavailable items."
+    },
+    {
+      "id": "disc-010-fruit-basket",
+      "scenario": "discovery",
+      "user_query": "Fresh fruit basket for a get-well gift",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll search Kapruka for fresh fruit baskets suitable as a get-well gift and share what's available to order today."
+    },
+    {
+      "id": "disc-011-combo-gifts",
+      "scenario": "discovery",
+      "user_query": "Cake and flower combo for a birthday surprise",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll look for cake-and-flower combo gifts on Kapruka that work well for a birthday surprise, with pricing and delivery options."
+    },
+    {
+      "id": "disc-012-valentine-chocolates",
+      "scenario": "discovery",
+      "user_query": "Valentine's Day chocolates for my partner",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll search Kapruka for Valentine's chocolate gifts and highlight in-stock items you can send to your partner."
+    },
+    {
+      "id": "checkout-001-flower-delivery-colombo",
+      "scenario": "checkout",
+      "user_query": "Can you deliver flowers to Colombo 03 tomorrow?",
+      "expected_tools": ["kapruka_check_delivery"],
+      "reference_answer": "I'll check Kapruka delivery availability for Colombo 03 on your requested date, including the flat delivery rate and whether that date is open for flower orders."
+    },
+    {
+      "id": "checkout-002-city-autocomplete",
+      "scenario": "checkout",
+      "user_query": "Which cities near Galle can you deliver to?",
+      "expected_tools": ["kapruka_list_delivery_cities"],
+      "reference_answer": "I'll look up Kapruka delivery cities matching Galle and nearby areas so you can pick a valid city for checkout."
+    },
+    {
+      "id": "checkout-003-delivery-date-check",
+      "scenario": "checkout",
+      "user_query": "Is delivery available to Kandy on 2026-06-15 for a perishable cake?",
+      "expected_tools": ["kapruka_check_delivery"],
+      "reference_answer": "I'll verify Kapruka can deliver to Kandy on 2026-06-15 and note any perishable freshness guidance if the date is more than one day out."
+    },
+    {
+      "id": "checkout-004-proceed-checkout",
+      "scenario": "checkout",
+      "user_query": "Proceed to checkout",
+      "expected_tools": [],
+      "reference_answer": "I'll guide you through checkout step by step: confirm your cart, delivery city and date, recipient details, sender name, then review your order before payment."
+    },
+    {
+      "id": "checkout-005-cart-help",
+      "scenario": "checkout",
+      "user_query": "I have items in my cart—how do I pay?",
+      "expected_tools": [],
+      "reference_answer": "I'll walk you through completing delivery and recipient details, review your order summary, then provide a secure Kapruka click-to-pay link once the order is created."
+    },
+    {
+      "id": "checkout-006-gift-message",
+      "scenario": "checkout",
+      "user_query": "Can I add a gift message on the card?",
+      "expected_tools": [],
+      "reference_answer": "Yes—during checkout you can add an optional gift message up to 300 characters that prints on the Kapruka gift card with your order."
+    },
+    {
+      "id": "checkout-007-anonymous-sender",
+      "scenario": "checkout",
+      "user_query": "Can I send this anonymously?",
+      "expected_tools": [],
+      "reference_answer": "Yes—on the sender step you can mark the gift as anonymous so the card shows 'Anonymous' instead of your name."
+    },
+    {
+      "id": "checkout-008-place-order-finalize",
+      "scenario": "checkout",
+      "user_query": "Place my order now with everything confirmed",
+      "expected_tools": ["kapruka_create_order"],
+      "reference_answer": "I'll submit your cart with the confirmed delivery, recipient, and sender details to Kapruka, then share the checkout URL, order reference, and payment total."
+    },
+    {
+      "id": "track-001-order-number",
+      "scenario": "tracking",
+      "user_query": "Track order VIMP34456CB2",
+      "expected_tools": ["kapruka_track_order"],
+      "reference_answer": "I'll look up Kapruka order VIMP34456CB2 and show the current status, delivery date, recipient details, and progress timeline."
+    },
+    {
+      "id": "track-002-where-is-order",
+      "scenario": "tracking",
+      "user_query": "Where is my order VIMP99887AB1? Has it shipped?",
+      "expected_tools": ["kapruka_track_order"],
+      "reference_answer": "I'll check order VIMP99887AB1 on Kapruka and tell you whether it has shipped, is out for delivery, or has been delivered, with the latest timeline events."
+    },
+    {
+      "id": "track-003-missing-number",
+      "scenario": "tracking",
+      "user_query": "What's the status of my order?",
+      "expected_tools": [],
+      "reference_answer": "I can track your Kapruka order once you share the order number from your confirmation email (for example VIMP34456CB2). It is different from the pre-payment checkout reference."
+    },
+    {
+      "id": "track-004-delivery-eta",
+      "scenario": "tracking",
+      "user_query": "When will order VIMP11223XY9 arrive?",
+      "expected_tools": ["kapruka_track_order"],
+      "reference_answer": "I'll fetch tracking for order VIMP11223XY9 and share the scheduled delivery date and the latest status from Kapruka's progress timeline."
+    }
+  ]
+}

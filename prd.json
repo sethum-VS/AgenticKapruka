@@ -921,10 +921,10 @@
       "Cover birthday cake search, flower delivery check, and order tracking cases",
       "Validate JSON schema with pytest fixture loader"
     ],
-    "passes": false
+    "passes": true
   },
   {
-    "id": "PRD-078",
+    "id": "PRD-078"
     "category": "ops",
     "title": "Ragas eval script and CI mock MCP fixture",
     "description": "Implement evals/ragas_eval.py measuring context_precision, answer_relevance, and faithfulness against golden dataset with mocked KaprukaService transport for CI.",
