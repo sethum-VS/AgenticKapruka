@@ -957,7 +957,7 @@
       "Runtime stage uses python:3.12-slim with gunicorn app.main:app -k uvicorn.workers.UvicornWorker",
       "docker build succeeds and container starts on PORT 8080"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-081",

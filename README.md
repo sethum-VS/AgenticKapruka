@@ -36,7 +36,13 @@ docker build -f Dockerfile.cuda -t agentic-kapruka:cuda .
 docker run --gpus all agentic-kapruka:cuda
 ```
 
-The production Dockerfile (PRD-080) builds the slim CPU runtime used for Cloud Run.
+Build and run the production image (slim CPU runtime for Cloud Run):
+
+```bash
+docker build -t agentic-kapruka .
+docker run --rm -p 8080:8080 --env-file .env agentic-kapruka
+curl -s http://localhost:8080/health
+```
 
 ## Development
 

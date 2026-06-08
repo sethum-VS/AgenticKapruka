@@ -638,3 +638,11 @@ Next: PRD-079 Ruff and mypy CI gate.
 - Verified locally: ruff, mypy, and 441 unit tests pass.
 Files: .github/workflows/ci.yml, prd.json
 Next: PRD-080 Multi-stage production Dockerfile.
+
+## PRD-080 — Multi-stage production Dockerfile
+- Added `Dockerfile`: builder stage (`python:3.12-slim`) venv `pip install .`, Tailwind standalone compile to `static/css/app.css`, copies `templates/` + `static/` into site-packages (paths resolve via `app/*` → `parent.parent`); runtime stage non-root `app` user, `PORT=8080`, `gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080`.
+- Added `.dockerignore` excluding tests, evals, secrets, dev CUDA image, and generated `bin/`.
+- Tests: `tests/unit/test_dockerfile.py` (multi-stage contract); verified `docker build` + container `/health` → `{"status":"ok"}` on port 8080.
+- README: production `docker build` / `docker run` / `curl /health` snippet.
+Files: Dockerfile, .dockerignore, tests/unit/test_dockerfile.py, README.md, prd.json
+Next: PRD-081 Aggregated health check endpoint.
