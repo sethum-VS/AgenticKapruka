@@ -8,6 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from graphs.nodes.analyze_intent import (
+    PROCEED_CHECKOUT_MESSAGE,
     IntentClassification,
     _extract_latest_user_message,
     analyze_intent,
@@ -92,3 +93,17 @@ async def test_analyze_intent_parses_json_text_when_parsed_missing() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     assert result == {"intent": "tracking"}
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_proceed_checkout_skips_gemini() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content=PROCEED_CHECKOUT_MESSAGE)],
+        "session_id": "sess-intent-005",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result == {"intent": "checkout"}
+    mock_client.models.generate_content.assert_not_called()

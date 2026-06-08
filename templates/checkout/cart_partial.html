@@ -78,6 +78,14 @@
     </li>
     {% endfor %}
   </ul>
+  <button
+    type="button"
+    class="btn-primary w-full py-2.5 text-sm"
+    data-testid="cart-proceed-checkout"
+    @click="proceedToCheckout()"
+  >
+    Proceed to checkout
+  </button>
   {% else %}
   <p class="text-sm text-commerce-muted" data-testid="cart-empty">Your cart is empty.</p>
   {% endif %}

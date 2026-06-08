@@ -497,3 +497,95 @@ Next: PRD-063 Colombo timezone delivery date picker.
 - Tests: `test_delivery_date.py` (zoneinfo, HTMX attrs, partials); `test_delivery_date_flow.py` integration (past date → error HTML, no MCP; valid date → availability partial).
 Files: lib/utils/{timezone,__init__}.py, templates/checkout/{delivery_date,delivery_date_status,delivery_date_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_delivery_date.py, tests/integration/test_delivery_date_flow.py, prd.json
 Next: PRD-064 Delivery address and instructions form.
+
+## PRD-064 — Delivery address and instructions form
+- Added `lib/checkout/delivery.py`: `DeliveryFormValues` dataclass + `parse_delivery_form` validating via Kapruka `Delivery` Pydantic model (address 3–250, instructions max 250).
+- Added `templates/checkout/delivery_form.html`: address, city (debounced autocomplete), location_type select, date (Colombo min), optional instructions; `hx-post /checkout/validate-delivery` with outerHTML swap preserving values.
+- Added `templates/checkout/delivery_field_error.html`: per-field HTMX `hx-swap-oob="innerHTML"` error fragments.
+- Implemented `POST /checkout/validate-delivery` in `app/routes/checkout.py`; `render_delivery_form` / `render_delivery_field_error` / `render_delivery_form_validation_response` in `app/templating.py`.
+- Tests: `test_delivery_form.py` (structure, Pydantic bounds, OOB fragments); `test_delivery_form_flow.py` integration (short address → OOB error + city/instructions preserved; valid form → success marker).
+Files: lib/checkout/{__init__,delivery}.py, templates/checkout/{delivery_form,delivery_field_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_delivery_form.py, tests/integration/test_delivery_form_flow.py, prd.json
+Next: PRD-065 Recipient name and phone validation.
+
+## PRD-065 — Recipient name and phone validation
+- Added `_SL_MOBILE_PHONE` regex and `validate_phone` field validator on `Recipient` in `lib/kapruka/types.py` (+9477XXXXXXX E.164 and 077XXXXXXX local).
+- Added `lib/checkout/recipient.py`: `RecipientFormValues` + `parse_recipient_form` via Kapruka `Recipient` model.
+- Added `templates/checkout/recipient_form.html` (name 1–80, phone tel input) and `recipient_field_error.html` (HTMX OOB fragments).
+- Implemented `POST /checkout/validate-recipient`; `render_recipient_form` / `render_recipient_field_error` / `render_recipient_form_validation_response` in `app/templating.py`.
+- Tests: `test_recipient_form.py` (parametrized valid/invalid phones, OOB fragments); `test_recipient_form_flow.py` integration (invalid phone preserves name; valid → success marker).
+Files: lib/kapruka/types.py, lib/checkout/{recipient,__init__}.py, templates/checkout/{recipient_form,recipient_field_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_recipient_form.py, tests/integration/test_recipient_form_flow.py, prd.json
+Next: PRD-066 Sender form with anonymous toggle.
+
+## PRD-066 — Sender form with anonymous toggle
+- Added `lib/checkout/sender.py`: `SenderFormValues` + `parse_sender_form` via Kapruka `Sender` model (name 1–80, anonymous bool; no email).
+- Added `templates/checkout/sender_form.html`: name input, anonymous checkbox, Alpine `x-model` gift-card preview (`Anonymous` vs entered name); `sender_field_error.html` OOB fragments.
+- Implemented `POST /checkout/validate-sender`; `render_sender_form` / `render_sender_field_error` / `render_sender_form_validation_response` in `app/templating.py`.
+- Tests: `test_sender_form.py` (HTMX attrs, Sender schema fields only, Alpine preview binding, Pydantic bounds); `test_sender_form_flow.py` integration (empty name OOB + anonymous preserved; valid with/without checkbox).
+Files: lib/checkout/{sender,__init__}.py, templates/checkout/{sender_form,sender_field_error}.html, app/{routes/checkout,templating}.py, tests/unit/test_sender_form.py, tests/integration/test_sender_form_flow.py, prd.json
+Next: PRD-067 Checkout sub-graph state machine definition.
+
+## PRD-067 — Checkout sub-graph state machine definition
+- Added `graphs/checkout_state.py`: `CheckoutState` TypedDict with `current_step`, `target_step`, `action`, form accumulators (cart, delivery, recipient, sender), `step_valid`, `validation_errors`; `resolve_navigation` blocks forward skips; `CHECKOUT_STEP_ORDER` matches PRD sequence.
+- Added `graphs/nodes/checkout_steps.py`: per-step validation gates (Redis cart hydrate, city/date/recipient/sender Pydantic checks, review requires all prior steps + full Delivery); optional Kapruka MCP city/date checks when service injected.
+- Added `graphs/checkout_graph.py`: `build_checkout_graph` / `get_checkout_graph` with `CheckoutGraphDeps` (redis, kapruka, client_ip); START routes to current step node only — one step per invoke.
+- Tests: `tests/unit/test_checkout_graph.py` (cart→review jump blocked, sequential advance, empty cart, back navigation, Redis cart load, navigation matrix).
+Files: graphs/{checkout_state,checkout_graph}.py, graphs/nodes/checkout_steps.py, graphs/__init__.py, tests/unit/test_checkout_graph.py, prd.json
+Next: PRD-068 Checkout sub-graph integration with main graph.
+
+## PRD-068 — Checkout sub-graph integration with main graph
+- Added `graphs/nodes/run_checkout_graph.py`: hydrates Redis cart into `initial_checkout_state`, invokes checkout sub-graph, maps result to `checkout_state` + `tool_results.checkout`.
+- Updated `route_after_analyze_intent`: `intent=checkout` routes to `run_checkout_graph` (not `call_mcp_tools`); tracking still skips HybridRAG.
+- Wired `run_checkout_graph` node in `shopping_graph.py`; `ShoppingGraphDeps.redis_client` injected from `build_shopping_graph_deps`.
+- `analyze_intent`: deterministic `PROCEED_CHECKOUT_MESSAGE` from cart drawer skips Gemini.
+- `generate_response`: checkout branch renders assistant reply from checkout tool_results without LLM.
+- Cart drawer: proceed button + `cart-drawer.js` `proceedToCheckout()` submits chat form.
+- Tests: `test_run_checkout_graph.py`, `test_checkout_graph_integration.py` (Redis cart hydrate, proceed trigger, node order).
+Files: graphs/{checkout_constants,nodes/run_checkout_graph,shopping_graph,nodes/{analyze_intent,generate_response,retrieve_hybrid_context}}, lib/chat/deps.py, templates/checkout/cart_partial.html, static/js/cart-drawer.js, tests/{unit,integration}/test_*.py, prd.json
+Next: PRD-069 Checkout review step with Pro model.
+
+## PRD-069 — Checkout review step with Pro model
+- Added `lib/checkout/review.py`: `CheckoutReviewContext` + `review_context_from_checkout_state` for cart/delivery/recipient/sender summary data.
+- Added `templates/checkout/review.html`: order review partial with cart lines, subtotal, delivery, recipient, sender/gift message sections (`data-testid` markers).
+- Review step in `checkout_steps.py` renders `response_html` via `render_checkout_review` after successful review validation.
+- `run_checkout_graph` passes full checkout fields + `review_html` in tool_results payload; sets `model_tier=pro` when `current_step=review`.
+- `generate_response`: checkout review branch calls Gemini 2.5 Pro via `select_model` (checkout_state=review), embeds review partial in `message_assistant.html` `checkout_review_html` slot.
+- Tests: `test_checkout_review.py` (template sections, review step HTML, model_tier pro, model_router); `test_generate_response` Pro model + embedded summary.
+Files: lib/checkout/review.py, templates/checkout/review.html, templates/chat/message_assistant.html, app/templating.py, graphs/nodes/{checkout_steps,run_checkout_graph,generate_response}.py, tests/unit/{test_checkout_review,test_generate_response}.py, prd.json
+Next: PRD-070 kapruka_create_order integration.
+
+## PRD-070 — kapruka_create_order integration
+- Added `finalize` checkout step after `review` in `CHECKOUT_STEP_ORDER`; fixed `PRE_REVIEW_STEPS` tuple so `all_steps_before_review_valid` no longer requires review before review validation.
+- Added `lib/checkout/order.py`: `build_create_order_from_checkout` maps Redis cart rows + checkout state to Kapruka Recipient/Delivery/Sender/CartItem args.
+- Added `lib/redis/order.py`: `store_pending_order` / `get_pending_order` persist `order_ref` and `expires_at` under `session:{id}:order_*` keys (7-day TTL).
+- `execute_finalize_step` in `checkout_steps.py` calls `KaprukaService.create_order`, stores Redis metadata, returns `checkout_url` / `order_ref` / `expires_at` / `order_summary` in state.
+- `run_checkout_graph` passes order fields in checkout tool_results; `generate_response` surfaces checkout URL message on finalize step.
+- Tests: `test_checkout_order.py`, `test_redis_order.py`, `tests/integration/test_checkout_finalize.py` (mocked MCP + Redis persistence).
+Files: lib/checkout/order.py, lib/redis/order.py, graphs/{state,checkout_state}.py, graphs/nodes/{checkout_steps,run_checkout_graph,generate_response}.py, tests/{unit/test_checkout_order,unit/test_redis_order,integration/test_checkout_finalize}.py, tests/unit/{test_checkout_graph,test_checkout_review}.py, prd.json
+Next: PRD-071 Click-to-pay countdown UI component.
+
+## PRD-071 — Click-to-pay countdown UI component
+- Added `lib/checkout/payment.py`: `PaymentCtaContext`, `payment_cta_from_finalize`, and countdown helpers (`parse_expires_at_iso`, `format_countdown_mm_ss`, `is_countdown_warning`).
+- Added `templates/checkout/payment_cta.html`: order_ref, grand_total, primary CTA (`target="_blank"`), Alpine `paymentCountdown` MM:SS timer with under-10-min warning and expired state.
+- Added `static/js/payment-countdown.js`; loaded from `templates/chat/index.html` before deferred Alpine.
+- `checkout_steps` renders payment CTA on finalize; `run_checkout_graph` exposes `payment_cta_html`; `generate_response` embeds CTA in `message_assistant.html` `checkout_payment_html` slot.
+- Tests: `test_payment_cta.py`, `test_payment_countdown_js.py`, `test_payment_cta_browser.py` (warning + expired); integration finalize asserts payment partial.
+Files: lib/checkout/payment.py, templates/checkout/payment_cta.html, static/js/payment-countdown.js, app/templating.py, graphs/nodes/{checkout_steps,run_checkout_graph,generate_response}.py, templates/chat/{message_assistant,index}.html, tests/unit/{test_payment_cta,test_payment_countdown_js,test_payment_cta_browser}.py, tests/integration/test_checkout_finalize.py, prd.json
+Next: PRD-072 Order tracking chat flow.
+
+## PRD-072 — Order tracking chat flow
+- Added `lib/checkout/tracking.py`: `extract_order_number` regex for post-payment IDs (e.g. VIMP34456CB2), rejects pre-payment `ORD-*` refs; `tracking_output_from_tool_results` parses MCP payload.
+- Added `templates/checkout/tracking_status.html`: status badge, delivery/recipient summary, vertical progress timeline (`data-testid="tracking-timeline"`).
+- `call_mcp_tools`: tracking intent invokes `kapruka_track_order` when order number present; `TRACK_ORDER_TOOL` added to supported explicit tool calls.
+- `generate_response`: tracking branch renders deterministic reply + embedded tracking partial; prompts for order number without LLM when missing.
+- `message_assistant.html` gains `tracking_status_html` slot; `render_tracking_status` in `app/templating.py`.
+- Tests: `test_tracking_status.py` (extraction, timeline HTML, MCP invoke, generate_response embed); updated `test_call_mcp_tools.py` tracking cases.
+Files: lib/checkout/tracking.py, templates/checkout/tracking_status.html, templates/chat/message_assistant.html, graphs/nodes/{call_mcp_tools,generate_response}.py, app/templating.py, tests/unit/{test_tracking_status,test_call_mcp_tools}.py, prd.json
+Next: PRD-073 Exception middleware for MCP errors.
+
+## PRD-073 — Exception middleware for MCP errors
+- Added `app/middleware/errors.py`: `register_exception_handlers` maps KaprukaValidationError→400, KaprukaNotFoundError→404, KaprukaRateLimitError/RateLimitExceeded→429 (Retry-After), KaprukaError→502, Exception→500 generic HTML via `templates/partials/error_banner.html`.
+- HTMX clients (`HX-Request: true`) receive HTML partials with `data-error-code`; JSON clients get `{error_code, message}`. Friendly message map for known MCP codes; lazy template import avoids startup circular import.
+- `render_error_banner()` in `app/templating.py`; wired in `create_app()` after routes/static mount.
+- Tests: `tests/unit/test_error_middleware.py` (400 HTML not JSON for validation, 429/404/502 paths, generic 500 without leak).
+Files: app/middleware/{__init__,errors}.py, app/{main,templating}.py, templates/partials/error_banner.html, tests/unit/test_error_middleware.py, prd.json
+Next: PRD-074 429 rate limit alert banner with countdown.

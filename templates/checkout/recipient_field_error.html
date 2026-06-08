@@ -1,0 +1,9 @@
+{# HTMX OOB fragment — inline field validation error swapped into #recipient-{field}-error. #}
+<div
+  id="recipient-{{ field }}-error"
+  hx-swap-oob="innerHTML"
+  data-testid="recipient-{{ field }}-error"
+  role="alert"
+>
+  <p class="text-sm text-red-600">{{ message }}</p>
+</div>

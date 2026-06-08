@@ -1,0 +1,83 @@
+{# Order review summary — cart, delivery, recipient, and sender before place-order. #}
+<section
+  id="checkout-review"
+  class="flex flex-col gap-4 rounded-xl border border-commerce-parchment bg-commerce-parchment/30 p-4"
+  data-testid="checkout-review"
+  aria-label="Order review summary"
+>
+  <header class="flex items-center justify-between gap-2 border-b border-commerce-parchment pb-3">
+    <h3 class="text-sm font-semibold text-commerce-ink">Review your order</h3>
+    <span class="text-xs font-medium text-commerce-muted" data-testid="checkout-review-item-count">
+      {{ review.item_count }} item{% if review.item_count != 1 %}s{% endif %}
+    </span>
+  </header>
+
+  <div class="flex flex-col gap-2" data-testid="checkout-review-cart">
+    <h4 class="text-xs font-semibold uppercase tracking-wide text-commerce-muted">Cart</h4>
+    <ul class="flex flex-col gap-2">
+      {% for item in review.cart_items %}
+      <li
+        class="flex items-start justify-between gap-3 rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm"
+        data-testid="checkout-review-line-item"
+        data-product-id="{{ item.product_id }}"
+      >
+        <div class="min-w-0 flex-1">
+          <p class="font-medium text-commerce-ink">{{ item.name }}</p>
+          {% if item.icing_text %}
+          <p class="text-xs text-commerce-muted">Icing: {{ item.icing_text }}</p>
+          {% endif %}
+          <p class="text-xs text-commerce-muted">Qty {{ item.quantity }}</p>
+        </div>
+        <p class="shrink-0 font-medium text-kapruka-700" data-testid="checkout-review-line-total">
+          {{ (item.price_amount * item.quantity) | format_currency(review.currency) }}
+        </p>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="text-right text-sm font-semibold text-commerce-ink" data-testid="checkout-review-subtotal">
+      Subtotal: {{ review.items_subtotal | format_currency(review.currency) }}
+    </p>
+  </div>
+
+  <div class="flex flex-col gap-1" data-testid="checkout-review-delivery">
+    <h4 class="text-xs font-semibold uppercase tracking-wide text-commerce-muted">Delivery</h4>
+    <dl class="rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink">
+      <div class="flex flex-col gap-0.5">
+        <dt class="sr-only">Address</dt>
+        <dd data-testid="checkout-review-address">{{ review.delivery_address }}</dd>
+        <dd data-testid="checkout-review-city">{{ review.delivery_city }}</dd>
+        <dd class="text-commerce-muted capitalize" data-testid="checkout-review-location-type">
+          {{ review.delivery_location_type }}
+        </dd>
+        <dd data-testid="checkout-review-date">Date: {{ review.delivery_date }}</dd>
+        {% if review.delivery_instructions %}
+        <dd class="text-commerce-muted" data-testid="checkout-review-instructions">
+          Instructions: {{ review.delivery_instructions }}
+        </dd>
+        {% endif %}
+      </div>
+    </dl>
+  </div>
+
+  <div class="flex flex-col gap-1" data-testid="checkout-review-recipient">
+    <h4 class="text-xs font-semibold uppercase tracking-wide text-commerce-muted">Recipient</h4>
+    <dl class="rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink">
+      <dd data-testid="checkout-review-recipient-name">{{ review.recipient_name }}</dd>
+      <dd class="text-commerce-muted" data-testid="checkout-review-recipient-phone">
+        {{ review.recipient_phone }}
+      </dd>
+    </dl>
+  </div>
+
+  <div class="flex flex-col gap-1" data-testid="checkout-review-sender">
+    <h4 class="text-xs font-semibold uppercase tracking-wide text-commerce-muted">Gift card sender</h4>
+    <dl class="rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink">
+      <dd data-testid="checkout-review-sender-name">{{ review.sender_display }}</dd>
+      {% if review.gift_message %}
+      <dd class="mt-2 border-t border-commerce-parchment/60 pt-2 text-commerce-muted" data-testid="checkout-review-gift-message">
+        “{{ review.gift_message }}”
+      </dd>
+      {% endif %}
+    </dl>
+  </div>
+</section>

@@ -12,7 +12,12 @@ from urllib.parse import quote
 import jinja2
 from fastapi.templating import Jinja2Templates
 
-from lib.kapruka.types import CheckDeliveryOutput
+from lib.checkout.delivery import DeliveryFormValues
+from lib.checkout.payment import PaymentCtaContext
+from lib.checkout.recipient import RecipientFormValues
+from lib.checkout.review import CheckoutReviewContext
+from lib.checkout.sender import SenderFormValues
+from lib.kapruka.types import LOCATION_TYPES, CheckDeliveryOutput, TrackOrderOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import SUPPORTED_CURRENCIES, format_currency
 from lib.utils.timezone import colombo_today_iso
@@ -157,6 +162,156 @@ def render_delivery_date_error(*, title: str, message: str) -> str:
     templates = get_templates()
     template = templates.env.get_template("checkout/delivery_date_error.html")
     return template.render(title=title, message=message)
+
+
+def render_delivery_field_error(*, field: str, message: str) -> str:
+    """Render HTMX OOB inline field error for delivery form validation."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_field_error.html")
+    return template.render(field=field, message=message)
+
+
+def render_delivery_form(
+    *,
+    values: DeliveryFormValues | None = None,
+    min_date: str | None = None,
+    valid: bool = False,
+) -> str:
+    """Render templates/checkout/delivery_form.html with optional submitted values."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/delivery_form.html")
+    return template.render(
+        values=values or DeliveryFormValues(),
+        min_date=min_date or colombo_today_iso(),
+        location_types=sorted(LOCATION_TYPES),
+        valid=valid,
+    )
+
+
+def render_delivery_form_validation_response(
+    *,
+    values: DeliveryFormValues,
+    errors: dict[str, str],
+    valid: bool = False,
+    min_date: str | None = None,
+) -> str:
+    """Render delivery form plus OOB field error fragments (preserves form state)."""
+    form_html = render_delivery_form(values=values, min_date=min_date, valid=valid)
+    if not errors:
+        return form_html
+    oob_errors = "".join(
+        render_delivery_field_error(field=field, message=message)
+        for field, message in errors.items()
+    )
+    return form_html + oob_errors
+
+
+def render_recipient_field_error(*, field: str, message: str) -> str:
+    """Render HTMX OOB inline field error for recipient form validation."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/recipient_field_error.html")
+    return template.render(field=field, message=message)
+
+
+def render_recipient_form(
+    *,
+    values: RecipientFormValues | None = None,
+    valid: bool = False,
+) -> str:
+    """Render templates/checkout/recipient_form.html with optional submitted values."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/recipient_form.html")
+    return template.render(
+        values=values or RecipientFormValues(),
+        valid=valid,
+    )
+
+
+def render_recipient_form_validation_response(
+    *,
+    values: RecipientFormValues,
+    errors: dict[str, str],
+    valid: bool = False,
+) -> str:
+    """Render recipient form plus OOB field error fragments (preserves form state)."""
+    form_html = render_recipient_form(values=values, valid=valid)
+    if not errors:
+        return form_html
+    oob_errors = "".join(
+        render_recipient_field_error(field=field, message=message)
+        for field, message in errors.items()
+    )
+    return form_html + oob_errors
+
+
+def render_sender_field_error(*, field: str, message: str) -> str:
+    """Render HTMX OOB inline field error for sender form validation."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/sender_field_error.html")
+    return template.render(field=field, message=message)
+
+
+def render_sender_form(
+    *,
+    values: SenderFormValues | None = None,
+    valid: bool = False,
+) -> str:
+    """Render templates/checkout/sender_form.html with optional submitted values."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/sender_form.html")
+    return template.render(
+        values=values or SenderFormValues(),
+        valid=valid,
+    )
+
+
+def render_sender_form_validation_response(
+    *,
+    values: SenderFormValues,
+    errors: dict[str, str],
+    valid: bool = False,
+) -> str:
+    """Render sender form plus OOB field error fragments (preserves form state)."""
+    form_html = render_sender_form(values=values, valid=valid)
+    if not errors:
+        return form_html
+    oob_errors = "".join(
+        render_sender_field_error(field=field, message=message) for field, message in errors.items()
+    )
+    return form_html + oob_errors
+
+
+def render_checkout_review(*, review: CheckoutReviewContext) -> str:
+    """Render templates/checkout/review.html order summary for the review step."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/review.html")
+    return template.render(review=review)
+
+
+def render_payment_cta(*, payment: PaymentCtaContext) -> str:
+    """Render templates/checkout/payment_cta.html click-to-pay countdown CTA."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/payment_cta.html")
+    return template.render(payment=payment)
+
+
+def render_tracking_status(*, tracking: TrackOrderOutput) -> str:
+    """Render templates/checkout/tracking_status.html order progress partial."""
+    templates = get_templates()
+    template = templates.env.get_template("checkout/tracking_status.html")
+    return template.render(tracking=tracking)
+
+
+def render_error_banner(
+    *,
+    error_code: str,
+    message: str,
+    title: str = "Unable to complete request",
+) -> str:
+    """Render templates/partials/error_banner.html for HTMX error swaps."""
+    templates = get_templates()
+    template = templates.env.get_template("partials/error_banner.html")
+    return template.render(error_code=error_code, message=message, title=title)
 
 
 def render_currency_selector(*, currency: str = "LKR") -> str:

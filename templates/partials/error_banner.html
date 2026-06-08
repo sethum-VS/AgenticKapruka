@@ -1,0 +1,10 @@
+{# HTMX-compatible alert banner for Kapruka and application errors. #}
+<div
+  class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900"
+  data-testid="error-banner"
+  data-error-code="{{ error_code }}"
+  role="alert"
+>
+  <p class="font-medium">{{ title }}</p>
+  <p>{{ message }}</p>
+</div>

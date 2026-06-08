@@ -16,6 +16,7 @@ CheckoutStep = Literal[
     "recipient",
     "sender",
     "review",
+    "finalize",
 ]
 CurrencyCode = Literal["LKR", "USD", "GBP", "AUD", "CAD", "EUR"]
 

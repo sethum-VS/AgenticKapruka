@@ -19,6 +19,7 @@ from graphs.nodes.retrieve_hybrid_context import (
     retrieve_hybrid_context,
     route_after_analyze_intent,
 )
+from graphs.nodes.run_checkout_graph import run_checkout_graph
 from graphs.nodes.zep_memory_write import zep_memory_write
 from graphs.state import AgentState
 from lib.kapruka.service import KaprukaService
@@ -37,6 +38,7 @@ class ShoppingGraphDeps:
     genai_client: genai.Client | None = None
     neo4j_client: Neo4jClient | None = None
     zep_client: ZepClient | None = None
+    redis_client: RedisClient | None = None
 
 
 def build_shopping_graph(
@@ -51,6 +53,7 @@ def build_shopping_graph(
     client_ip = resolved.client_ip
     neo4j_client = resolved.neo4j_client
     zep_client = resolved.zep_client
+    redis_client = resolved.redis_client
 
     async def _load_zep_memory(state: AgentState) -> dict[str, Any]:
         return await load_zep_memory(state, zep_client=zep_client)
@@ -78,12 +81,21 @@ def build_shopping_graph(
     async def _zep_memory_write(state: AgentState) -> dict[str, Any]:
         return await zep_memory_write(state, zep_client=zep_client)
 
+    async def _run_checkout_graph(state: AgentState) -> dict[str, Any]:
+        return await run_checkout_graph(
+            state,
+            redis_client=redis_client,
+            kapruka_service=kapruka_service,
+            client_ip=client_ip,
+        )
+
     graph = StateGraph(AgentState)
     graph.add_node("load_zep_memory", _load_zep_memory)
     graph.add_node("analyze_intent", _analyze_intent)
     graph.add_node("retrieve_hybrid_context", _retrieve_hybrid_context)
     graph.add_node("call_mcp_tools", _call_mcp_tools)
     graph.add_node("generate_response", _generate_response)
+    graph.add_node("run_checkout_graph", _run_checkout_graph)
     graph.add_node("zep_memory_write", _zep_memory_write)
 
     graph.add_edge(START, "load_zep_memory")
@@ -94,10 +106,12 @@ def build_shopping_graph(
         {
             "retrieve_hybrid_context": "retrieve_hybrid_context",
             "call_mcp_tools": "call_mcp_tools",
+            "run_checkout_graph": "run_checkout_graph",
         },
     )
     graph.add_edge("retrieve_hybrid_context", "call_mcp_tools")
     graph.add_edge("call_mcp_tools", "generate_response")
+    graph.add_edge("run_checkout_graph", "generate_response")
     graph.add_edge("generate_response", "zep_memory_write")
     graph.add_edge("zep_memory_write", END)
 
@@ -111,7 +125,17 @@ async def get_shopping_graph(
 ) -> CompiledStateGraph[AgentState, None, AgentState, AgentState]:
     """Factory: Redis checkpointer + compiled shopping graph."""
     checkpointer = await get_checkpointer(redis_client)
-    return build_shopping_graph(checkpointer=checkpointer, deps=deps)
+    resolved_deps = deps or ShoppingGraphDeps()
+    if resolved_deps.redis_client is None:
+        resolved_deps = ShoppingGraphDeps(
+            kapruka_service=resolved_deps.kapruka_service,
+            client_ip=resolved_deps.client_ip,
+            genai_client=resolved_deps.genai_client,
+            neo4j_client=resolved_deps.neo4j_client,
+            zep_client=resolved_deps.zep_client,
+            redis_client=redis_client,
+        )
+    return build_shopping_graph(checkpointer=checkpointer, deps=resolved_deps)
 
 
 def initial_shopping_state(

@@ -48,6 +48,8 @@ def test_cart_partial_lists_item_with_stepper_and_remove() -> None:
     assert ">2<" in html.replace("\n", "").replace(" ", "")
     assert "Rs. 9,000" in html
     assert 'data-item-count="2"' in html
+    assert 'data-testid="cart-proceed-checkout"' in html
+    assert "proceedToCheckout()" in html
 
 
 def test_cart_partial_disables_decrease_at_quantity_one() -> None:

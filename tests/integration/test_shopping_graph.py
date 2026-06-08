@@ -14,7 +14,8 @@ from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initi
 from graphs.state import AgentState
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
-from lib.kapruka.types import SearchProductsOutput
+from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
+from lib.kapruka.types import SearchProductsOutput, TrackOrderOutput
 
 _CLIENT_IP = "203.0.113.42"
 _SESSION_ID = "sess-shopping-graph-001"
@@ -23,6 +24,34 @@ _SEARCH_OUTPUT = SearchProductsOutput(
     results=[],
     next_cursor=None,
     applied_filters={"q": "birthday cake for mom", "limit": 10, "in_stock_only": False},
+)
+
+_TRACK_OUTPUT = TrackOrderOutput.model_validate(
+    {
+        "order_number": "VIMP34456CB2",
+        "pnref": "12345678901",
+        "status": "shipped",
+        "status_display": "Out for Delivery",
+        "order_date": "June 5, 2026",
+        "delivery_date": "June 7, 2026",
+        "shipped_date": "June 6, 2026",
+        "amount": "15500.00",
+        "payment_method": "Visa",
+        "comments": None,
+        "recipient": {
+            "name": "Ada Lovelace",
+            "phone": "0771234567",
+            "address": "123 Galle Road",
+            "city": "Colombo 03",
+        },
+        "greeting_message": None,
+        "special_instructions": None,
+        "progress": [{"step": "shipped", "timestamp": "June 6, 2026 08:00 AM"}],
+        "live_tracking_available": False,
+        "has_delivery_video": False,
+        "has_delivery_photo": False,
+        "items": [],
+    },
 )
 
 _SEARCH_TOOL_RESULTS = {
@@ -123,17 +152,16 @@ async def test_shopping_graph_end_to_end_discovery_flow(graph_deps: ShoppingGrap
 @pytest.mark.asyncio
 async def test_shopping_graph_tracking_skips_hybrid_context(graph_deps: ShoppingGraphDeps) -> None:
     """Tracking intent routes directly to call_mcp_tools without hybrid retrieval."""
+    kapruka_service = graph_deps.kapruka_service
+    assert isinstance(kapruka_service, AsyncMock)
+    kapruka_service.track_order.return_value = _TRACK_OUTPUT
+
     genai_client = graph_deps.genai_client
     assert isinstance(genai_client, MagicMock)
     tracking_response = MagicMock()
     tracking_response.parsed = IntentClassification(intent="tracking")
     tracking_response.text = '{"intent": "tracking"}'
-    reply_response = MagicMock()
-    reply_response.parsed = AssistantReply(
-        message="Please share your Kapruka order number so I can look up delivery status.",
-    )
-    reply_response.text = reply_response.parsed.model_dump_json()
-    genai_client.models.generate_content.side_effect = [tracking_response, reply_response]
+    genai_client.models.generate_content.side_effect = [tracking_response]
 
     graph = build_shopping_graph(deps=graph_deps)
     result = await graph.ainvoke(
@@ -145,11 +173,17 @@ async def test_shopping_graph_tracking_skips_hybrid_context(graph_deps: Shopping
 
     assert result["intent"] == "tracking"
     assert result.get("hybrid_context") is None
-    assert result.get("tool_call_count") in (None, 0)
-    assert result.get("tool_results") == {}
-    kapruka_service = graph_deps.kapruka_service
-    assert isinstance(kapruka_service, AsyncMock)
+    assert result.get("tool_call_count") == 1
+    tool_results = result.get("tool_results") or {}
+    assert TRACK_ORDER_TOOL in tool_results
+    assert SEARCH_PRODUCTS_TOOL not in tool_results
+    assert "VIMP34456CB2" in (result.get("response_html") or "")
     kapruka_service.search_products.assert_not_awaited()
+    kapruka_service.track_order.assert_awaited_once_with(
+        _CLIENT_IP,
+        order_number="VIMP34456CB2",
+    )
+    assert genai_client.models.generate_content.call_count == 1
 
 
 @pytest.mark.asyncio

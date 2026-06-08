@@ -1,0 +1,141 @@
+{# Delivery address form — server-validated via Pydantic Delivery model. #}
+<form
+  id="delivery-form"
+  class="flex flex-col gap-4"
+  hx-post="/checkout/validate-delivery"
+  hx-target="#delivery-form"
+  hx-swap="outerHTML"
+  data-testid="delivery-form"
+>
+  <div class="flex flex-col gap-1">
+    <label for="delivery-address" class="text-sm font-medium text-commerce-ink">Street address</label>
+    <input
+      id="delivery-address"
+      name="address"
+      type="text"
+      required
+      minlength="3"
+      maxlength="250"
+      value="{{ values.address }}"
+      placeholder="House number, street name…"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      data-testid="delivery-address-input"
+    />
+    <div
+      id="delivery-address-error"
+      class="empty:hidden"
+      data-testid="delivery-address-error-slot"
+      aria-live="polite"
+    ></div>
+  </div>
+
+  <div class="relative flex flex-col gap-1">
+    <label for="delivery-form-city" class="text-sm font-medium text-commerce-ink">Delivery city</label>
+    <input
+      id="delivery-form-city"
+      name="city"
+      type="text"
+      required
+      autocomplete="off"
+      value="{{ values.city }}"
+      placeholder="Start typing a city…"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      hx-get="/partials/delivery-cities"
+      hx-trigger="keyup changed delay:300ms"
+      hx-target="#delivery-form-city-suggestions"
+      hx-swap="innerHTML"
+      aria-autocomplete="list"
+      aria-controls="delivery-form-city-suggestions"
+      data-testid="delivery-form-city-input"
+    />
+    <ul
+      id="delivery-form-city-suggestions"
+      role="listbox"
+      aria-label="City suggestions"
+      class="absolute left-0 right-0 top-full z-10 mt-1 max-h-48 overflow-y-auto rounded-lg border border-commerce-parchment bg-white shadow-sm empty:hidden"
+      data-testid="delivery-form-city-suggestions"
+    ></ul>
+    <div
+      id="delivery-city-error"
+      class="empty:hidden"
+      data-testid="delivery-city-error-slot"
+      aria-live="polite"
+    ></div>
+  </div>
+
+  <div class="flex flex-col gap-1">
+    <label for="delivery-location-type" class="text-sm font-medium text-commerce-ink">Location type</label>
+    <select
+      id="delivery-location-type"
+      name="location_type"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      data-testid="delivery-location-type-input"
+    >
+      {% for option in location_types %}
+      <option value="{{ option }}"{% if values.location_type == option %} selected{% endif %}>{{ option | capitalize }}</option>
+      {% endfor %}
+    </select>
+    <div
+      id="delivery-location_type-error"
+      class="empty:hidden"
+      data-testid="delivery-location-type-error-slot"
+      aria-live="polite"
+    ></div>
+  </div>
+
+  <div class="flex flex-col gap-1">
+    <label for="delivery-form-date" class="text-sm font-medium text-commerce-ink">Delivery date</label>
+    <input
+      id="delivery-form-date"
+      name="date"
+      type="date"
+      required
+      min="{{ min_date }}"
+      value="{{ values.date }}"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      data-testid="delivery-form-date-input"
+    />
+    <p class="text-xs text-commerce-muted">Dates use Sri Lanka time (Asia/Colombo).</p>
+    <div
+      id="delivery-date-error"
+      class="empty:hidden"
+      data-testid="delivery-form-date-error-slot"
+      aria-live="polite"
+    ></div>
+  </div>
+
+  <div class="flex flex-col gap-1">
+    <label for="delivery-instructions" class="text-sm font-medium text-commerce-ink">
+      Delivery instructions <span class="font-normal text-commerce-muted">(optional)</span>
+    </label>
+    <textarea
+      id="delivery-instructions"
+      name="instructions"
+      rows="3"
+      maxlength="250"
+      placeholder="Gate code, landmark, preferred time window…"
+      class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+      data-testid="delivery-instructions-input"
+    >{{ values.instructions }}</textarea>
+    <div
+      id="delivery-instructions-error"
+      class="empty:hidden"
+      data-testid="delivery-instructions-error-slot"
+      aria-live="polite"
+    ></div>
+  </div>
+
+  {% if valid %}
+  <p class="text-sm text-green-700" data-testid="delivery-form-valid" role="status">
+    Delivery details look good.
+  </p>
+  {% endif %}
+
+  <button
+    type="submit"
+    class="rounded-lg bg-kapruka-600 px-4 py-2 text-sm font-medium text-white hover:bg-kapruka-700 focus:outline-none focus:ring-2 focus:ring-kapruka-500/40"
+    data-testid="delivery-form-submit"
+  >
+    Continue
+  </button>
+</form>

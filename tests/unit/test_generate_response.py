@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import HumanMessage
 
+from graphs.checkout_constants import CHECKOUT_TOOL_KEY
+from graphs.model_router import PRO_MODEL
 from graphs.nodes.generate_response import (
     AssistantReply,
     build_products_carousel_html,
@@ -16,6 +18,8 @@ from graphs.nodes.generate_response import (
 )
 from graphs.state import AgentState
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+
+_CHECKOUT_REVIEW_HTML = '<section data-testid="checkout-review">Review summary</section>'
 
 _SEARCH_TOOL_RESULTS = {
     SEARCH_PRODUCTS_TOOL: {
@@ -169,6 +173,57 @@ def test_build_products_carousel_html_renders_carousel() -> None:
 
 def test_build_products_carousel_html_empty_when_no_results() -> None:
     assert build_products_carousel_html({SEARCH_PRODUCTS_TOOL: {"results": []}}) is None
+
+
+@pytest.mark.asyncio
+async def test_generate_response_checkout_review_uses_pro_model_and_embeds_summary() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="Your order looks ready. Please confirm the delivery details below.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="confirm my order")],
+        "intent": "checkout",
+        "checkout_state": "review",
+        "model_tier": "pro",
+        "tool_results": {
+            CHECKOUT_TOOL_KEY: {
+                "current_step": "review",
+                "review_html": _CHECKOUT_REVIEW_HTML,
+                "cart_items": [
+                    {
+                        "product_id": "cake00ka002034",
+                        "name": "Chocolate Birthday Cake",
+                        "quantity": 1,
+                        "price_amount": 4500.0,
+                    },
+                ],
+                "delivery_address": "123 Galle Road",
+                "delivery_city": "Colombo 03",
+                "recipient_name": "Ada",
+                "recipient_phone": "0771234567",
+                "sender_name": "Bob",
+                "sender_anonymous": False,
+            },
+        },
+        "session_id": "sess-gen-review-001",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert result["model_tier"] == "pro"
+    assert 'data-slot="checkout-review"' in result["response_html"]
+    assert 'data-testid="checkout-review"' in result["response_html"]
+    assert "confirm" in result["assistant_message"].lower()
+
+    mock_client.models.generate_content.assert_called_once()
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    assert call_kwargs["model"] == PRO_MODEL
+    assert "checkout_summary" in call_kwargs["contents"]
 
 
 @pytest.mark.asyncio

@@ -765,7 +765,7 @@
       "Render inline field errors as HTMX OOB swap fragments",
       "Test invalid address returns error partial without losing form state"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-065",
@@ -777,7 +777,7 @@
       "Return field-level error partials on validation failure",
       "Write pytest for valid and invalid phone numbers"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-066",
@@ -789,7 +789,7 @@
       "When anonymous checked, display preview showing 'Anonymous' on gift card",
       "Verify form schema matches Sender Pydantic model with name and anonymous only"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-067",
@@ -801,7 +801,7 @@
       "Add nodes for each step with validation gates blocking advance on invalid data",
       "Write unit test verifying cannot jump from cart to review without intermediate steps"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-068",
@@ -813,7 +813,7 @@
       "Pass cart state from Redis into checkout_graph initial state",
       "Integration test verifying checkout flow starts from cart with items present"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-069",
@@ -825,7 +825,7 @@
       "Force model_tier=pro on review step",
       "Verify model_router returns pro when checkout_state is review"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-070",
@@ -837,7 +837,7 @@
       "Parse CreateOrderResponse; store order_ref and expires_at in session Redis",
       "Integration test with mocked MCP verifying checkout_url returned in state"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-071",
@@ -849,7 +849,7 @@
       "Style primary CTA button linking to checkout_url opens in new tab",
       "Verify countdown reaches zero and displays expired message"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-072",
@@ -861,7 +861,7 @@
       "Call track_order with post-payment order_number not order_ref",
       "Write unit test verifying tracking partial renders status timeline HTML"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-073",
@@ -873,7 +873,7 @@
       "Include error code and human-readable message in partial",
       "Write test verifying KaprukaValidationError returns 400 HTML not JSON"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-074",
