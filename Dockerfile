@@ -57,8 +57,11 @@ RUN groupadd --system --gid 1001 app \
 
 COPY --from=builder --chown=app:app /opt/venv /opt/venv
 
+COPY --chown=app:app gunicorn.conf.py .
+
 USER app
 
 EXPOSE 8080
 
-CMD ["gunicorn", "app.main:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8080"]
+# Production entrypoint — see gunicorn.conf.py for workers, timeouts, and bind.
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "app.main:app"]

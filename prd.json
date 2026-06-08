@@ -981,7 +981,7 @@
       "Set graceful_timeout and keepalive for Cloud Run request patterns",
       "Verify gunicorn starts and serves /health with 200"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-083",

@@ -654,3 +654,12 @@ Next: PRD-081 Aggregated health check endpoint.
 - Tests: `tests/unit/test_health.py` (aggregator + endpoint schema, 503 degraded path); updated `test_main.py`, `test_dependencies.py` lifespan coverage.
 Files: lib/health/{__init__,aggregator}.py, app/{routes/health,lifespan}.py, tests/unit/{test_health,test_main,test_dependencies}.py, README.md, prd.json
 Next: PRD-082 Gunicorn Uvicorn production entrypoint.
+
+## PRD-082 — Gunicorn Uvicorn production entrypoint
+- Added `gunicorn.conf.py`: `workers = 2 * cpu_count + 1`, `worker_class = uvicorn.workers.UvicornWorker`, `bind` from `PORT` (default 8080), `timeout=120` for SSE streams, `graceful_timeout=30`, `keepalive=5` for Cloud Run drain/LB reuse.
+- Updated `Dockerfile` CMD to `gunicorn -c gunicorn.conf.py app.main:app`; copies config into runtime image with comment documenting entrypoint.
+- README documents local `gunicorn -c gunicorn.conf.py` equivalent.
+- Tests: `tests/unit/test_gunicorn_conf.py` (config values, PORT bind, subprocess serves `/health` JSON); updated `test_dockerfile.py` for new CMD contract.
+- Verified: ruff, mypy, 452 unit tests pass; gunicorn subprocess integration test reaches `/health` (200 or 503 without live backends).
+Files: gunicorn.conf.py, Dockerfile, README.md, tests/unit/{test_gunicorn_conf,test_dockerfile}.py, prd.json
+Next: PRD-083 Local .env bootstrap via gcloud CLI.

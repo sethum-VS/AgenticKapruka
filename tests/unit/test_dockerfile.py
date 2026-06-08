@@ -23,6 +23,5 @@ def test_dockerfile_multi_stage_production_contract() -> None:
     assert "USER app" in content
     assert "PORT=8080" in content
     assert "EXPOSE 8080" in content
-    assert "gunicorn" in content
-    assert "uvicorn.workers.UvicornWorker" in content
-    assert "0.0.0.0:8080" in content
+    assert "gunicorn.conf.py" in content
+    assert 'CMD ["gunicorn", "-c", "gunicorn.conf.py", "app.main:app"]' in content

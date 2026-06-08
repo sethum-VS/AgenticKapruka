@@ -45,6 +45,12 @@ curl -s http://localhost:8080/health
 # {"status":"healthy","services":{"redis":{"status":"up"},"neo4j":{"status":"up"},"zep":{"status":"up"},"mcp":{"status":"up"}}}
 ```
 
+The container starts Gunicorn with Uvicorn workers via `gunicorn.conf.py` (`workers = 2 * cpu_count + 1`, `timeout = 120` for SSE streams, `graceful_timeout` / `keepalive` tuned for Cloud Run). Local equivalent:
+
+```bash
+gunicorn -c gunicorn.conf.py app.main:app
+```
+
 ## Development
 
 Run quality checks before every commit:
