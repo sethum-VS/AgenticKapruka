@@ -606,3 +606,12 @@ Next: PRD-075 NetworkX community detection background worker.
 - Tests: `tests/unit/test_networkx_worker.py` (Louvain partition, co-purchase vs category-proximity fallback, RECOMMENDS persist, worker start/stop).
 Files: lib/analytics/{__init__,networkx_worker}.py, tests/unit/test_networkx_worker.py, pyproject.toml, prd.json
 Next: PRD-076 Optional cuGraph CUDA Dockerfile stage.
+
+## PRD-076 — Optional cuGraph CUDA Dockerfile stage
+- Added `Dockerfile.cuda`: RAPIDS CUDA 12.8 + Python 3.12 base, installs app deps and `cugraph-cu12` via NVIDIA PyPI index; dev-only, not used for Cloud Run.
+- Added `lib/analytics/cugraph_optional.py`: lazy `importlib` load of cuGraph/cuDF when CUDA driver visible; `detect_louvain_communities_gpu()` mirrors NetworkX Louvain output shape; `preferred_backend()` returns `"cugraph"` or `"networkx"`.
+- README documents NetworkX as production path and optional GPU Docker build for local dev.
+- Mypy overrides for optional `cugraph`/`cudf` imports; exports wired in `lib/analytics/__init__.py`.
+- Tests: `tests/unit/test_cugraph_optional.py` (CUDA detection, import fallback, mocked GPU Louvain partition).
+Files: Dockerfile.cuda, lib/analytics/{__init__,cugraph_optional}.py, tests/unit/test_cugraph_optional.py, README.md, pyproject.toml, prd.json
+Next: PRD-077 Ragas evaluation golden dataset.

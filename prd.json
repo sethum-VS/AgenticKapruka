@@ -909,7 +909,7 @@
       "Create lib/analytics/cugraph_optional.py importing cugraph only when CUDA available",
       "Document in README that cuGraph stage is dev-only; Cloud Run uses NetworkX"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-077",

@@ -23,6 +23,21 @@ Copy `.env.example` to `.env` once PRD-004 lands, then:
 uvicorn app.main:app --reload
 ```
 
+## Graph analytics backends
+
+Community detection for co-purchase recommendations runs on **NetworkX** (CPU) in production Cloud Run (`lib/analytics/networkx_worker.py`). That path is the default everywhere and requires no GPU.
+
+An optional **cuGraph** GPU path exists for local development only (`lib/analytics/cugraph_optional.py`). It imports cuGraph lazily when CUDA is available and falls back to NetworkX otherwise. Cloud Run deploys do **not** use the cuGraph image.
+
+Build the optional CUDA dev image (requires NVIDIA Container Toolkit and a GPU):
+
+```bash
+docker build -f Dockerfile.cuda -t agentic-kapruka:cuda .
+docker run --gpus all agentic-kapruka:cuda
+```
+
+The production Dockerfile (PRD-080) builds the slim CPU runtime used for Cloud Run.
+
 ## Development
 
 Run quality checks before every commit:
