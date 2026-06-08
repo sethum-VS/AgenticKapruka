@@ -672,3 +672,11 @@ Next: PRD-083 Local .env bootstrap via gcloud CLI.
 - README quick start documents `./scripts/bootstrap_env.sh`.
 Files: scripts/bootstrap_env.sh, tests/unit/test_bootstrap_env.py, README.md, prd.json
 Next: PRD-084 Google Cloud Run deployment with gcloud.
+
+## PRD-084 — Google Cloud Run deployment with gcloud
+- Added `scripts/deploy_cloud_run.sh`: enables required GCP APIs, creates Artifact Registry repo if missing, builds via `gcloud builds submit` (documents local `docker build`/`push` alternative), deploys with `--vpc-connector`, `--vpc-egress=private-ranges-only`, `--set-secrets` for all runtime credentials, `--set-env-vars` for GCP_PROJECT_ID/GCP_LOCATION/KAPRUKA_MCP_URL, `--min-instances=0`; supports `--dry-run` and `--skip-build`.
+- Added `docs/DEPLOY.md`: step-by-step gcloud walkthrough (Artifact Registry, Cloud Build / docker push, VPC connector for Memorystore, Secret Manager setup + IAM, env var checklist, manual `gcloud run deploy`, verify `/health`).
+- README links to deploy script and DEPLOY.md.
+- Tests: `tests/unit/test_deploy_cloud_run.py` (script + doc contract, dry-run output).
+Files: scripts/deploy_cloud_run.sh, docs/DEPLOY.md, tests/unit/test_deploy_cloud_run.py, README.md, prd.json
+Next: PRD-085 Playwright E2E smoke tests.

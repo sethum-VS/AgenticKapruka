@@ -1005,7 +1005,7 @@
       "Document gcloud run deploy with --vpc-connector, --set-secrets, --min-instances 0",
       "Include env var checklist for REDIS_URL, NEO4J_URI, ZEP_API_KEY, GOOGLE_API_KEY, GCP_PROJECT_ID"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-085",

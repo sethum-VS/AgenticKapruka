@@ -66,6 +66,17 @@ pytest tests/unit -q
 
 See [AGENTS.md](AGENTS.md) for agent and contributor conventions.
 
+## Cloud Run deployment
+
+Production deploy steps (Artifact Registry, VPC connector, Secret Manager, `gcloud run deploy`):
+
+```bash
+./scripts/deploy_cloud_run.sh --dry-run   # preview commands
+./scripts/deploy_cloud_run.sh              # build, push, deploy
+```
+
+Full walkthrough: [docs/DEPLOY.md](docs/DEPLOY.md).
+
 ## Ralph autonomous workflow
 
 PRD backlog lives in `prd.json`. Progress is logged in `progress.txt`.
