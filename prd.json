@@ -993,7 +993,7 @@
       "Write REDIS_URL=redis://localhost:6379/0 and KAPRUKA_MCP_URL default; Neo4j and ZEP_API_KEY remain manual placeholders",
       "Confirm .env and .env.* are gitignored with !.env.example exception; run bootstrap script and verify Settings loads without validation errors"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-084",

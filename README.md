@@ -17,9 +17,11 @@ source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
-Copy `.env.example` to `.env` once PRD-004 lands, then:
+Bootstrap a local `.env` from gcloud (or copy `.env.example` and fill values manually):
 
 ```bash
+./scripts/bootstrap_env.sh
+# Edit NEO4J_* and ZEP_API_KEY in .env, then:
 uvicorn app.main:app --reload
 ```
 

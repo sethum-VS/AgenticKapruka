@@ -663,3 +663,12 @@ Next: PRD-082 Gunicorn Uvicorn production entrypoint.
 - Verified: ruff, mypy, 452 unit tests pass; gunicorn subprocess integration test reaches `/health` (200 or 503 without live backends).
 Files: gunicorn.conf.py, Dockerfile, README.md, tests/unit/{test_gunicorn_conf,test_dockerfile}.py, prd.json
 Next: PRD-083 Local .env bootstrap via gcloud CLI.
+
+## PRD-083 — Local .env bootstrap via gcloud CLI
+- Added `scripts/bootstrap_env.sh`: reads `GCP_PROJECT_ID` and `GCP_LOCATION` from gcloud config; creates or reuses a `generativelanguage.googleapis.com` API key via `gcloud services api-keys`; generates `SESSION_SECRET` with `secrets.token_urlsafe(48)`; writes `REDIS_URL` and `KAPRUKA_MCP_URL` defaults; leaves Neo4j and Zep as documented placeholders from `.env.example`.
+- `BOOTSTRAP_ENV_FILE` override for tests; `--force` to overwrite existing `.env`; chmod 600 on output.
+- Confirmed `.gitignore` already ignores `.env` / `.env.*` with `!.env.example`.
+- Tests: `tests/unit/test_bootstrap_env.py` (gitignore contract, script contract, mocked gcloud run + Settings load, overwrite guard).
+- README quick start documents `./scripts/bootstrap_env.sh`.
+Files: scripts/bootstrap_env.sh, tests/unit/test_bootstrap_env.py, README.md, prd.json
+Next: PRD-084 Google Cloud Run deployment with gcloud.
