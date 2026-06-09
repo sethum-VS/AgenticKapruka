@@ -148,7 +148,7 @@ jobs:
           SECRETS+=",NEO4J_PASSWORD=neo4j-password:latest"
           SECRETS+=",ZEP_API_KEY=zep-api-key:latest"
           SECRETS+=",SESSION_SECRET=session-secret:latest"
-          ENV_VARS="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},GEMINI_BACKEND=vertex,KAPRUKA_MCP_URL=${KAPRUKA_MCP_URL}"
+          ENV_VARS="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},GEMINI_BACKEND=vertex,KAPRUKA_MCP_URL=${KAPRUKA_MCP_URL},GUNICORN_WORKERS=1"
 
           gcloud run deploy "${SERVICE_NAME}" \
             --project="${GCP_PROJECT_ID}" \
@@ -158,7 +158,7 @@ jobs:
             --allow-unauthenticated \
             --min-instances=0 \
             --max-instances=10 \
-            --memory=1Gi \
+            --memory=2Gi \
             --cpu=1 \
             --concurrency=80 \
             --timeout=120 \
