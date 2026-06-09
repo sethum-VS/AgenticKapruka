@@ -36,6 +36,11 @@ def _load_products() -> list[dict[str, object]]:
     return [json.loads((PRODUCTS_DIR / name).read_text(encoding="utf-8")) for name in names]
 
 
+def _many_products() -> list[dict[str, object]]:
+    """Repeat fixtures so carousel overflow is deterministic on narrow CI viewports."""
+    return _load_products() * 4
+
+
 def _carousel_harness_html(carousel_html: str) -> str:
     css = APP_CSS.read_text(encoding="utf-8")
     return f"""<!DOCTYPE html>
@@ -46,9 +51,16 @@ def _carousel_harness_html(carousel_html: str) -> str:
     <style>
 {css}
       /* Pin carousel width so overflow is deterministic on all CI runners. */
+      [data-testid="product-carousel"] {{
+        width: 240px;
+        max-width: 240px;
+      }}
       [data-testid="product-carousel-track"] {{
         width: 240px;
         max-width: 240px;
+      }}
+      [data-testid="product-carousel-track"] > .snap-start {{
+        flex-shrink: 0;
       }}
       [data-testid="product-card"] {{
         width: 14rem;
@@ -75,13 +87,19 @@ def _wait_for_alpine(page: Page) -> None:
 @pytest.mark.browser
 def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
     """Three or more cards render inside the carousel without widening the page."""
-    carousel_html = render_product_carousel(_load_products())
+    carousel_html = render_product_carousel(_many_products())
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page(viewport={"width": 375, "height": 812})
         page.set_content(_carousel_harness_html(carousel_html))
         _wait_for_alpine(page)
+        page.wait_for_function(
+            """() => {
+              const track = document.querySelector('[data-testid="product-carousel-track"]');
+              return track && track.scrollWidth > track.clientWidth + 8;
+            }"""
+        )
 
         layout = page.evaluate(
             """() => {
@@ -99,7 +117,7 @@ def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
 
         browser.close()
 
-    assert layout["cardCount"] >= 3
+    assert layout["cardCount"] >= 12
     assert layout["pageOverflow"] is False
     assert layout["trackOverflow"] is True
     assert layout["trackClientWidth"] > 0
@@ -108,7 +126,7 @@ def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
 @pytest.mark.browser
 def test_lazy_images_defer_load_until_carousel_scroll() -> None:
     """Off-screen carousel images load and fade in after scrolling into view."""
-    carousel_html = render_product_carousel(_load_products())
+    carousel_html = render_product_carousel(_many_products())
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
