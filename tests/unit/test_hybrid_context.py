@@ -6,12 +6,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from lib.embeddings.reranker import CrossEncoderService
 from lib.neo4j.hybrid_context import (
-    VECTOR_CONFIDENCE_THRESHOLD,
+    DEFAULT_RERANKER_THRESHOLD,
     RewrittenSearchQuery,
     build_discovery_search_args,
     build_graph_hybrid_context,
     occasion_rewrite_needed,
+    rerank_and_prune_traversal,
     rewrite_search_query_with_occasion,
 )
 from lib.neo4j.ontology import LABEL_OCCASION
@@ -24,11 +26,13 @@ def _occasion_node(
     occasion_id: str,
     display_name: str,
     weight: float,
+    description: str | None = None,
 ) -> TraversalNode:
     return TraversalNode(
         id=occasion_id,
         label=LABEL_OCCASION,
         display_name=display_name,
+        description=description,
         hop=1,
         relationship_type="OCCASION_TO_CATEGORY",
         weight=weight,
@@ -36,8 +40,20 @@ def _occasion_node(
     )
 
 
-def test_best_occasion_hint_prefers_high_confidence_vector_hit() -> None:
-    """Direct occasion vector hit at or above threshold wins over traversal overlap."""
+class _SequenceReranker(CrossEncoderService):
+    """Return predetermined scores in pair order for unit tests."""
+
+    def __init__(self, scores: list[float]) -> None:
+        super().__init__(model=None)  # type: ignore[arg-type]
+        self._scores = scores
+
+    def score_pairs(self, query: str, texts: list[str]) -> list[float]:
+        assert len(texts) == len(self._scores)
+        return list(self._scores)
+
+
+def test_hints_use_highest_reranker_score_not_vector_or_weight() -> None:
+    """Cross-encoder score overrides vector similarity and traversal edge weight."""
     traversal = TraversalResult(
         nodes=(
             _occasion_node(
@@ -53,23 +69,28 @@ def test_best_occasion_hint_prefers_high_confidence_vector_hit() -> None:
         ),
     )
     direct_hits = [
-        VectorSearchHit(id="occasion:wedding", score=VECTOR_CONFIDENCE_THRESHOLD),
+        VectorSearchHit(id="occasion:wedding", score=0.99),
         VectorSearchHit(id="occasion:birthday", score=0.4),
     ]
+    # targets: birthday traversal, wedding traversal, cakes vector (wedding direct deduped)
+    reranker = _SequenceReranker([0.5, 0.9, 0.6])
 
     context = build_graph_hybrid_context(
         "cake for mom",
-        vector_hits=[VectorSearchHit(id="category:cakes", score=0.9)],
+        vector_hits=[VectorSearchHit(id="category:cakes", score=0.1)],
         direct_occasion_hits=direct_hits,
         display_names={"category:cakes": "Cakes"},
         traversal=traversal,
+        reranker=reranker,
+        reranker_threshold=DEFAULT_RERANKER_THRESHOLD,
     )
 
     assert context["hints"]["occasion"] == "Wedding"
+    assert context["hints"]["category"] == "Cakes"
 
 
-def test_best_occasion_hint_falls_back_to_highest_weight_traversal() -> None:
-    """Below-threshold vector hits defer to the heaviest traversed occasion node."""
+def test_reranker_prunes_low_scoring_traversal_nodes() -> None:
+    """Occasion/Category traversal nodes below RERANKER_THRESHOLD are dropped."""
     traversal = TraversalResult(
         nodes=(
             _occasion_node(
@@ -84,31 +105,40 @@ def test_best_occasion_hint_falls_back_to_highest_weight_traversal() -> None:
             ),
         ),
     )
-    direct_hits = [VectorSearchHit(id="occasion:wedding", score=0.4)]
+    reranker = _SequenceReranker([0.8, 0.2, 0.9])
 
-    context = build_graph_hybrid_context(
+    pruned, category_hint, occasion_hint = rerank_and_prune_traversal(
         "something elegant",
+        traversal,
         vector_hits=[VectorSearchHit(id="category:flowers", score=0.7)],
-        direct_occasion_hits=direct_hits,
+        direct_occasion_hits=[],
         display_names={"category:flowers": "Flowers"},
-        traversal=traversal,
+        reranker=reranker,
+        threshold=DEFAULT_RERANKER_THRESHOLD,
     )
 
-    assert context["hints"]["occasion"] == "Birthday"
+    assert occasion_hint == "Anniversary"
+    assert category_hint == "Flowers"
+    assert len(pruned.occasions) == 1
+    assert pruned.occasions[0].display_name == "Anniversary"
 
 
-def test_best_occasion_hint_omitted_when_no_vector_or_traversal_signal() -> None:
-    """No hints.occasion when vector scores are low and traversal found no occasions."""
+def test_reranker_omits_hints_below_threshold() -> None:
+    """No hints when every Occasion/Category candidate scores below threshold."""
+    reranker = _SequenceReranker([0.2, 0.1])
+
     context = build_graph_hybrid_context(
         "gift ideas",
         vector_hits=[VectorSearchHit(id="category:gifts", score=0.8)],
         direct_occasion_hits=[VectorSearchHit(id="occasion:wedding", score=0.3)],
         display_names={"category:gifts": "Gifts"},
         traversal=TraversalResult(nodes=()),
+        reranker=reranker,
+        reranker_threshold=DEFAULT_RERANKER_THRESHOLD,
     )
 
-    assert "occasion" not in context.get("hints", {})
-    assert context["hints"]["category"] == "Gifts"
+    assert context.get("hints") == {}
+    assert context["vector_hits"][0]["id"] == "category:gifts"
 
 
 def test_build_discovery_search_args_preserves_raw_user_query() -> None:

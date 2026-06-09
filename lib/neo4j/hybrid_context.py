@@ -6,13 +6,16 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
+from lib.embeddings.reranker import CrossEncoderService
 from lib.neo4j.client import Neo4jClient
+from lib.neo4j.embed_ontology import build_embedding_text
 from lib.neo4j.ontology import LABEL_CATEGORY, LABEL_OCCASION, REL_OCCASION_TO_CATEGORY
 from lib.neo4j.traverse import TraversalNode, TraversalResult
 from lib.neo4j.vector_search import VectorSearchHit
@@ -29,8 +32,9 @@ WHERE o.id IN $occasion_ids
 RETURN DISTINCT c.id AS id
 """.strip()
 
-# Minimum vector-search score before a direct occasion hit becomes hints.occasion.
+# Minimum vector-search score before a direct occasion hit seeds category traversal.
 VECTOR_CONFIDENCE_THRESHOLD = 0.65
+DEFAULT_RERANKER_THRESHOLD = 0.45
 REWRITE_MODEL = "gemini-2.5-flash"
 
 logger = logging.getLogger(__name__)
@@ -87,19 +91,144 @@ def _occasion_display_name(occasion_id: str, occasions: list[TraversalNode]) -> 
     return slug.replace("-", " ").title()
 
 
-def _best_occasion_hint(
-    direct_occasion_hits: list[VectorSearchHit],
-    occasions: list[TraversalNode],
-) -> str | None:
-    """Pick occasion hint from vector hits above threshold, else highest-weight traversal."""
-    sorted_hits = sorted(direct_occasion_hits, key=lambda hit: hit.score, reverse=True)
-    if sorted_hits and sorted_hits[0].score >= VECTOR_CONFIDENCE_THRESHOLD:
-        return _occasion_display_name(sorted_hits[0].id, occasions)
+@dataclass(frozen=True, slots=True)
+class _RerankTarget:
+    """Occasion or Category node candidate for cross-encoder scoring."""
 
-    if not occasions:
+    kind: Literal["category", "occasion"]
+    node_id: str
+    display_name: str
+    description: str | None
+    in_traversal: bool
+
+
+def _build_rerank_targets(
+    *,
+    traversal: TraversalResult,
+    vector_hits: list[VectorSearchHit],
+    direct_occasion_hits: list[VectorSearchHit],
+    display_names: dict[str, str],
+) -> list[_RerankTarget]:
+    """Collect unique Occasion/Category nodes for query–node reranking."""
+    targets: list[_RerankTarget] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(
+        *,
+        kind: Literal["category", "occasion"],
+        node_id: str,
+        display_name: str,
+        description: str | None,
+        in_traversal: bool,
+    ) -> None:
+        key = (kind, node_id)
+        if key in seen:
+            return
+        seen.add(key)
+        targets.append(
+            _RerankTarget(
+                kind=kind,
+                node_id=node_id,
+                display_name=display_name,
+                description=description,
+                in_traversal=in_traversal,
+            )
+        )
+
+    for node in traversal.categories:
+        _add(
+            kind="category",
+            node_id=node.id,
+            display_name=node.display_name,
+            description=node.description,
+            in_traversal=True,
+        )
+    for node in traversal.occasions:
+        _add(
+            kind="occasion",
+            node_id=node.id,
+            display_name=node.display_name,
+            description=node.description,
+            in_traversal=True,
+        )
+    for hit in vector_hits:
+        _add(
+            kind="category",
+            node_id=hit.id,
+            display_name=str(display_names.get(hit.id, hit.id)),
+            description=None,
+            in_traversal=False,
+        )
+    for hit in direct_occasion_hits:
+        _add(
+            kind="occasion",
+            node_id=hit.id,
+            display_name=_occasion_display_name(hit.id, traversal.occasions),
+            description=None,
+            in_traversal=False,
+        )
+    return targets
+
+
+def rerank_and_prune_traversal(
+    query: str,
+    traversal: TraversalResult,
+    *,
+    vector_hits: list[VectorSearchHit],
+    direct_occasion_hits: list[VectorSearchHit],
+    display_names: dict[str, str],
+    reranker: CrossEncoderService,
+    threshold: float = DEFAULT_RERANKER_THRESHOLD,
+) -> tuple[TraversalResult, str | None, str | None]:
+    """Score Occasion/Category nodes, prune traversal below threshold, pick hints."""
+    targets = _build_rerank_targets(
+        traversal=traversal,
+        vector_hits=vector_hits,
+        direct_occasion_hits=direct_occasion_hits,
+        display_names=display_names,
+    )
+    if not targets:
+        return traversal, None, None
+
+    texts = [
+        build_embedding_text(
+            display_name=target.display_name,
+            description=target.description,
+        )
+        for target in targets
+    ]
+    scores = reranker.score_pairs(query, texts)
+    scored = list(zip(targets, scores, strict=True))
+
+    surviving_ids = {
+        target.node_id for target, score in scored if score >= threshold and target.in_traversal
+    }
+    pruned_nodes = tuple(
+        node
+        for node in traversal.nodes
+        if node.label not in (LABEL_OCCASION, LABEL_CATEGORY) or node.id in surviving_ids
+    )
+    pruned = TraversalResult(nodes=pruned_nodes)
+
+    category_hint = _best_hint_by_rerank_score(scored, kind="category", threshold=threshold)
+    occasion_hint = _best_hint_by_rerank_score(scored, kind="occasion", threshold=threshold)
+    return pruned, category_hint, occasion_hint
+
+
+def _best_hint_by_rerank_score(
+    scored: list[tuple[_RerankTarget, float]],
+    *,
+    kind: Literal["category", "occasion"],
+    threshold: float,
+) -> str | None:
+    passing = [
+        (score, target.display_name)
+        for target, score in scored
+        if target.kind == kind and score >= threshold
+    ]
+    if not passing:
         return None
-    best = max(occasions, key=lambda node: node.weight)
-    return best.display_name
+    return max(passing, key=lambda item: item[0])[1]
 
 
 def build_graph_hybrid_context(
@@ -109,10 +238,28 @@ def build_graph_hybrid_context(
     display_names: dict[str, str],
     traversal: TraversalResult,
     direct_occasion_hits: list[VectorSearchHit] | None = None,
+    reranker: CrossEncoderService | None = None,
+    reranker_threshold: float = DEFAULT_RERANKER_THRESHOLD,
 ) -> dict[str, Any]:
     """Assemble graph-derived hybrid_context with MCP filter hints."""
     if not vector_hits and not (direct_occasion_hits or []):
         return {}
+
+    occasion_hits = direct_occasion_hits or []
+    pruned_traversal = traversal
+    category_hint: str | None = None
+    occasion_hint: str | None = None
+
+    if reranker is not None:
+        pruned_traversal, category_hint, occasion_hint = rerank_and_prune_traversal(
+            query,
+            traversal,
+            vector_hits=vector_hits,
+            direct_occasion_hits=occasion_hits,
+            display_names=display_names,
+            reranker=reranker,
+            threshold=reranker_threshold,
+        )
 
     ranked_hits = [
         {
@@ -122,25 +269,22 @@ def build_graph_hybrid_context(
         }
         for hit in vector_hits
     ]
-    ranked_occasion_hits = [
-        {"id": hit.id, "score": hit.score} for hit in (direct_occasion_hits or [])
-    ]
-    top_category_id = vector_hits[0].id if vector_hits else next(iter(display_names), "")
-    top_category = str(display_names.get(top_category_id, top_category_id))
-    occasion_hint = _best_occasion_hint(direct_occasion_hits or [], traversal.occasions)
+    ranked_occasion_hits = [{"id": hit.id, "score": hit.score} for hit in occasion_hits]
 
     hints: dict[str, str] = {}
-    if top_category:
-        hints["category"] = top_category
+    if category_hint:
+        hints["category"] = category_hint
     if occasion_hint:
         hints["occasion"] = occasion_hint
 
     return {
         "vector_hits": ranked_hits,
         "direct_occasion_hits": ranked_occasion_hits,
-        "occasions": [_serialize_traversal_node(node) for node in traversal.occasions],
-        "product_types": [_serialize_traversal_node(node) for node in traversal.product_types],
-        "categories": [_serialize_traversal_node(node) for node in traversal.categories],
+        "occasions": [_serialize_traversal_node(node) for node in pruned_traversal.occasions],
+        "product_types": [
+            _serialize_traversal_node(node) for node in pruned_traversal.product_types
+        ],
+        "categories": [_serialize_traversal_node(node) for node in pruned_traversal.categories],
         "hints": hints,
     }
 

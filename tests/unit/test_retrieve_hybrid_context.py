@@ -198,7 +198,14 @@ async def test_fetch_graph_hybrid_context_runs_parallel_vector_searches() -> Non
             "graphs.nodes.retrieve_hybrid_context.build_graph_hybrid_context",
             return_value={"hints": {"category": "Flowers"}},
         ) as mock_build,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.get_reranker",
+        ) as mock_get_reranker,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.get_settings",
+        ) as mock_get_settings,
     ):
+        mock_get_settings.return_value.reranker_threshold = 0.45
         result = await _fetch_graph_hybrid_context(
             "wedding flowers",
             neo4j_client=neo4j_client,
@@ -219,10 +226,13 @@ async def test_fetch_graph_hybrid_context_runs_parallel_vector_searches() -> Non
         ["category:flowers", "category:cakes"],
         max_hops=2,
     )
+    mock_get_reranker.assert_called_once()
     mock_build.assert_called_once()
     build_kwargs = mock_build.call_args.kwargs
     assert build_kwargs["vector_hits"] == category_hits
     assert build_kwargs["direct_occasion_hits"] == occasion_hits
+    assert build_kwargs["reranker"] is mock_get_reranker.return_value
+    assert build_kwargs["reranker_threshold"] == 0.45
     assert result == {"hints": {"category": "Flowers"}}
 
 

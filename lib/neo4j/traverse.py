@@ -31,6 +31,7 @@ RETURN DISTINCT
   connected.id AS id,
   labels(connected)[0] AS label,
   connected.display_name AS display_name,
+  connected.description AS description,
   length(rels) AS hop,
   [r IN rels | type(r)][-1] AS relationship_type,
   reduce(w = 1.0, r IN rels | w * coalesce(r.weight, 1.0)) AS weight
@@ -45,6 +46,7 @@ class TraversalNode:
     id: str
     label: str
     display_name: str
+    description: str | None
     hop: int
     relationship_type: str
     weight: float
@@ -102,6 +104,9 @@ def _row_to_traversal_node(row: dict[str, Any]) -> TraversalNode:
         id=str(row["id"]),
         label=str(row["label"]),
         display_name=str(row.get("display_name") or row["id"]),
+        description=(
+            str(row["description"]).strip() or None if row.get("description") is not None else None
+        ),
         hop=int(row["hop"]),
         relationship_type=str(row.get("relationship_type") or ""),
         weight=float(row.get("weight") or 1.0),

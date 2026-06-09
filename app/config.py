@@ -41,6 +41,12 @@ class Settings(BaseSettings):
         description="Kapruka MCP JSON-RPC endpoint",
     )
     session_secret: str = Field(..., min_length=32)
+    reranker_threshold: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="Minimum cross-encoder score to keep Occasion/Category traversal nodes",
+    )
 
     @field_validator("redis_url")
     @classmethod

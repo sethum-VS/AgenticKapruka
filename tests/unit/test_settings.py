@@ -43,7 +43,17 @@ def test_settings_loads_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.gcp_location == "us-central1"
     assert settings.kapruka_mcp_url == "https://mcp.kapruka.com/mcp"
     assert settings.session_secret == "x" * 32
+    assert settings.reranker_threshold == 0.45
     assert get_settings() is settings
+
+
+def test_settings_reranker_threshold_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    get_settings.cache_clear()
+    _apply_env(monkeypatch, {**_VALID_ENV, "RERANKER_THRESHOLD": "0.55"})
+
+    settings = get_settings()
+
+    assert settings.reranker_threshold == 0.55
 
 
 def test_settings_rejects_short_session_secret(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -7,6 +7,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -95,6 +96,23 @@ def _semantic_fake_vector(text: str) -> list[float]:
 
 async def _semantic_fake_embed(texts: list[str]) -> list[list[float]]:
     return [_semantic_fake_vector(text) for text in texts]
+
+
+def _semantic_fake_rerank_score(query: str, text: str) -> float:
+    """Keyword overlap scorer — mirrors fake embed semantics without loading CrossEncoder."""
+    tokens = [token for token in query.lower().split() if len(token) >= 3]
+    if not tokens:
+        return 0.2
+    text_lower = text.lower()
+    matches = sum(1 for token in tokens if token in text_lower)
+    if matches == 0:
+        return 0.2
+    return min(0.4 + 0.25 * matches, 1.0)
+
+
+class _SemanticFakeReranker:
+    def score_pairs(self, query: str, texts: list[str]) -> list[float]:
+        return [_semantic_fake_rerank_score(query, text) for text in texts]
 
 
 class _HybridRagMockStore:
@@ -381,11 +399,15 @@ async def test_retrieve_hybrid_context_wedding_flowers_category_filter(
         "session_id": "sess-hybrid-rag-001",
     }
 
-    result = await retrieve_hybrid_context(
-        state,
-        neo4j_client=hybrid_rag_client,
-        embed_fn=_semantic_fake_embed,
-    )
+    with patch(
+        "graphs.nodes.retrieve_hybrid_context.get_reranker",
+        return_value=_SemanticFakeReranker(),
+    ):
+        result = await retrieve_hybrid_context(
+            state,
+            neo4j_client=hybrid_rag_client,
+            embed_fn=_semantic_fake_embed,
+        )
 
     hybrid_context = result["hybrid_context"]
     assert hybrid_context["hints"]["category"] == "Flowers"
