@@ -70,11 +70,28 @@ LangGraph's checkpointer requires RediSearch:
 docker run -d --name agentic-kapruka-redis -p 6379:6379 redis/redis-stack-server:latest
 ```
 
-### 6. Ingest ontology (first time)
+### 6. Bootstrap Neo4j ontology (first time)
+
+Run the full HybridRAG bootstrap (schema, ingest, embed, vector index):
 
 ```bash
+python scripts/bootstrap_neo4j.py
+```
+
+Or run steps individually:
+
+```bash
+python scripts/migrate_ontology.py
 python scripts/ingest_categories.py
 python scripts/embed_ontology.py
+```
+
+`embed_ontology.py` creates the `ontology_category_embedding` vector index after embedding. `/health` reports `neo4j_graphrag: up` only when embeddings and the vector index exist.
+
+After an embedding model upgrade, clear and re-embed:
+
+```bash
+python scripts/bootstrap_neo4j.py --skip-migrate --skip-ingest --force-reembed
 ```
 
 ### 7. Run the app
@@ -99,7 +116,7 @@ Run before every commit:
 ruff check .
 ruff format --check .
 mypy app/ lib/ graphs/
-pytest tests/unit -q
+pytest tests/unit -q -m "not browser"
 ```
 
 ## Optional: Tailwind CSS rebuild

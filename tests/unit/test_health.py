@@ -20,9 +20,21 @@ def _healthy_services() -> dict[str, dict[str, str]]:
     return {
         "redis": {"status": "up"},
         "neo4j": {"status": "up"},
+        "neo4j_graphrag": {"status": "up"},
         "zep": {"status": "up"},
         "mcp": {"status": "up"},
     }
+
+
+def _patch_graphrag_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_category_embeddings",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_category_vector_index",
+        AsyncMock(return_value=True),
+    )
 
 
 @pytest.fixture
@@ -57,6 +69,7 @@ async def test_aggregate_health_healthy_when_all_services_up(
         "lib.health.aggregator.list_categories",
         AsyncMock(return_value=MagicMock()),
     )
+    _patch_graphrag_healthy(monkeypatch)
 
     app = MagicMock()
     app.state = MagicMock()
@@ -80,6 +93,7 @@ async def test_aggregate_health_degraded_when_redis_down(
         "lib.health.aggregator.list_categories",
         AsyncMock(return_value=MagicMock()),
     )
+    _patch_graphrag_healthy(monkeypatch)
     all_healthy_clients["redis"].ping = AsyncMock(return_value=False)
 
     app = MagicMock()
@@ -105,6 +119,7 @@ async def test_aggregate_health_degraded_when_mcp_list_categories_fails(
         "lib.health.aggregator.list_categories",
         AsyncMock(side_effect=RuntimeError("mcp unavailable")),
     )
+    _patch_graphrag_healthy(monkeypatch)
 
     app = MagicMock()
     app.state = MagicMock()
@@ -128,6 +143,7 @@ async def test_health_endpoint_returns_schema_with_mocked_services(
         "lib.health.aggregator.list_categories",
         AsyncMock(return_value=MagicMock()),
     )
+    _patch_graphrag_healthy(monkeypatch)
 
     application = create_app()
     for key, client in all_healthy_clients.items():
@@ -154,6 +170,7 @@ async def test_health_endpoint_returns_503_when_degraded(
         "lib.health.aggregator.list_categories",
         AsyncMock(return_value=MagicMock()),
     )
+    _patch_graphrag_healthy(monkeypatch)
     all_healthy_clients["zep"].health_check = AsyncMock(return_value=False)
 
     application = create_app()
@@ -167,3 +184,65 @@ async def test_health_endpoint_returns_503_when_degraded(
     assert response.status_code == 503
     assert response.json()["status"] == "degraded"
     assert response.json()["services"]["zep"]["status"] == "down"
+
+
+@pytest.mark.asyncio
+async def test_aggregate_health_degraded_when_graphrag_index_missing(
+    all_healthy_clients: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neo4j connectivity up but missing vector index marks neo4j_graphrag down."""
+    monkeypatch.setattr(
+        "lib.health.aggregator.list_categories",
+        AsyncMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_category_embeddings",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_category_vector_index",
+        AsyncMock(return_value=False),
+    )
+
+    app = MagicMock()
+    app.state = MagicMock()
+    for key, client in all_healthy_clients.items():
+        setattr(app.state, key, client)
+
+    body, status_code = await aggregate_health(app)
+
+    assert status_code == 503
+    assert body.status == "degraded"
+    assert body.services.neo4j.status == "up"
+    assert body.services.neo4j_graphrag.status == "down"
+
+
+@pytest.mark.asyncio
+async def test_aggregate_health_degraded_when_neo4j_client_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing Neo4j client marks both neo4j and neo4j_graphrag down."""
+    monkeypatch.setattr(
+        "lib.health.aggregator.list_categories",
+        AsyncMock(return_value=MagicMock()),
+    )
+
+    redis = MagicMock(spec=RedisClient)
+    redis.ping = AsyncMock(return_value=True)
+    zep = MagicMock(spec=ZepClient)
+    zep.health_check = AsyncMock(return_value=True)
+    mcp = MagicMock(spec=MCPHttpClient)
+
+    app = MagicMock()
+    app.state = MagicMock()
+    app.state.redis = redis
+    app.state.neo4j = None
+    app.state.zep = zep
+    app.state.mcp_client = mcp
+
+    body, status_code = await aggregate_health(app)
+
+    assert status_code == 503
+    assert body.services.neo4j.status == "down"
+    assert body.services.neo4j_graphrag.status == "down"

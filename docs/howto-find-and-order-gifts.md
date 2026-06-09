@@ -50,7 +50,7 @@ Continue with [How to complete checkout](howto-complete-checkout.md).
 curl -s http://localhost:8000/health | python -m json.tool
 ```
 
-All four services (`redis`, `neo4j`, `zep`, `mcp`) should report `"up"`.
+All services (`redis`, `neo4j`, `neo4j_graphrag`, `zep`, `mcp`) should report `"up"`.
 
 ## Troubleshooting
 

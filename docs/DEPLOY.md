@@ -23,6 +23,7 @@ gcloud config set compute/region us-central1
 
 ```bash
 gcloud services enable \
+  aiplatform.googleapis.com \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
   run.googleapis.com \
@@ -90,21 +91,32 @@ echo -n 'bolt+s://xxxx.databases.neo4j.io' | gcloud secrets create neo4j-uri --d
 echo -n 'neo4j' | gcloud secrets create neo4j-user --data-file=-
 echo -n 'your-password' | gcloud secrets create neo4j-password --data-file=-
 echo -n 'zep_xxx' | gcloud secrets create zep-api-key --data-file=-
-echo -n 'AIza...' | gcloud secrets create google-api-key --data-file=-
 python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" | gcloud secrets create session-secret --data-file=-
 ```
 
-Grant the Cloud Run service account access to each secret:
+Production uses Vertex AI for Gemini and embeddings (`GEMINI_BACKEND=vertex`). A `google-api-key` secret is only needed when `GEMINI_BACKEND=api_key`.
+
+Grant the **runtime** service account access to each secret (default: `vertexai-api`):
 
 ```bash
-export PROJECT_NUMBER="$(gcloud projects describe "${GCP_PROJECT_ID}" --format='value(projectNumber)')"
-export RUN_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+export RUN_SA="vertexai-api@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
 
-for secret in redis-url neo4j-uri neo4j-user neo4j-password zep-api-key google-api-key session-secret; do
+for secret in redis-url neo4j-uri neo4j-user neo4j-password zep-api-key session-secret; do
   gcloud secrets add-iam-policy-binding "${secret}" \
     --member="serviceAccount:${RUN_SA}" \
     --role="roles/secretmanager.secretAccessor"
 done
+
+gcloud projects add-iam-policy-binding "${GCP_PROJECT_ID}" \
+  --member="serviceAccount:${RUN_SA}" \
+  --role="roles/aiplatform.user"
+```
+
+Create the runtime service account if it does not exist:
+
+```bash
+gcloud iam service-accounts create vertexai-api \
+  --display-name="AgenticKapruka Cloud Run runtime (Vertex AI)"
 ```
 
 ## 5. Environment variable checklist
@@ -116,10 +128,11 @@ done
 | `NEO4J_USER` | Secret Manager | Yes | Usually `neo4j` |
 | `NEO4J_PASSWORD` | Secret Manager | Yes | AuraDB password |
 | `ZEP_API_KEY` | Secret Manager | Yes | Zep Cloud API key |
-| `GOOGLE_API_KEY` | Secret Manager | Yes | Gemini via Generative Language API |
 | `SESSION_SECRET` | Secret Manager | Yes | ≥32 random characters |
-| `GCP_PROJECT_ID` | `--set-env-vars` | Yes | Vertex text-embedding project |
-| `GCP_LOCATION` | `--set-env-vars` | Yes | Vertex region (e.g. `us-central1`) |
+| `GCP_PROJECT_ID` | `--set-env-vars` | Yes | Vertex AI project (Gemini + `gemini-embedding-2`) |
+| `GCP_LOCATION` | `--set-env-vars` | Yes | Vertex region for chat (e.g. `us-central1`; embeddings use global) |
+| `GEMINI_BACKEND` | `--set-env-vars` | Yes | Set to `vertex` in production |
+| `GOOGLE_API_KEY` | Secret Manager | No | Only when `GEMINI_BACKEND=api_key` |
 | `KAPRUKA_MCP_URL` | `--set-env-vars` | No | Defaults to `https://mcp.kapruka.com/mcp` |
 
 ## 6. Deploy to Cloud Run
@@ -142,8 +155,9 @@ gcloud run deploy agentic-kapruka \
   --port=8080 \
   --vpc-connector=agentic-kapruka-connector \
   --vpc-egress=private-ranges-only \
-  --set-secrets="REDIS_URL=redis-url:latest,NEO4J_URI=neo4j-uri:latest,NEO4J_USER=neo4j-user:latest,NEO4J_PASSWORD=neo4j-password:latest,ZEP_API_KEY=zep-api-key:latest,GOOGLE_API_KEY=google-api-key:latest,SESSION_SECRET=session-secret:latest" \
-  --set-env-vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},KAPRUKA_MCP_URL=https://mcp.kapruka.com/mcp"
+  --service-account=vertexai-api@${GCP_PROJECT_ID}.iam.gserviceaccount.com \
+  --set-secrets="REDIS_URL=redis-url:latest,NEO4J_URI=neo4j-uri:latest,NEO4J_USER=neo4j-user:latest,NEO4J_PASSWORD=neo4j-password:latest,ZEP_API_KEY=zep-api-key:latest,SESSION_SECRET=session-secret:latest" \
+  --set-env-vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},GEMINI_BACKEND=vertex,KAPRUKA_MCP_URL=https://mcp.kapruka.com/mcp"
 ```
 
 `--min-instances=0` keeps cost at zero when idle; increase for lower cold-start latency.
@@ -176,10 +190,35 @@ export SERVICE_URL="$(gcloud run services describe agentic-kapruka \
   --format='value(status.url)')"
 
 curl -s "${SERVICE_URL}/health" | jq .
-# {"status":"healthy","services":{"redis":{"status":"up"},...}}
+# {"status":"healthy","services":{"redis":{"status":"up"},"neo4j":{"status":"up"},"neo4j_graphrag":{"status":"up"},...}}
 ```
 
-A `degraded` response means one or more backends (Redis, Neo4j, Zep, MCP) is unreachable — check Secret Manager values and VPC connector routing for Redis.
+A `degraded` response means one or more backends is unreachable or GraphRAG is not bootstrapped. Check Secret Manager values, VPC connector routing for Redis, and Neo4j bootstrap (section 8).
+
+## 8. Neo4j Aura bootstrap (HybridRAG)
+
+Run **once** against production Aura before the first deploy (from a machine with `.env` pointed at prod credentials and Vertex ADC):
+
+```bash
+python scripts/bootstrap_neo4j.py
+```
+
+This runs: schema migration → Kapruka category ingest → Vertex embeddings → vector index creation.
+
+Verify in Aura Browser or cypher-shell:
+
+```cypher
+SHOW INDEXES YIELD name, type WHERE name = 'ontology_category_embedding'
+MATCH (c:Category) WHERE c.embedding IS NOT NULL RETURN count(c)
+```
+
+Re-run when the Kapruka category tree changes significantly:
+
+```bash
+python scripts/bootstrap_neo4j.py --skip-migrate
+```
+
+`/health` requires `neo4j_graphrag: up` (embeddings + vector index present) for `"status":"healthy"`. Run bootstrap before deploy or the GitHub Actions health check will fail.
 
 ## Troubleshooting
 
@@ -187,6 +226,7 @@ A `degraded` response means one or more backends (Redis, Neo4j, Zep, MCP) is unr
 |---------|----------------|
 | Redis `down` in `/health` | VPC connector missing/wrong region, or `REDIS_URL` points to unreachable IP |
 | Neo4j `down` | Incorrect Aura URI or credentials in secrets |
+| `neo4j_graphrag` `down` | Aura not bootstrapped — run `python scripts/bootstrap_neo4j.py` |
 | Zep `down` | Invalid `ZEP_API_KEY` |
 | MCP `down` | Egress blocked or wrong `KAPRUKA_MCP_URL` |
 | Container fails to start | Missing secret or IAM `secretAccessor` on Run service account |
@@ -225,6 +265,12 @@ gcloud iam service-accounts keys create sa-key.json \
 
 Ensure GCP Secret Manager secrets and the VPC connector exist (sections 3–4 above) before the first deploy.
 
+Check readiness (read-only):
+
+```bash
+./scripts/verify_production_prerequisites.sh
+```
+
 ### One-time setup
 
 ```bash
@@ -242,6 +288,7 @@ This configures these GitHub repository secrets:
 | `GCP_SERVICE_NAME` | Cloud Run service name (default `agentic-kapruka`) |
 | `GCP_AR_REPO` | Artifact Registry repository (default `agentic-kapruka`) |
 | `GCP_VPC_CONNECTOR` | VPC Access connector name (default `agentic-kapruka-connector`) |
+| `GCP_RUN_SERVICE_ACCOUNT` | Cloud Run runtime SA short name (default `vertexai-api`) |
 
 Options:
 

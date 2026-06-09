@@ -125,7 +125,13 @@ def test_gunicorn_starts_and_serves_health() -> None:
         assert response.status_code in {200, 503}
         body = response.json()
         assert body["status"] in {"healthy", "degraded"}
-        assert set(body["services"]) == {"redis", "neo4j", "zep", "mcp"}
+        assert set(body["services"]) == {
+            "redis",
+            "neo4j",
+            "neo4j_graphrag",
+            "zep",
+            "mcp",
+        }
     finally:
         proc.terminate()
         try:

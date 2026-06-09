@@ -36,6 +36,11 @@ def _load_products() -> list[dict[str, object]]:
     return [json.loads((PRODUCTS_DIR / name).read_text(encoding="utf-8")) for name in names]
 
 
+def _many_products() -> list[dict[str, object]]:
+    """Repeat fixtures so carousel overflow is deterministic on narrow CI viewports."""
+    return _load_products() * 4
+
+
 def _carousel_harness_html(carousel_html: str) -> str:
     css = APP_CSS.read_text(encoding="utf-8")
     return f"""<!DOCTYPE html>
@@ -43,7 +48,30 @@ def _carousel_harness_html(carousel_html: str) -> str:
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>{css}</style>
+    <style>
+{css}
+      /* Pin carousel width so overflow is deterministic on all CI runners. */
+      [data-testid="product-carousel"] {{
+        width: 100px;
+        max-width: 100px;
+      }}
+      [data-testid="product-carousel-track"] {{
+        display: flex;
+        flex-direction: row;
+        flex-wrap: nowrap;
+        width: 100px;
+        max-width: 100px;
+        overflow-x: auto;
+      }}
+      [data-testid="product-carousel-track"] > .snap-start {{
+        flex-shrink: 0;
+        min-width: 14rem;
+      }}
+      [data-testid="product-card"] {{
+        width: 14rem;
+        flex-shrink: 0;
+      }}
+    </style>
     <script>{LAZY_IMAGE_JS}</script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
   </head>
@@ -64,13 +92,14 @@ def _wait_for_alpine(page: Page) -> None:
 @pytest.mark.browser
 def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
     """Three or more cards render inside the carousel without widening the page."""
-    carousel_html = render_product_carousel(_load_products())
+    carousel_html = render_product_carousel(_many_products())
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page(viewport={"width": 375, "height": 812})
         page.set_content(_carousel_harness_html(carousel_html))
         _wait_for_alpine(page)
+        page.wait_for_timeout(150)
 
         layout = page.evaluate(
             """() => {
@@ -88,7 +117,7 @@ def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
 
         browser.close()
 
-    assert layout["cardCount"] >= 3
+    assert layout["cardCount"] >= 12
     assert layout["pageOverflow"] is False
     assert layout["trackOverflow"] is True
     assert layout["trackClientWidth"] > 0
@@ -97,7 +126,7 @@ def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
 @pytest.mark.browser
 def test_lazy_images_defer_load_until_carousel_scroll() -> None:
     """Off-screen carousel images load and fade in after scrolling into view."""
-    carousel_html = render_product_carousel(_load_products())
+    carousel_html = render_product_carousel(_many_products())
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
@@ -118,19 +147,26 @@ def test_lazy_images_defer_load_until_carousel_scroll() -> None:
             """() => {
               const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
               const track = document.querySelector('[data-testid="product-carousel-track"]');
-              const last = lazyImages[lazyImages.length - 1];
-              const rect = last.getBoundingClientRect();
+              track.scrollLeft = 0;
               const trackRect = track.getBoundingClientRect();
-              const offScreen = rect.left >= trackRect.right - 4;
-              const data = last._x_dataStack?.[0];
+              const rightmost = lazyImages.reduce((best, el) => {
+                const left = el.getBoundingClientRect().left;
+                return left > best.left ? { el, left } : best;
+              }, { el: lazyImages[0], left: -1 });
+              const target = rightmost.el;
+              const rect = target.getBoundingClientRect();
+              const offScreen = rect.left >= trackRect.right - 1;
+              const data = target._x_dataStack?.[0];
               return {
                 offScreen,
                 inView: data?.inView ?? false,
                 loaded: data?.loaded ?? false,
-                hasImg: Boolean(last.querySelector('img')),
+                hasImg: Boolean(target.querySelector('img')),
+                lazyCount: lazyImages.length,
               };
             }"""
         )
+        assert off_screen["lazyCount"] >= 12
         assert off_screen["offScreen"] is True
         assert off_screen["inView"] is False
         assert off_screen["hasImg"] is False
@@ -141,24 +177,33 @@ def test_lazy_images_defer_load_until_carousel_scroll() -> None:
               track.scrollLeft = track.scrollWidth;
             }"""
         )
-        page.wait_for_timeout(50)
+        page.wait_for_timeout(100)
 
         page.wait_for_function(
             """() => {
               const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
-              const last = lazyImages[lazyImages.length - 1];
-              const data = last._x_dataStack?.[0];
-              const img = last.querySelector('img');
-              return Boolean(data?.inView && img);
+              const track = document.querySelector('[data-testid="product-carousel-track"]');
+              const rightmost = lazyImages.reduce((best, el) => {
+                const left = el.getBoundingClientRect().left;
+                return left > best.left ? { el, left } : best;
+              }, { el: lazyImages[0], left: -1 });
+              const target = rightmost.el;
+              const data = target._x_dataStack?.[0];
+              const img = target.querySelector('img');
+              return Boolean(track.scrollLeft > 0 && data?.inView && img);
             }"""
         )
 
         page.wait_for_function(
             """() => {
               const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
-              const last = lazyImages[lazyImages.length - 1];
-              const data = last._x_dataStack?.[0];
-              const img = last.querySelector('img');
+              const rightmost = lazyImages.reduce((best, el) => {
+                const left = el.getBoundingClientRect().left;
+                return left > best.left ? { el, left } : best;
+              }, { el: lazyImages[0], left: -1 });
+              const target = rightmost.el;
+              const data = target._x_dataStack?.[0];
+              const img = target.querySelector('img');
               return Boolean(data?.loaded && img?.classList.contains('opacity-100'));
             }"""
         )

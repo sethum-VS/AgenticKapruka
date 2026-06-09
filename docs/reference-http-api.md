@@ -18,11 +18,14 @@ Aggregate dependency probe.
   "services": {
     "redis": {"status": "up"},
     "neo4j": {"status": "up"},
+    "neo4j_graphrag": {"status": "up"},
     "zep": {"status": "up"},
     "mcp": {"status": "up"}
   }
 }
 ```
+
+`neo4j_graphrag` is `up` only when Category embeddings and the `ontology_category_embedding` vector index exist (run `python scripts/bootstrap_neo4j.py` against Aura first).
 
 **Response 503** (any service down): `"status": "degraded"`
 

@@ -34,7 +34,7 @@ jobs:
         run: mypy app/ lib/ graphs/
 
       - name: Unit tests
-        run: pytest tests/unit -q
+        run: pytest tests/unit -q -m "not browser"
 
   e2e-smoke:
     name: Playwright E2E smoke tests
@@ -56,6 +56,9 @@ jobs:
 
       - name: E2E smoke tests
         run: pytest tests/e2e -q
+
+      - name: Browser component harness tests
+        run: pytest tests/unit -q -m browser
 
   ragas-eval:
     name: Ragas golden dataset eval
