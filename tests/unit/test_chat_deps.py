@@ -88,6 +88,25 @@ async def test_resolve_turn_state_seeds_currency_on_first_turn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_turn_state_without_checkpointer_seeds_fresh_state() -> None:
+    graph = MagicMock()
+    graph.aget_state = AsyncMock(side_effect=ValueError("No checkpointer set"))
+    config: RunnableConfig = {"configurable": {"thread_id": "thread-no-cp"}}
+
+    state = await resolve_turn_state(
+        graph,
+        message="hello",
+        session_id="thread-no-cp",
+        zep_thread_id="thread-no-cp",
+        config=config,
+        currency="LKR",
+    )
+
+    assert state["messages"][-1].content == "hello"
+    assert state["currency"] == "LKR"
+
+
+@pytest.mark.asyncio
 async def test_resolve_turn_state_refreshes_currency_on_follow_up() -> None:
     graph = MagicMock()
     graph.aget_state = AsyncMock(

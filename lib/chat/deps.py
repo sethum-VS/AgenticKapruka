@@ -106,8 +106,16 @@ async def resolve_turn_state(
     """Use checkpoint thread state for follow-ups; seed session on first turn."""
     from graphs.shopping_graph import append_message_state, initial_shopping_state
 
-    snapshot = await graph.aget_state(config)
-    if snapshot.values:
+    snapshot_values: dict[str, object] | None = None
+    try:
+        snapshot = await graph.aget_state(config)
+        snapshot_values = snapshot.values or None
+    except ValueError as exc:
+        if "No checkpointer set" not in str(exc):
+            raise
+        logger.debug("No LangGraph checkpointer; seeding fresh turn state")
+
+    if snapshot_values:
         return append_message_state(message, currency=currency)
     return initial_shopping_state(
         message=message,
