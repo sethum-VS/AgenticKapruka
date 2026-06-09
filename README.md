@@ -118,7 +118,7 @@ Routing is deterministic after classification: checkout messages enter the check
 
 ### HybridRAG Context Retrieval
 
-For discovery intents, the system embeds the user's query (Vertex AI embeddings), vector-searches Neo4j gift-category ontology, traverses related occasions and product types, and merges Zep-stored preferences (currency, occasions, past interests). The result guides MCP search parameters — for example, narrowing to "birthday cakes" instead of searching the entire catalog.
+For discovery intents, the system embeds the user's query (Vertex AI `gemini-embedding-2`), vector-searches Neo4j gift-category ontology, traverses related occasions and product types, and merges Zep-stored preferences (currency, occasions, past interests). The result guides MCP search parameters — for example, narrowing to "birthday cakes" instead of searching the entire catalog.
 
 ### Kapruka MCP Tool Execution
 
@@ -187,6 +187,7 @@ pip install -e '.[dev]'
 gcloud auth application-default login
 docker run -d --name agentic-kapruka-redis -p 6379:6379 redis/redis-stack-server:latest
 # Edit NEO4J_*, ZEP_API_KEY, SESSION_SECRET in .env
+python scripts/bootstrap_neo4j.py   # first time: schema, ingest, embed, vector index
 uvicorn app.main:app --reload
 ```
 
@@ -206,11 +207,13 @@ pytest tests/unit -q
 ### Production Deploy
 
 ```bash
-./scripts/deploy_cloud_run.sh --dry-run   # preview
-./scripts/deploy_cloud_run.sh              # build, push, deploy
+./scripts/verify_production_prerequisites.sh   # GCP + GitHub secrets checklist
+python scripts/bootstrap_neo4j.py              # once against production Aura
+./scripts/deploy_cloud_run.sh --dry-run        # preview
+./scripts/deploy_cloud_run.sh                  # build, push, deploy
 ```
 
-Full walkthrough: [docs/DEPLOY.md](docs/DEPLOY.md)
+`/health` requires all five services up, including `neo4j_graphrag`. Full walkthrough: [docs/DEPLOY.md](docs/DEPLOY.md)
 
 ---
 
@@ -247,7 +250,7 @@ graphs/       LangGraph shopping and checkout orchestration
 templates/    Jinja2 HTML partials (chat, cart, checkout components)
 static/       Compiled CSS, HTMX/Alpine.js client scripts
 tests/        Unit, integration, browser, and e2e tests (107 test modules)
-scripts/      Deploy, env bootstrap, ontology ingest, Ralph loop
+scripts/      Deploy, Neo4j bootstrap, env bootstrap, Ralph loop
 evals/        RAGAS evaluation harness and golden dataset
 docs/         Diataxis documentation
 ```

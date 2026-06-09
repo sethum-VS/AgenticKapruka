@@ -129,8 +129,8 @@ gcloud iam service-accounts create vertexai-api \
 | `NEO4J_PASSWORD` | Secret Manager | Yes | AuraDB password |
 | `ZEP_API_KEY` | Secret Manager | Yes | Zep Cloud API key |
 | `SESSION_SECRET` | Secret Manager | Yes | ≥32 random characters |
-| `GCP_PROJECT_ID` | `--set-env-vars` | Yes | Vertex text-embedding project |
-| `GCP_LOCATION` | `--set-env-vars` | Yes | Vertex region (e.g. `us-central1`) |
+| `GCP_PROJECT_ID` | `--set-env-vars` | Yes | Vertex AI project (Gemini + `gemini-embedding-2`) |
+| `GCP_LOCATION` | `--set-env-vars` | Yes | Vertex region for chat (e.g. `us-central1`; embeddings use global) |
 | `GEMINI_BACKEND` | `--set-env-vars` | Yes | Set to `vertex` in production |
 | `GOOGLE_API_KEY` | Secret Manager | No | Only when `GEMINI_BACKEND=api_key` |
 | `KAPRUKA_MCP_URL` | `--set-env-vars` | No | Defaults to `https://mcp.kapruka.com/mcp` |

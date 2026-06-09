@@ -12,8 +12,8 @@ Complete configuration reference for AgenticKapruka. Copy `.env.example` to `.en
 | `NEO4J_PASSWORD` | secret | — | Neo4j password |
 | `ZEP_API_KEY` | secret | — | Zep Cloud API key |
 | `SESSION_SECRET` | secret | — | Cookie signing key, minimum 32 characters |
-| `GCP_PROJECT_ID` | string | — | Google Cloud project for Vertex AI |
-| `GCP_LOCATION` | string | `us-central1` | Vertex AI region |
+| `GCP_PROJECT_ID` | string | — | Google Cloud project for Vertex AI (Gemini chat + `gemini-embedding-2`) |
+| `GCP_LOCATION` | string | `us-central1` | Vertex AI region for Gemini chat (embeddings use the global endpoint) |
 
 ## Google AI
 
@@ -60,6 +60,22 @@ SESSION_SECRET=session-secret:latest
 ```
 
 See [DEPLOY.md](DEPLOY.md) for the full deploy script.
+
+### Neo4j GraphRAG bootstrap
+
+HybridRAG requires a one-time Aura bootstrap before production `/health` reports healthy:
+
+```bash
+python scripts/bootstrap_neo4j.py
+```
+
+After an embedding model upgrade, re-embed with `python scripts/bootstrap_neo4j.py --skip-migrate --skip-ingest --force-reembed`.
+
+Check GCP and GitHub prerequisites before first deploy:
+
+```bash
+./scripts/verify_production_prerequisites.sh
+```
 
 ## Generating secrets
 

@@ -88,6 +88,12 @@ python scripts/embed_ontology.py
 
 `embed_ontology.py` creates the `ontology_category_embedding` vector index after embedding. `/health` reports `neo4j_graphrag: up` only when embeddings and the vector index exist.
 
+After an embedding model upgrade, clear and re-embed:
+
+```bash
+python scripts/bootstrap_neo4j.py --skip-migrate --skip-ingest --force-reembed
+```
+
 ### 7. Run the app
 
 ```bash
