@@ -124,7 +124,7 @@ async def get_shopping_graph(
     *,
     deps: ShoppingGraphDeps | None = None,
 ) -> CompiledStateGraph[AgentState, None, AgentState, AgentState]:
-    """Factory: Redis checkpointer + compiled shopping graph."""
+    """Factory: optional Redis checkpointer + compiled shopping graph."""
     checkpointer = await get_checkpointer(redis_client)
     resolved_deps = deps or ShoppingGraphDeps()
     if resolved_deps.redis_client is None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import redis.exceptions
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from lib.redis.client import RedisClient
@@ -16,12 +17,29 @@ def create_checkpointer(redis_client: RedisClient) -> AsyncRedisSaver:
     return AsyncRedisSaver(redis_client=redis_client.client)
 
 
-async def get_checkpointer(redis_client: RedisClient) -> AsyncRedisSaver:
-    """Create and initialize the LangGraph Redis checkpointer.
+async def redis_supports_redisearch(redis_client: RedisClient) -> bool:
+    """Return True when the Redis instance exposes RediSearch (Redis Stack)."""
+    try:
+        await redis_client.client.execute_command("FT._LIST")  # type: ignore[no-untyped-call]
+    except redis.exceptions.ResponseError:
+        return False
+    else:
+        return True
 
-    Calls ``asetup()`` to create RediSearch indices required by Memorystore /
-    Redis Stack. Must be invoked once per process before compiling graphs.
+
+async def get_checkpointer(redis_client: RedisClient) -> AsyncRedisSaver | None:
+    """Create and initialize the LangGraph Redis checkpointer when RediSearch is available.
+
+    Standard Memorystore for Redis does not ship RediSearch modules. In that case
+    returns ``None`` so graphs compile without checkpoint persistence rather than
+    failing every chat request.
     """
+    if not await redis_supports_redisearch(redis_client):
+        logger.warning(
+            "RediSearch unavailable on REDIS_URL — LangGraph checkpointer disabled; "
+            "deploy Redis Stack for multi-turn checkpoint persistence"
+        )
+        return None
     checkpointer = create_checkpointer(redis_client)
     await checkpointer.asetup()
     logger.debug("LangGraph Redis checkpointer initialized")
