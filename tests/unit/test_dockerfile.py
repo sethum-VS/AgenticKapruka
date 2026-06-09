@@ -20,6 +20,7 @@ def test_dockerfile_multi_stage_production_contract() -> None:
     assert "pip install" in content
     assert "tailwindcss" in content
     assert "static/css/app.css" in content
+    assert "static/js/" in content
     assert "USER app" in content
     assert "PORT=8080" in content
     assert "EXPOSE 8080" in content

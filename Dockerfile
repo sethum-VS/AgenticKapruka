@@ -28,6 +28,7 @@ RUN pip install --upgrade pip \
 
 # Compile Tailwind CSS (standalone CLI — no Node.js).
 COPY static/css/input.css static/css/input.css
+COPY static/js/ static/js/
 COPY tailwind.config.js tailwind.config.js
 COPY templates/ templates/
 COPY scripts/install-tailwind.sh scripts/install-tailwind.sh
