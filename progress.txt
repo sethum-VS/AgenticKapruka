@@ -698,3 +698,11 @@ Next: PRD-086 IaC bash script for GitHub Actions secrets and Cloud Run CI/CD.
 - Tests: `tests/unit/test_setup_github_cicd.py` (script contract, main.yml YAML, dry-run, mocked gh secrets, workflow-only scaffold).
 Files: scripts/setup_github_cicd.sh, .github/workflows/main.yml, docs/DEPLOY.md, README.md, tests/unit/test_setup_github_cicd.py, prd.json
 Next: All PRDs complete.
+
+## PRD-087 — Dual-index vector architecture for Occasion embeddings
+- Extended `lib/neo4j/vector_search.py`: `ontology_occasion_embedding` index on `(:Occasion).embedding` (768-dim cosine); `create_occasion_vector_index`, `has_occasion_vector_index`, `occasion_vector_search`; `create_ontology_vector_indexes` creates Category then Occasion sequentially. Category index unchanged.
+- Added `scripts/bootstrap_neo4j.py`: schema → ingest → embed → `_run_index` calling `create_ontology_vector_indexes` after embed phase; `--skip-ingest` flag for re-embed/index runs.
+- Exported new vector helpers from `lib/neo4j/__init__.py`.
+- Tests: 4 new cases in `tests/unit/test_vector_search.py` (occasion CREATE, dual-index order, occasion search contract, dimension validation); mock store routes queryNodes by index name/label.
+Files: lib/neo4j/{vector_search,__init__}.py, scripts/bootstrap_neo4j.py, tests/unit/test_vector_search.py, prd.json
+Next: PRD-088 Parallel vector search and occasion-to-category seeding.

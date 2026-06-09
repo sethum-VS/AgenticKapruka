@@ -15,12 +15,17 @@ from lib.kapruka.types import CategoryNode
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import build_embedding_text, embed_ontology_nodes
 from lib.neo4j.ingest_categories import ingest_category_tree
-from lib.neo4j.ontology import LABEL_CATEGORY
+from lib.neo4j.ontology import LABEL_CATEGORY, LABEL_OCCASION
 from lib.neo4j.vector_search import (
+    OCCASION_VECTOR_INDEX_NAME,
     VECTOR_INDEX_NAME,
     VECTOR_SIMILARITY_FUNCTION,
     create_category_vector_index,
+    create_occasion_vector_index,
+    create_ontology_vector_indexes,
     has_category_vector_index,
+    has_occasion_vector_index,
+    occasion_vector_search,
     vector_search,
 )
 
@@ -135,10 +140,15 @@ class _VectorSearchMockStore:
 
         if cypher.startswith("CREATE VECTOR INDEX"):
             name = cypher.split()[3]
+            label = LABEL_CATEGORY
+            if f"FOR (n:{LABEL_OCCASION})" in cypher:
+                label = LABEL_OCCASION
+            elif f"FOR (n:{LABEL_CATEGORY})" in cypher:
+                label = LABEL_CATEGORY
             self.vector_indexes[name] = {
                 "name": name,
                 "type": "VECTOR",
-                "labelsOrTypes": [LABEL_CATEGORY],
+                "labelsOrTypes": [label],
                 "properties": ["embedding"],
                 "options": {
                     "indexConfig": {
@@ -158,8 +168,12 @@ class _VectorSearchMockStore:
         if cypher.startswith("CALL db.index.vector.queryNodes"):
             query_embedding = parameters["query_embedding"]
             top_k = int(parameters["top_k"])
+            index_name = parameters["index_name"]
+            label = LABEL_CATEGORY
+            if index_name == OCCASION_VECTOR_INDEX_NAME:
+                label = LABEL_OCCASION
             hits: list[dict[str, Any]] = []
-            for node_id in self.nodes.get(LABEL_CATEGORY, set()):
+            for node_id in self.nodes.get(label, set()):
                 props = self.node_properties.get(node_id, {})
                 embedding = props.get("embedding")
                 if embedding is None:
@@ -344,5 +358,75 @@ async def test_vector_search_rejects_invalid_top_k() -> None:
 
     with pytest.raises(ValueError, match="top_k"):
         await vector_search(client, query, top_k=0)
+
+    await client.close()
+
+
+async def test_create_occasion_vector_index_executes_create_statement() -> None:
+    store = _VectorSearchMockStore()
+    client = _client_with_store(store)
+
+    await create_occasion_vector_index(client)
+
+    create_cyphers = [
+        cypher for cypher, _ in store.executed if cypher.startswith("CREATE VECTOR INDEX")
+    ]
+    assert len(create_cyphers) == 1
+    assert OCCASION_VECTOR_INDEX_NAME in create_cyphers[0]
+    assert f"FOR (n:{LABEL_OCCASION})" in create_cyphers[0]
+    assert await has_occasion_vector_index(client) is True
+    await client.close()
+
+
+async def test_create_ontology_vector_indexes_creates_category_then_occasion() -> None:
+    store = _VectorSearchMockStore()
+    client = _client_with_store(store)
+
+    await create_ontology_vector_indexes(client)
+
+    create_cyphers = [
+        cypher for cypher, _ in store.executed if cypher.startswith("CREATE VECTOR INDEX")
+    ]
+    assert len(create_cyphers) == 2
+    assert VECTOR_INDEX_NAME in create_cyphers[0]
+    assert f"FOR (n:{LABEL_CATEGORY})" in create_cyphers[0]
+    assert OCCASION_VECTOR_INDEX_NAME in create_cyphers[1]
+    assert f"FOR (n:{LABEL_OCCASION})" in create_cyphers[1]
+    assert await has_category_vector_index(client) is True
+    assert await has_occasion_vector_index(client) is True
+    await client.close()
+
+
+async def test_occasion_vector_search_returns_ids_and_scores() -> None:
+    store = _VectorSearchMockStore()
+    client = _client_with_store(store)
+    await ingest_category_tree(client, _SAMPLE_TREE)
+    await embed_ontology_nodes(client, embed_fn=_semantic_fake_embed)
+    await create_occasion_vector_index(client)
+
+    query = _semantic_fake_vector("birthday gift")
+    hits = await occasion_vector_search(client, query, top_k=2)
+
+    assert len(hits) >= 1
+    assert all(hit.id.startswith("occasion:") for hit in hits)
+    assert all(0.0 <= hit.score <= 1.0 for hit in hits)
+    if len(hits) > 1:
+        assert hits[0].score >= hits[1].score
+
+    query_calls = [
+        params
+        for cypher, params in store.executed
+        if cypher.startswith("CALL db.index.vector.queryNodes")
+    ]
+    assert query_calls[-1]["index_name"] == OCCASION_VECTOR_INDEX_NAME
+    await client.close()
+
+
+async def test_occasion_vector_search_rejects_wrong_embedding_dimension() -> None:
+    store = _VectorSearchMockStore()
+    client = _client_with_store(store)
+
+    with pytest.raises(ValueError, match="768 dimensions"):
+        await occasion_vector_search(client, [0.1, 0.2, 0.3])
 
     await client.close()

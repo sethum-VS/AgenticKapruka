@@ -1030,5 +1030,57 @@
       "Document script prerequisites (gh auth, gcloud) in docs/DEPLOY.md and verify workflow YAML syntax"
     ],
     "passes": true
+  },
+  {
+    "id": "PRD-087",
+    "category": "graphrag",
+    "title": "Dual-index vector architecture for Occasion embeddings",
+    "description": "Extend lib/neo4j/vector_search.py with a secondary ontology_occasion_embedding vector index on (:Occasion).embedding (768-dim cosine) alongside the existing Category index. Export an initialization wrapper that creates both indexes sequentially and wire it into scripts/bootstrap_neo4j.py immediately after the node embedding phase completes.",
+    "steps": [
+      "Keep ontology_category_embedding on (:Category).embedding unchanged",
+      "Add create_occasion_vector_index(), has_occasion_vector_index(), and occasion_vector_search() targeting ontology_occasion_embedding with LABEL_OCCASION",
+      "Add create_ontology_vector_indexes(client) that creates Category then Occasion indexes; call from bootstrap_neo4j _run_index after embed phase",
+      "Write unit tests in tests/unit/test_vector_search.py for occasion index helpers and mock Neo4j client query contract"
+    ],
+    "passes": true
+  },
+  {
+    "id": "PRD-088",
+    "category": "graphrag",
+    "title": "Parallel vector search and occasion-to-category seeding",
+    "description": "Rewrite graphs/nodes/retrieve_hybrid_context.py _fetch_graph_hybrid_context to run Category and Occasion vector searches concurrently via asyncio.gather using one query embedding. For occasion hits with score >= 0.65, hop OCCASION_TO_CATEGORY to collect related category ids; merge with direct category hits into a deduplicated seed set for traverse_from_categories.",
+    "steps": [
+      "Use asyncio.gather to query ontology_category_embedding and ontology_occasion_embedding in parallel",
+      "Implement Cypher fast-hop: MATCH (o:Occasion)-[:OCCASION_TO_CATEGORY]->(c:Category) WHERE o.id IN $occasion_ids RETURN c.id for hits >= 0.65",
+      "Merge direct category ids and occasion-derived category ids into a deduplicated set; pass as seed to traverse_from_categories",
+      "Pass direct_occasion_hits through to build_graph_hybrid_context; update tests/unit/test_retrieve_hybrid_context.py with mock parallel search"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-089",
+    "category": "graphrag",
+    "title": "Semantic occasion hint extraction from vector hits",
+    "description": "Remove lexical token-overlap fallback in lib/neo4j/hybrid_context.py _best_occasion_hint. Select hints.occasion from direct_occasion_hits when top score >= 0.65; otherwise fall back to the traversed graph occasion node with highest cumulative path weight.",
+    "steps": [
+      "Delete _query_tokens, _WORD_RE, and string-splitting overlap logic from hybrid_context.py",
+      "Refactor build_graph_hybrid_context to accept direct_occasion_hits: list[VectorSearchHit] and resolve occasion via vector score threshold 0.65",
+      "When no direct hit meets threshold, pick highest-weight TraversalNode from traversal.occasions",
+      "Update tests/unit/test_hybrid_context.py covering vector-first hint, traversal fallback, and no-hint path"
+    ],
+    "passes": false
+  },
+  {
+    "id": "PRD-090",
+    "category": "graphrag",
+    "title": "Protect MCP search string integrity in discovery args",
+    "description": "Refactor build_discovery_search_args in lib/neo4j/hybrid_context.py and graphs/nodes/call_mcp_tools.py so kapruka_search_products q stays the user's raw input. Route category hints to the explicit category filter. Kapruka MCP has no occasion param — when occasion context must influence search, use isolated Gemini preprocessing to rewrite q into a cohesive e-commerce query instead of naive string appending.",
+    "steps": [
+      "Set query = user_message.strip() without appending occasion text in build_discovery_search_args",
+      "Map hints.category (or Zep favorite_category) directly to the category MCP argument",
+      "Add optional async rewrite_search_query_with_occasion(user_message, occasion) via Gemini when occasion hint exists and terms are not already in q; wire from call_mcp_tools when needed",
+      "Update tests/unit/test_hybrid_context.py and tests/unit/test_call_mcp_tools.py verifying clean q, category filter, and no raw occasion concatenation"
+    ],
+    "passes": false
   }
 ]
