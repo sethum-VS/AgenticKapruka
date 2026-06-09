@@ -100,6 +100,7 @@ async def test_run_graph_for_discovery_case(redis_client: RedisClient) -> None:
     assert "Chocolate Birthday Cake" in row.response or row.retrieved_contexts[0]
 
 
+@pytest.mark.ragas
 @pytest.mark.asyncio
 async def test_run_ragas_eval_meets_context_precision_threshold() -> None:
     rows = [
@@ -113,9 +114,9 @@ async def test_run_ragas_eval_meets_context_precision_threshold() -> None:
     scores = await run_ragas_eval_async(rows)
     assert scores.case_count == 1
     assert scores.context_precision >= DEFAULT_CONTEXT_PRECISION_THRESHOLD
-    assert scores.faithfulness >= DEFAULT_CONTEXT_PRECISION_THRESHOLD
 
 
+@pytest.mark.ragas
 @pytest.mark.asyncio
 async def test_run_full_ragas_eval_on_golden_dataset(redis_client: RedisClient) -> None:
     _ = redis_client

@@ -313,8 +313,8 @@ async def collect_eval_rows_per_case(
 
 
 def _ci_run_config() -> RunConfig:
-    """Tight CI timeouts so mock-judge stalls fail fast instead of at 180s."""
-    return RunConfig(timeout=_CI_RAGAS_TIMEOUT_SECONDS, max_workers=8)
+    """Serial Ragas jobs in CI — parallel workers deadlock on Python 3.12 runners."""
+    return RunConfig(timeout=_CI_RAGAS_TIMEOUT_SECONDS, max_workers=1)
 
 
 async def run_ragas_eval_async(

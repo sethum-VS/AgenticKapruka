@@ -110,4 +110,5 @@ base_url = "http://localhost:8080"
 markers = [
     "e2e: Playwright end-to-end smoke tests (tests/e2e)",
     "browser: Playwright component harness tests (tests/unit)",
+    "ragas: Full Ragas golden-dataset eval (slow; run via evals.ragas_eval --ci)",
 ]

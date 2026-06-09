@@ -37,7 +37,7 @@ jobs:
         run: mypy app/ lib/ graphs/
 
       - name: Unit tests
-        run: pytest tests/unit -q -m "not browser"
+        run: pytest tests/unit -q -m "not browser and not ragas"
 
   e2e-smoke:
     name: Playwright E2E smoke tests
