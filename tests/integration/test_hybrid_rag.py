@@ -25,7 +25,7 @@ from lib.neo4j.ontology import (
     REL_CATEGORY_TO_PRODUCT_TYPE,
     REL_OCCASION_TO_CATEGORY,
 )
-from lib.neo4j.vector_search import create_category_vector_index
+from lib.neo4j.vector_search import create_ontology_vector_indexes
 
 _WEDDING_FLOWERS_TREE: list[CategoryNode] = [
     CategoryNode(
@@ -149,8 +149,12 @@ class _HybridRagMockStore:
         if cypher.startswith("CALL db.index.vector.queryNodes"):
             query_embedding = parameters["query_embedding"]
             top_k = int(parameters["top_k"])
+            index_name = str(parameters.get("index_name", ""))
+            label = LABEL_CATEGORY
+            if "occasion" in index_name:
+                label = LABEL_OCCASION
             hits: list[dict[str, Any]] = []
-            for node_id in self.nodes.get(LABEL_CATEGORY, set()):
+            for node_id in self.nodes.get(label, set()):
                 props = self.node_properties.get(node_id, {})
                 embedding = props.get("embedding")
                 if embedding is None:
@@ -159,6 +163,16 @@ class _HybridRagMockStore:
                 hits.append({"id": node_id, "score": score})
             hits.sort(key=lambda row: row["score"], reverse=True)
             return hits[:top_k]
+
+        if "OCCASION_TO_CATEGORY" in cypher and "occasion_ids" in cypher:
+            rows = []
+            occasion_ids = set(parameters.get("occasion_ids", []))
+            for rel in self.relationships:
+                if rel["type"] != REL_OCCASION_TO_CATEGORY:
+                    continue
+                if rel["from"] in occasion_ids:
+                    rows.append({"id": rel["to"]})
+            return rows
 
         if "WHERE c.id IN $category_ids" in cypher and "display_name" in cypher:
             rows = []
@@ -351,7 +365,7 @@ async def hybrid_rag_client() -> Neo4jClient:
     client = _client_with_store(store)
     await ingest_category_tree(client, _WEDDING_FLOWERS_TREE)
     await embed_ontology_nodes(client, embed_fn=_semantic_fake_embed)
-    await create_category_vector_index(client)
+    await create_ontology_vector_indexes(client)
     yield client
     await client.close()
 
@@ -377,4 +391,6 @@ async def test_retrieve_hybrid_context_wedding_flowers_category_filter(
     assert hybrid_context["hints"]["category"] == "Flowers"
     assert hybrid_context["hints"]["occasion"] == "Wedding"
     assert hybrid_context["vector_hits"][0]["display_name"] == "Flowers"
+    assert hybrid_context["direct_occasion_hits"]
+    assert any(hit["id"].startswith("occasion:") for hit in hybrid_context["direct_occasion_hits"])
     assert any(occasion["display_name"] == "Wedding" for occasion in hybrid_context["occasions"])

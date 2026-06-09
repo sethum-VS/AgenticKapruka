@@ -1055,7 +1055,7 @@
       "Merge direct category ids and occasion-derived category ids into a deduplicated set; pass as seed to traverse_from_categories",
       "Pass direct_occasion_hits through to build_graph_hybrid_context; update tests/unit/test_retrieve_hybrid_context.py with mock parallel search"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-089",

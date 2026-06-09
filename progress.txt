@@ -706,3 +706,10 @@ Next: All PRDs complete.
 - Tests: 4 new cases in `tests/unit/test_vector_search.py` (occasion CREATE, dual-index order, occasion search contract, dimension validation); mock store routes queryNodes by index name/label.
 Files: lib/neo4j/{vector_search,__init__}.py, scripts/bootstrap_neo4j.py, tests/unit/test_vector_search.py, prd.json
 Next: PRD-088 Parallel vector search and occasion-to-category seeding.
+
+## PRD-088 — Parallel vector search and occasion-to-category seeding
+- Rewrote `_fetch_graph_hybrid_context` in `graphs/nodes/retrieve_hybrid_context.py`: single embed → `asyncio.gather` on `vector_search` + `occasion_vector_search`; occasion hits with score ≥ `VECTOR_CONFIDENCE_THRESHOLD` (0.65) fast-hop via `fetch_category_ids_for_occasions`; dedupe direct + occasion-derived category ids as traversal seeds.
+- Added `fetch_category_ids_for_occasions` Cypher (`OCCASION_TO_CATEGORY`) in `lib/neo4j/hybrid_context.py`; `build_graph_hybrid_context` accepts `direct_occasion_hits` and serializes them into hybrid_context; merge helper propagates `direct_occasion_hits`.
+- Tests: parallel search + threshold hop in `tests/unit/test_retrieve_hybrid_context.py`; integration mock store routes occasion index + occasion hop; `test_hybrid_rag.py` uses `create_ontology_vector_indexes`.
+Files: graphs/nodes/retrieve_hybrid_context.py, lib/neo4j/{hybrid_context,__init__}.py, tests/unit/test_retrieve_hybrid_context.py, tests/integration/test_hybrid_rag.py, prd.json
+Next: PRD-089 Semantic occasion hint extraction from vector hits.

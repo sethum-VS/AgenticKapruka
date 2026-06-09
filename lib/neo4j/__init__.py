@@ -10,6 +10,7 @@ from lib.neo4j.hybrid_context import (
     build_discovery_search_args,
     build_graph_hybrid_context,
     fetch_category_display_names,
+    fetch_category_ids_for_occasions,
 )
 from lib.neo4j.ingest_categories import (
     INGEST_CATEGORY_DEPTH,
@@ -64,6 +65,7 @@ __all__ = [
     "create_ontology_vector_indexes",
     "embed_ontology_nodes",
     "fetch_category_display_names",
+    "fetch_category_ids_for_occasions",
     "has_category_embeddings",
     "has_category_vector_index",
     "has_occasion_vector_index",

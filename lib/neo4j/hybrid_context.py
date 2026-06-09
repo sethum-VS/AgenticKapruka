@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from lib.neo4j.client import Neo4jClient
-from lib.neo4j.ontology import LABEL_CATEGORY
+from lib.neo4j.ontology import LABEL_CATEGORY, LABEL_OCCASION, REL_OCCASION_TO_CATEGORY
 from lib.neo4j.traverse import TraversalNode, TraversalResult
 from lib.neo4j.vector_search import VectorSearchHit
 
@@ -14,6 +14,12 @@ _FETCH_CATEGORY_DISPLAY_NAMES_CYPHER = f"""
 MATCH (c:{LABEL_CATEGORY})
 WHERE c.id IN $category_ids
 RETURN c.id AS id, c.display_name AS display_name
+""".strip()
+
+_FETCH_CATEGORIES_FOR_OCCASIONS_CYPHER = f"""
+MATCH (o:{LABEL_OCCASION})-[:{REL_OCCASION_TO_CATEGORY}]->(c:{LABEL_CATEGORY})
+WHERE o.id IN $occasion_ids
+RETURN DISTINCT c.id AS id
 """.strip()
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
@@ -34,6 +40,20 @@ async def fetch_category_display_names(
         {"category_ids": category_ids},
     )
     return {str(row["id"]): str(row.get("display_name") or row["id"]) for row in rows}
+
+
+async def fetch_category_ids_for_occasions(
+    client: Neo4jClient,
+    occasion_ids: list[str],
+) -> list[str]:
+    """Fast-hop OCCASION_TO_CATEGORY for high-confidence occasion vector hits."""
+    if not occasion_ids:
+        return []
+    rows = await client.execute(
+        _FETCH_CATEGORIES_FOR_OCCASIONS_CYPHER,
+        {"occasion_ids": occasion_ids},
+    )
+    return [str(row["id"]) for row in rows]
 
 
 def _query_tokens(query: str) -> set[str]:
@@ -62,9 +82,10 @@ def build_graph_hybrid_context(
     vector_hits: list[VectorSearchHit],
     display_names: dict[str, str],
     traversal: TraversalResult,
+    direct_occasion_hits: list[VectorSearchHit] | None = None,
 ) -> dict[str, Any]:
     """Assemble graph-derived hybrid_context with MCP filter hints."""
-    if not vector_hits:
+    if not vector_hits and not (direct_occasion_hits or []):
         return {}
 
     ranked_hits = [
@@ -75,15 +96,22 @@ def build_graph_hybrid_context(
         }
         for hit in vector_hits
     ]
-    top_category = str(display_names.get(vector_hits[0].id, vector_hits[0].id))
+    ranked_occasion_hits = [
+        {"id": hit.id, "score": hit.score} for hit in (direct_occasion_hits or [])
+    ]
+    top_category_id = vector_hits[0].id if vector_hits else next(iter(display_names), "")
+    top_category = str(display_names.get(top_category_id, top_category_id))
     occasion_hint = _best_occasion_hint(query, traversal.occasions)
 
-    hints: dict[str, str] = {"category": top_category}
+    hints: dict[str, str] = {}
+    if top_category:
+        hints["category"] = top_category
     if occasion_hint:
         hints["occasion"] = occasion_hint
 
     return {
         "vector_hits": ranked_hits,
+        "direct_occasion_hits": ranked_occasion_hits,
         "occasions": [_serialize_traversal_node(node) for node in traversal.occasions],
         "product_types": [_serialize_traversal_node(node) for node in traversal.product_types],
         "categories": [_serialize_traversal_node(node) for node in traversal.categories],
