@@ -18,7 +18,7 @@ from evals.ragas_eval import (
     intent_for_case,
     run_full_ragas_eval,
     run_graph_for_case,
-    run_ragas_eval,
+    run_ragas_eval_async,
 )
 from google.genai import types
 from tests.fixtures.mcp_mock import SEARCH_PRODUCTS_JSON
@@ -110,7 +110,7 @@ async def test_run_ragas_eval_meets_context_precision_threshold() -> None:
             reference="I'll search Kapruka for birthday cakes with prices.",
         ),
     ]
-    scores = run_ragas_eval(rows)
+    scores = await run_ragas_eval_async(rows)
     assert scores.case_count == 1
     assert scores.context_precision >= DEFAULT_CONTEXT_PRECISION_THRESHOLD
     assert scores.faithfulness >= DEFAULT_CONTEXT_PRECISION_THRESHOLD

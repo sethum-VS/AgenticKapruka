@@ -17,10 +17,11 @@ from datasets import Dataset
 from google.genai import types
 from langchain_core.embeddings import FakeEmbeddings
 from langgraph.graph.state import CompiledStateGraph
-from ragas import evaluate
+from ragas import aevaluate
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import answer_relevancy, context_precision, faithfulness
+from ragas.run_config import RunConfig
 from tests.fixtures.mcp_mock import MockMCPHttpClient
 
 from evals.golden_dataset import GoldenCase, GoldenDataset, load_golden_dataset
@@ -39,6 +40,7 @@ from lib.redis.client import RedisClient
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONTEXT_PRECISION_THRESHOLD = 0.7
+_CI_RAGAS_TIMEOUT_SECONDS = 30
 _EVAL_CLIENT_IP = "203.0.113.99"
 
 
@@ -310,29 +312,48 @@ async def collect_eval_rows_per_case(
     return rows
 
 
-def run_ragas_eval(
+def _ci_run_config() -> RunConfig:
+    """Tight CI timeouts so mock-judge stalls fail fast instead of at 180s."""
+    return RunConfig(timeout=_CI_RAGAS_TIMEOUT_SECONDS, max_workers=8)
+
+
+async def run_ragas_eval_async(
     rows: list[GraphEvalRow],
     *,
     llm: LangchainLLMWrapper | None = None,
     embeddings: LangchainEmbeddingsWrapper | None = None,
+    run_config: RunConfig | None = None,
 ) -> RagasEvalScores:
-    """Score graph outputs with Ragas context_precision, answer_relevancy, and faithfulness."""
+    """Score graph outputs with Ragas using the async evaluator (no nest_asyncio)."""
     judge_llm = llm or build_ci_ragas_llm()
     judge_embeddings = embeddings or build_ci_ragas_embeddings()
     hf_dataset = rows_to_dataset(rows)
-    result = evaluate(
+    result = await aevaluate(
         hf_dataset,
         metrics=[context_precision, answer_relevancy, faithfulness],
         llm=judge_llm,
         embeddings=judge_embeddings,
         raise_exceptions=False,
         show_progress=False,
+        run_config=run_config or _ci_run_config(),
     )
     return RagasEvalScores(
         context_precision=_mean_metric(result, "context_precision"),
         answer_relevancy=_mean_metric(result, "answer_relevancy"),
         faithfulness=_mean_metric(result, "faithfulness"),
         case_count=len(rows),
+    )
+
+
+def run_ragas_eval(
+    rows: list[GraphEvalRow],
+    *,
+    llm: LangchainLLMWrapper | None = None,
+    embeddings: LangchainEmbeddingsWrapper | None = None,
+) -> RagasEvalScores:
+    """Sync wrapper for tests and scripts outside an active event loop."""
+    return asyncio.run(
+        run_ragas_eval_async(rows, llm=llm, embeddings=embeddings),
     )
 
 
@@ -353,7 +374,7 @@ async def run_full_ragas_eval(
     fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
     redis_client = RedisClient("redis://localhost:6379/0", client=fake)
     rows = await collect_eval_rows_per_case(dataset, redis_client=redis_client)
-    return run_ragas_eval(rows, llm=llm, embeddings=embeddings)
+    return await run_ragas_eval_async(rows, llm=llm, embeddings=embeddings)
 
 
 def assert_context_precision_threshold(
