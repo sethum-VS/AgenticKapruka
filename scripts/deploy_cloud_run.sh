@@ -35,7 +35,6 @@ SECRET_NEO4J_URI="${SECRET_NEO4J_URI:-neo4j-uri}"
 SECRET_NEO4J_USER="${SECRET_NEO4J_USER:-neo4j-user}"
 SECRET_NEO4J_PASSWORD="${SECRET_NEO4J_PASSWORD:-neo4j-password}"
 SECRET_ZEP_API_KEY="${SECRET_ZEP_API_KEY:-zep-api-key}"
-SECRET_GOOGLE_API_KEY="${SECRET_GOOGLE_API_KEY:-google-api-key}"
 SECRET_SESSION_SECRET="${SECRET_SESSION_SECRET:-session-secret}"
 
 usage() {
@@ -136,6 +135,10 @@ resolve_config() {
     fi
   fi
 
+  if [[ -z "${RUN_SERVICE_ACCOUNT:-}" ]]; then
+    RUN_SERVICE_ACCOUNT="vertexai-api@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+  fi
+
   if [[ -z "${IMAGE_TAG:-}" ]]; then
     if git -C "${ROOT_DIR}" rev-parse --short HEAD >/dev/null 2>&1; then
       IMAGE_TAG="$(git -C "${ROOT_DIR}" rev-parse --short HEAD)"
@@ -176,7 +179,6 @@ run_deploy_secrets() {
   secrets+=",NEO4J_USER=${SECRET_NEO4J_USER}:latest"
   secrets+=",NEO4J_PASSWORD=${SECRET_NEO4J_PASSWORD}:latest"
   secrets+=",ZEP_API_KEY=${SECRET_ZEP_API_KEY}:latest"
-  secrets+=",GOOGLE_API_KEY=${SECRET_GOOGLE_API_KEY}:latest"
   secrets+=",SESSION_SECRET=${SECRET_SESSION_SECRET}:latest"
   printf '%s' "${secrets}"
 }
@@ -184,7 +186,7 @@ run_deploy_secrets() {
 cloud_run_deploy_cmd() {
   local secrets env_vars
   secrets="$(run_deploy_secrets)"
-  env_vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},KAPRUKA_MCP_URL=${KAPRUKA_MCP_URL}"
+  env_vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},GEMINI_BACKEND=vertex,KAPRUKA_MCP_URL=${KAPRUKA_MCP_URL}"
 
   cat <<EOF
 gcloud run deploy ${SERVICE_NAME} \\
@@ -202,6 +204,7 @@ gcloud run deploy ${SERVICE_NAME} \\
   --port=8080 \\
   --vpc-connector=${VPC_CONNECTOR} \\
   --vpc-egress=private-ranges-only \\
+  --service-account=${RUN_SERVICE_ACCOUNT} \\
   --set-secrets=${secrets} \\
   --set-env-vars=${env_vars}
 EOF
@@ -269,7 +272,7 @@ deploy_service() {
 
   local secrets env_vars
   secrets="$(run_deploy_secrets)"
-  env_vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},KAPRUKA_MCP_URL=${KAPRUKA_MCP_URL}"
+  env_vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},GEMINI_BACKEND=vertex,KAPRUKA_MCP_URL=${KAPRUKA_MCP_URL}"
 
   run_cmd gcloud run deploy "${SERVICE_NAME}" \
     --project="${GCP_PROJECT_ID}" \
@@ -286,6 +289,7 @@ deploy_service() {
     --port=8080 \
     --vpc-connector="${VPC_CONNECTOR}" \
     --vpc-egress=private-ranges-only \
+    --service-account="${RUN_SERVICE_ACCOUNT}" \
     --set-secrets="${secrets}" \
     --set-env-vars="${env_vars}"
 }
@@ -299,12 +303,13 @@ Required runtime configuration (Secret Manager → env var):
   NEO4J_USER       Neo4j username (usually neo4j)
   NEO4J_PASSWORD   Neo4j password
   ZEP_API_KEY      Zep Cloud API key
-  GOOGLE_API_KEY   Generative Language API key (Gemini)
   SESSION_SECRET   Cookie signing secret (≥32 chars)
 
 Non-secret env vars set on deploy:
-  GCP_PROJECT_ID   Vertex embeddings project
+  GEMINI_BACKEND   vertex (Gemini via Vertex AI + service account ADC)
+  GCP_PROJECT_ID   Vertex AI project
   GCP_LOCATION     Vertex region (e.g. us-central1)
+  RUN_SERVICE_ACCOUNT  Cloud Run runtime SA (default: vertexai-api@PROJECT.iam.gserviceaccount.com)
   KAPRUKA_MCP_URL  Kapruka MCP endpoint (default public URL)
 
 See docs/DEPLOY.md for full setup steps.

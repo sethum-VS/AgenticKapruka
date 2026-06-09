@@ -6,10 +6,8 @@ import logging
 import re
 from typing import Any, Final
 
-from zep_python.types.session_search_response import SessionSearchResponse
-
 from lib.zep.client import ZepClient
-from lib.zep.memory import extract_memory_facts
+from lib.zep.memory import facts_from_context, facts_from_graph_search, get_session_memory_facts
 
 logger = logging.getLogger(__name__)
 
@@ -121,15 +119,6 @@ def parse_preferences_from_facts(facts: list[str]) -> dict[str, str]:
     return preferences
 
 
-def _facts_from_search_response(response: SessionSearchResponse) -> list[str]:
-    """Collect fact strings from a Zep session search response."""
-    facts: list[str] = []
-    for result in response.results or []:
-        if result.fact is not None and result.fact.fact:
-            facts.append(result.fact.fact)
-    return facts
-
-
 async def extract_preferences(
     zep_client: ZepClient,
     zep_thread_id: str,
@@ -138,13 +127,12 @@ async def extract_preferences(
     fact_strings: list[str] = []
 
     try:
-        search_response = await zep_client.search_session_memory(
-            session_ids=[zep_thread_id],
-            text=_PREFERENCE_SEARCH_TEXT,
-            search_scope="facts",
+        search_response = await zep_client.search_graph(
+            query=_PREFERENCE_SEARCH_TEXT,
+            user_id=zep_thread_id,
             limit=10,
         )
-        fact_strings.extend(_facts_from_search_response(search_response))
+        fact_strings.extend(facts_from_graph_search(search_response))
     except Exception as exc:
         logger.warning(
             "Zep preference search failed for thread %s: %s",
@@ -154,15 +142,17 @@ async def extract_preferences(
 
     if not fact_strings:
         try:
-            memory = await zep_client.get_memory(zep_thread_id)
-            fact_strings = extract_memory_facts(memory)
+            context_response = await zep_client.get_user_context(zep_thread_id)
+            fact_strings = facts_from_context(context_response.context)
         except Exception as exc:
             logger.warning(
-                "Zep memory fallback failed for thread %s: %s",
+                "Zep context fallback failed for thread %s: %s",
                 zep_thread_id,
                 exc,
             )
-            return {}
+
+    if not fact_strings:
+        fact_strings = await get_session_memory_facts(zep_client, zep_thread_id)
 
     return parse_preferences_from_facts(fact_strings)
 

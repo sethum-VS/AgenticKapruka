@@ -23,7 +23,6 @@ _VALID_ENV: dict[str, str] = {
     "NEO4J_USER": "neo4j",
     "NEO4J_PASSWORD": "test-password",
     "ZEP_API_KEY": "zep-test-key",
-    "GOOGLE_API_KEY": "google-test-key",
     "GCP_PROJECT_ID": "test-project",
     "GCP_LOCATION": "us-central1",
     "KAPRUKA_MCP_URL": "https://mcp.kapruka.com/mcp",
@@ -71,7 +70,7 @@ def test_gunicorn_workers_timeout_and_keepalive() -> None:
     conf = _load_gunicorn_conf(port="8080")
 
     assert conf.bind == "0.0.0.0:8080"
-    assert conf.workers == multiprocessing.cpu_count() * 2 + 1
+    assert conf.workers == min(multiprocessing.cpu_count() * 2 + 1, 2)
     assert conf.worker_class == "uvicorn.workers.UvicornWorker"
     assert conf.timeout == 120
     assert conf.graceful_timeout == 30
@@ -126,7 +125,13 @@ def test_gunicorn_starts_and_serves_health() -> None:
         assert response.status_code in {200, 503}
         body = response.json()
         assert body["status"] in {"healthy", "degraded"}
-        assert set(body["services"]) == {"redis", "neo4j", "zep", "mcp"}
+        assert set(body["services"]) == {
+            "redis",
+            "neo4j",
+            "neo4j_graphrag",
+            "zep",
+            "mcp",
+        }
     finally:
         proc.terminate()
         try:

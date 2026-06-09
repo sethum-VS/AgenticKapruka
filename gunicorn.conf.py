@@ -15,8 +15,13 @@ import os
 _port = os.environ.get("PORT", "8080")
 bind = f"0.0.0.0:{_port}"
 
-# Standard Gunicorn heuristic; Cloud Run scales horizontally via instance count.
-workers = multiprocessing.cpu_count() * 2 + 1
+# Cloud Run: one worker per instance avoids OOM from duplicate LangGraph/Neo4j loads.
+# Override with GUNICORN_WORKERS for local multi-worker testing.
+_workers_env = os.environ.get("GUNICORN_WORKERS")
+if _workers_env is not None:
+    workers = max(1, int(_workers_env))
+else:
+    workers = min(multiprocessing.cpu_count() * 2 + 1, 2)
 
 worker_class = "uvicorn.workers.UvicornWorker"
 

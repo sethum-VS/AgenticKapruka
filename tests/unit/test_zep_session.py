@@ -28,15 +28,17 @@ async def zep_client_with_counter() -> AsyncIterator[tuple[ZepClient, dict[str, 
     counter = {"create_count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path.endswith("/sessions"):
+        if request.method == "POST" and request.url.path.endswith("/users"):
+            body = json.loads(request.content)
+            return httpx.Response(201, json={"user_id": body["user_id"]})
+        if request.method == "POST" and request.url.path.endswith("/threads"):
             counter["create_count"] += 1
             body = json.loads(request.content)
             return httpx.Response(
                 201,
                 json={
-                    "session_id": body["session_id"],
-                    "user_id": body.get("user_id"),
-                    "metadata": body.get("metadata"),
+                    "thread_id": body["thread_id"],
+                    "user_id": body["user_id"],
                 },
             )
         return httpx.Response(404, json={"message": "not found"})

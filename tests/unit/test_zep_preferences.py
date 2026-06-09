@@ -5,10 +5,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from zep_python.types.fact import Fact
-from zep_python.types.memory import Memory
-from zep_python.types.session_search_response import SessionSearchResponse
-from zep_python.types.session_search_result import SessionSearchResult
+from zep_cloud.types.entity_edge import EntityEdge
+from zep_cloud.types.graph_search_results import GraphSearchResults
+from zep_cloud.types.thread_context_response import ThreadContextResponse
 
 from lib.zep.preferences import (
     extract_preferences,
@@ -51,52 +50,39 @@ def test_merge_preferences_into_hybrid_context_builds_mcp_hints() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extract_preferences_uses_zep_memory_search() -> None:
-    search_response = SessionSearchResponse(
-        results=[
-            SessionSearchResult(
-                fact=Fact(fact="User prefers Birthday cakes"),
-                message=None,
-                score=0.92,
-                session_id="thread-pref-001",
-                summary=None,
+async def test_extract_preferences_uses_zep_graph_search() -> None:
+    search_response = GraphSearchResults(
+        context="- User prefers Birthday cakes",
+        edges=[
+            EntityEdge(
+                name="prefers",
+                fact="User prefers Birthday cakes",
+                created_at="2026-01-01T00:00:00Z",
+                source_node_uuid="src-uuid",
+                target_node_uuid="tgt-uuid",
+                uuid_="edge-uuid",
             ),
         ],
     )
     zep_client = AsyncMock()
-    zep_client.search_session_memory.return_value = search_response
+    zep_client.search_graph.return_value = search_response
 
     preferences = await extract_preferences(zep_client, "thread-pref-001")
 
     assert preferences["favorite_category"] == "Birthday"
-    zep_client.search_session_memory.assert_awaited_once()
-    zep_client.get_memory.assert_not_called()
+    zep_client.search_graph.assert_awaited_once()
+    zep_client.get_user_context.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_extract_preferences_falls_back_to_get_memory_when_search_empty() -> None:
+async def test_extract_preferences_falls_back_to_user_context_when_search_empty() -> None:
     zep_client = AsyncMock()
-    zep_client.search_session_memory.return_value = SessionSearchResponse(results=[])
-    zep_client.get_memory.return_value = Memory(
-        facts=["Prefers Flowers bouquets"],
-        messages=[],
-        metadata={},
-        relevant_facts=[],
-        summary="",
+    zep_client.search_graph.return_value = GraphSearchResults()
+    zep_client.get_user_context.return_value = ThreadContextResponse(
+        context="User shops in USD",
     )
 
     preferences = await extract_preferences(zep_client, "thread-pref-002")
 
-    assert preferences["favorite_category"] == "Flowers"
-    zep_client.get_memory.assert_awaited_once_with("thread-pref-002")
-
-
-@pytest.mark.asyncio
-async def test_extract_preferences_returns_empty_on_total_failure() -> None:
-    zep_client = AsyncMock()
-    zep_client.search_session_memory.side_effect = RuntimeError("search down")
-    zep_client.get_memory.side_effect = RuntimeError("memory down")
-
-    preferences = await extract_preferences(zep_client, "thread-pref-003")
-
-    assert preferences == {}
+    assert preferences["currency"] == "USD"
+    zep_client.get_user_context.assert_awaited_once()

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 
-from google import genai
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from starlette.requests import Request
@@ -13,6 +12,7 @@ from starlette.requests import Request
 from app.config import get_settings
 from graphs.shopping_graph import ShoppingGraphDeps, get_shopping_graph
 from graphs.state import AgentState
+from lib.genai.client import create_genai_client
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.service import KaprukaService
 from lib.redis.client import RedisClient
@@ -75,8 +75,7 @@ async def build_shopping_graph_deps(
 ) -> ShoppingGraphDeps:
     """Assemble injectable graph dependencies for a chat turn."""
     kapruka_service = await ensure_kapruka_service(request, redis_client)
-    settings = get_settings()
-    genai_client = genai.Client(api_key=settings.google_api_key)
+    genai_client = create_genai_client()
     return ShoppingGraphDeps(
         kapruka_service=kapruka_service,
         client_ip=client_ip_from_request(request),

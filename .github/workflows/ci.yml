@@ -2,8 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, ralph/sprint-1]
+    branches: [ralph/sprint-1]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint-and-test:
@@ -34,10 +38,11 @@ jobs:
         run: mypy app/ lib/ graphs/
 
       - name: Unit tests
-        run: pytest tests/unit -q
+        run: pytest tests/unit -q -m "not browser"
 
   e2e-smoke:
     name: Playwright E2E smoke tests
+    needs: lint-and-test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,8 +62,12 @@ jobs:
       - name: E2E smoke tests
         run: pytest tests/e2e -q
 
+      - name: Browser component harness tests
+        run: pytest tests/unit -q -m browser
+
   ragas-eval:
     name: Ragas golden dataset eval
+    needs: lint-and-test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

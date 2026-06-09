@@ -33,7 +33,7 @@ _SEARCH_OUTPUT = SearchProductsOutput(
 
 
 class _ZepMemoryCapture:
-    """Track memory GET/POST calls for integration assertions."""
+    """Track thread context GET and message POST calls for integration assertions."""
 
     def __init__(self) -> None:
         self.memory_posts: list[dict[str, Any]] = []
@@ -41,32 +41,26 @@ class _ZepMemoryCapture:
     def handler(self, request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == f"Api-Key {_TEST_API_KEY}"
 
-        memory_path = f"/sessions/{_ZEP_THREAD_ID}/memory"
+        context_path = f"/threads/{_ZEP_THREAD_ID}/context"
+        messages_path = f"/threads/{_ZEP_THREAD_ID}/messages"
 
-        if request.method == "GET" and request.url.path.endswith(memory_path):
+        if request.method == "GET" and request.url.path.endswith(context_path):
             return httpx.Response(
                 200,
                 json={
-                    "facts": [
-                        "Customer prefers birthday gifts",
-                        "Recipient is mom",
-                    ],
-                    "messages": [],
-                    "metadata": {},
-                    "relevant_facts": [],
-                    "summary": "",
+                    "context": ("- Customer prefers birthday gifts\n- Recipient is mom"),
                 },
             )
 
-        if request.method == "POST" and request.url.path.endswith(memory_path):
+        if request.method == "POST" and request.url.path.endswith(messages_path):
             body = json.loads(request.content)
             self.memory_posts.append(body)
             return httpx.Response(200, json={"message": "OK"})
 
-        if request.method == "GET" and request.url.path.endswith("/sessions-ordered"):
+        if request.method == "GET" and request.url.path.endswith("/threads"):
             return httpx.Response(
                 200,
-                json={"sessions": [], "total_count": 0, "response_count": 0},
+                json={"threads": [], "total_count": 0, "response_count": 0},
             )
 
         return httpx.Response(404, json={"message": "not found"})
@@ -140,6 +134,7 @@ async def test_shopping_graph_persists_turn_to_zep_after_chat(
 
     assert len(capture.memory_posts) == 1
     posted_messages = capture.memory_posts[0]["messages"]
+    assert len(posted_messages) == 2
     assert posted_messages[0]["role"] == "user"
     assert posted_messages[0]["content"] == _USER_MESSAGE
     assert posted_messages[1]["role"] == "assistant"

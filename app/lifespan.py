@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from app.config import get_settings
+from lib.analytics.networkx_worker import NetworkXCommunityWorker
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.neo4j.client import Neo4jClient
 from lib.redis.client import RedisClient
@@ -59,18 +60,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings.neo4j_password,
         ),
     )
-    app.state.zep = await _connect_optional(
+    zep_client = await _connect_optional(
         "Zep",
         lambda: ZepClient.connect(settings.zep_api_key),
     )
+    if zep_client is not None and not await zep_client.health_check():
+        logger.warning("Zep health check failed; chat will run without memory")
+        await _close_client(zep_client, "Zep")
+        zep_client = None
+    app.state.zep = zep_client
     app.state.mcp_client = await _connect_optional(
         "Kapruka MCP",
         lambda: MCPHttpClient.connect(settings.kapruka_mcp_url),
     )
+    community_worker: NetworkXCommunityWorker | None = None
+    if app.state.neo4j is not None:
+        community_worker = NetworkXCommunityWorker(app.state.neo4j)
+        await community_worker.start()
+    app.state.community_worker = community_worker
     logger.info("Application startup complete")
 
     yield
 
+    if community_worker is not None:
+        await community_worker.stop()
     await _close_client(app.state.mcp_client, "Kapruka MCP")
     await _close_client(app.state.redis, "Redis")
     await _close_client(app.state.neo4j, "Neo4j")

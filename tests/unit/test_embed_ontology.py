@@ -14,6 +14,7 @@ from lib.kapruka.types import CategoryNode
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import (
     build_embedding_text,
+    clear_ontology_embeddings,
     count_nodes_with_embedding,
     embed_ontology_nodes,
     fetch_nodes_missing_embedding,
@@ -65,6 +66,14 @@ class _EmbedMockStore:
                 if node_id in self.node_properties:
                     self.node_properties[node_id]["embedding"] = row["embedding"]
             return []
+
+        if "REMOVE n.embedding" in cypher:
+            cleared = 0
+            for _node_id, props in self.node_properties.items():
+                if props.get("embedding") is not None:
+                    del props["embedding"]
+                    cleared += 1
+            return [{"cleared": cleared}]
 
         if "n.embedding IS NULL" in cypher:
             rows = []
@@ -296,4 +305,17 @@ async def test_embed_ontology_nodes_raises_on_vector_count_mismatch() -> None:
     with pytest.raises(ValueError, match="embed_fn returned"):
         await embed_ontology_nodes(client, embed_fn=bad_embed)
 
+    await client.close()
+
+
+async def test_clear_ontology_embeddings_removes_existing_vectors() -> None:
+    store = _EmbedMockStore()
+    client = _client_with_store(store)
+    await ingest_category_tree(client, _SAMPLE_TREE)
+    await embed_ontology_nodes(client, embed_fn=_fake_embed)
+
+    cleared = await clear_ontology_embeddings(client)
+
+    assert cleared == 3
+    assert await has_category_embeddings(client) is False
     await client.close()
