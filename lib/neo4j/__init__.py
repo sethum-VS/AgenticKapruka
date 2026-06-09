@@ -10,6 +10,7 @@ from lib.neo4j.hybrid_context import (
     build_discovery_search_args,
     build_graph_hybrid_context,
     fetch_category_display_names,
+    fetch_category_ids_for_occasions,
 )
 from lib.neo4j.ingest_categories import (
     INGEST_CATEGORY_DEPTH,
@@ -32,9 +33,14 @@ from lib.neo4j.traverse import (
     traverse_from_categories,
 )
 from lib.neo4j.vector_search import (
+    OCCASION_VECTOR_INDEX_NAME,
     VectorSearchHit,
     create_category_vector_index,
+    create_occasion_vector_index,
+    create_ontology_vector_indexes,
     has_category_vector_index,
+    has_occasion_vector_index,
+    occasion_vector_search,
     vector_search,
 )
 
@@ -51,14 +57,20 @@ __all__ = [
     "count_ontology_nodes_by_label",
     "VECTOR_CONFIDENCE_THRESHOLD",
     "VectorSearchHit",
+    "OCCASION_VECTOR_INDEX_NAME",
     "build_discovery_search_args",
     "build_graph_hybrid_context",
     "create_category_vector_index",
+    "create_occasion_vector_index",
+    "create_ontology_vector_indexes",
     "embed_ontology_nodes",
     "fetch_category_display_names",
+    "fetch_category_ids_for_occasions",
     "has_category_embeddings",
     "has_category_vector_index",
+    "has_occasion_vector_index",
     "ingest_category_tree",
+    "occasion_vector_search",
     "TraversalNode",
     "TraversalResult",
     "traverse_from_categories",

@@ -8,11 +8,15 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from graphs.nodes.retrieve_hybrid_context import (
+    _fetch_graph_hybrid_context,
     retrieve_hybrid_context,
     route_after_analyze_intent,
 )
 from graphs.state import AgentState, Intent
 from lib.neo4j.client import Neo4jClient
+from lib.neo4j.hybrid_context import VECTOR_CONFIDENCE_THRESHOLD
+from lib.neo4j.traverse import TraversalResult
+from lib.neo4j.vector_search import VectorSearchHit
 
 
 @pytest.mark.asyncio
@@ -151,3 +155,119 @@ def test_route_after_analyze_intent_routes_checkout_and_skips_tracking(
 def test_route_after_analyze_intent_defaults_to_retrieve_when_intent_missing() -> None:
     state: AgentState = {"messages": [], "session_id": "sess-route-002"}
     assert route_after_analyze_intent(state) == "retrieve_hybrid_context"
+
+
+@pytest.mark.asyncio
+async def test_fetch_graph_hybrid_context_runs_parallel_vector_searches() -> None:
+    """Category and Occasion indexes are queried concurrently with one embedding."""
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    category_hits = [VectorSearchHit(id="category:flowers", score=0.88)]
+    occasion_hits = [
+        VectorSearchHit(id="occasion:wedding", score=0.91),
+        VectorSearchHit(id="occasion:birthday", score=0.4),
+    ]
+    embed_fn = AsyncMock(return_value=[[0.1] * 768])
+
+    with (
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.vector_search",
+            new=AsyncMock(return_value=category_hits),
+        ) as mock_category_search,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.occasion_vector_search",
+            new=AsyncMock(return_value=occasion_hits),
+        ) as mock_occasion_search,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.fetch_category_ids_for_occasions",
+            new=AsyncMock(return_value=["category:cakes"]),
+        ) as mock_occasion_hop,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.fetch_category_display_names",
+            new=AsyncMock(
+                return_value={
+                    "category:flowers": "Flowers",
+                    "category:cakes": "Cakes",
+                }
+            ),
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.traverse_from_categories",
+            new=AsyncMock(return_value=TraversalResult(nodes=())),
+        ) as mock_traverse,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.build_graph_hybrid_context",
+            return_value={"hints": {"category": "Flowers"}},
+        ) as mock_build,
+    ):
+        result = await _fetch_graph_hybrid_context(
+            "wedding flowers",
+            neo4j_client=neo4j_client,
+            embed_fn=embed_fn,
+        )
+
+    embed_fn.assert_awaited_once_with(["wedding flowers"])
+    mock_category_search.assert_awaited_once()
+    mock_occasion_search.assert_awaited_once()
+    assert mock_category_search.await_args.kwargs["top_k"] == 5
+    assert mock_occasion_search.await_args.kwargs["top_k"] == 5
+    mock_occasion_hop.assert_awaited_once_with(
+        neo4j_client,
+        ["occasion:wedding"],
+    )
+    mock_traverse.assert_awaited_once_with(
+        neo4j_client,
+        ["category:flowers", "category:cakes"],
+        max_hops=2,
+    )
+    mock_build.assert_called_once()
+    build_kwargs = mock_build.call_args.kwargs
+    assert build_kwargs["vector_hits"] == category_hits
+    assert build_kwargs["direct_occasion_hits"] == occasion_hits
+    assert result == {"hints": {"category": "Flowers"}}
+
+
+@pytest.mark.asyncio
+async def test_fetch_graph_hybrid_context_skips_low_confidence_occasion_hop() -> None:
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    occasion_hits = [VectorSearchHit(id="occasion:birthday", score=0.4)]
+    embed_fn = AsyncMock(return_value=[[0.1] * 768])
+
+    with (
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.vector_search",
+            new=AsyncMock(return_value=[VectorSearchHit(id="category:cakes", score=0.7)]),
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.occasion_vector_search",
+            new=AsyncMock(return_value=occasion_hits),
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.fetch_category_ids_for_occasions",
+            new=AsyncMock(return_value=[]),
+        ) as mock_occasion_hop,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.fetch_category_display_names",
+            new=AsyncMock(return_value={"category:cakes": "Cakes"}),
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.traverse_from_categories",
+            new=AsyncMock(return_value=TraversalResult(nodes=())),
+        ) as mock_traverse,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.build_graph_hybrid_context",
+            return_value={"direct_occasion_hits": [{"id": "occasion:birthday", "score": 0.4}]},
+        ),
+    ):
+        await _fetch_graph_hybrid_context(
+            "cake",
+            neo4j_client=neo4j_client,
+            embed_fn=embed_fn,
+        )
+
+    mock_occasion_hop.assert_awaited_once_with(neo4j_client, [])
+    mock_traverse.assert_awaited_once_with(
+        neo4j_client,
+        ["category:cakes"],
+        max_hops=2,
+    )
+    assert VECTOR_CONFIDENCE_THRESHOLD == 0.65

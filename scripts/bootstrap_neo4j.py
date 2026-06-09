@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot Neo4j bootstrap: schema → ingest → embed → vector index."""
+"""One-shot Neo4j bootstrap: schema → ingest → embed → vector indexes."""
 
 from __future__ import annotations
 
@@ -24,13 +24,16 @@ from lib.neo4j.ingest_categories import (
 )
 from lib.neo4j.ontology import (
     LABEL_CATEGORY,
+    LABEL_OCCASION,
+    LABEL_PRODUCT_TYPE,
     apply_ontology_schema,
     list_ontology_constraints,
     verify_ontology_schema,
 )
 from lib.neo4j.vector_search import (
-    create_category_vector_index,
+    create_ontology_vector_indexes,
     has_category_vector_index,
+    has_occasion_vector_index,
 )
 from lib.redis.client import RedisClient
 
@@ -57,7 +60,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-index",
         action="store_true",
-        help="Skip Category vector index creation",
+        help="Skip Category and Occasion vector index creation",
     )
     parser.add_argument(
         "--depth",
@@ -121,15 +124,21 @@ async def _run_embed(client: Neo4jClient, *, force_reembed: bool = False) -> boo
         print("ERROR: no Category nodes with embedding after embed", file=sys.stderr)
         return False
     print(f"Embedded {stats.nodes_embedded} ontology nodes in {stats.batches_written} batch(es).")
+    for label in (LABEL_CATEGORY, LABEL_OCCASION, LABEL_PRODUCT_TYPE):
+        count = await count_nodes_with_embedding(client, label=label)
+        print(f"  {label} with embedding: {count}")
     return True
 
 
 async def _run_index(client: Neo4jClient) -> bool:
-    await create_category_vector_index(client)
+    await create_ontology_vector_indexes(client)
     if not await has_category_vector_index(client):
-        print("ERROR: vector index missing after create", file=sys.stderr)
+        print("ERROR: Category vector index missing after bootstrap", file=sys.stderr)
         return False
-    print("Vector index ontology_category_embedding OK.")
+    if not await has_occasion_vector_index(client):
+        print("ERROR: Occasion vector index missing after bootstrap", file=sys.stderr)
+        return False
+    print("Ontology vector indexes created (Category, Occasion).")
     return True
 
 
@@ -138,10 +147,16 @@ async def _verify(client: Neo4jClient) -> bool:
         print("ERROR: verification failed — no category embeddings", file=sys.stderr)
         return False
     if not await has_category_vector_index(client):
-        print("ERROR: verification failed — no vector index", file=sys.stderr)
+        print("ERROR: verification failed — no Category vector index", file=sys.stderr)
+        return False
+    if not await has_occasion_vector_index(client):
+        print("ERROR: verification failed — no Occasion vector index", file=sys.stderr)
         return False
     count = await count_nodes_with_embedding(client, label=LABEL_CATEGORY)
-    print(f"Verification OK: {count} Category nodes with embeddings, vector index present.")
+    print(
+        f"Verification OK: {count} Category nodes with embeddings, "
+        "Category and Occasion vector indexes present."
+    )
     return True
 
 

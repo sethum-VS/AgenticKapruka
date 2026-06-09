@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
@@ -11,11 +12,13 @@ from graphs.state import AgentState, Intent
 from lib.embeddings.vertex_embeddings import embed_texts
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
+    VECTOR_CONFIDENCE_THRESHOLD,
     build_graph_hybrid_context,
     fetch_category_display_names,
+    fetch_category_ids_for_occasions,
 )
 from lib.neo4j.traverse import traverse_from_categories
-from lib.neo4j.vector_search import vector_search
+from lib.neo4j.vector_search import occasion_vector_search, vector_search
 from lib.zep.client import ZepClient
 from lib.zep.preferences import (
     extract_preferences,
@@ -53,13 +56,17 @@ def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
     return "retrieve_hybrid_context"
 
 
+def _dedupe_preserve_order(ids: list[str]) -> list[str]:
+    return list(dict.fromkeys(ids))
+
+
 async def _fetch_graph_hybrid_context(
     query: str,
     *,
     neo4j_client: Neo4jClient,
     embed_fn: EmbedTextsFn,
 ) -> dict[str, Any]:
-    """Embed query, vector-search categories, traverse ontology, build MCP hints."""
+    """Embed query, parallel Category/Occasion vector search, seed traversal, build hints."""
     stripped = query.strip()
     if not stripped:
         return {}
@@ -68,20 +75,36 @@ async def _fetch_graph_hybrid_context(
     if not embeddings:
         return {}
 
-    hits = await vector_search(neo4j_client, embeddings[0], top_k=_VECTOR_SEARCH_TOP_K)
-    if not hits:
+    query_embedding = embeddings[0]
+    category_hits, occasion_hits = await asyncio.gather(
+        vector_search(neo4j_client, query_embedding, top_k=_VECTOR_SEARCH_TOP_K),
+        occasion_vector_search(neo4j_client, query_embedding, top_k=_VECTOR_SEARCH_TOP_K),
+    )
+    if not category_hits and not occasion_hits:
         return {}
 
-    category_ids = [hit.id for hit in hits]
-    display_names = await fetch_category_display_names(neo4j_client, category_ids)
+    direct_category_ids = [hit.id for hit in category_hits]
+    high_confidence_occasion_ids = [
+        hit.id for hit in occasion_hits if hit.score >= VECTOR_CONFIDENCE_THRESHOLD
+    ]
+    occasion_category_ids = await fetch_category_ids_for_occasions(
+        neo4j_client,
+        high_confidence_occasion_ids,
+    )
+    seed_category_ids = _dedupe_preserve_order([*direct_category_ids, *occasion_category_ids])
+    if not seed_category_ids:
+        return {}
+
+    display_names = await fetch_category_display_names(neo4j_client, seed_category_ids)
     traversal = await traverse_from_categories(
         neo4j_client,
-        category_ids,
+        seed_category_ids,
         max_hops=_GRAPH_TRAVERSE_MAX_HOPS,
     )
     return build_graph_hybrid_context(
         stripped,
-        vector_hits=hits,
+        vector_hits=category_hits,
+        direct_occasion_hits=occasion_hits,
         display_names=display_names,
         traversal=traversal,
     )
@@ -149,7 +172,13 @@ def _merge_graph_hybrid_context(
         hints.setdefault(key, value)
 
     merged["hints"] = hints
-    for key in ("vector_hits", "occasions", "product_types", "categories"):
+    for key in (
+        "vector_hits",
+        "direct_occasion_hits",
+        "occasions",
+        "product_types",
+        "categories",
+    ):
         if key in graph_context:
             merged[key] = graph_context[key]
     return merged
