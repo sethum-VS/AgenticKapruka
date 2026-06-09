@@ -17,7 +17,7 @@ dependencies = [
     "jinja2>=3.1,<4",
     "redis>=5.2,<6",
     "neo4j>=5.26,<6",
-    "zep-python>=2.0,<3",
+    "zep-cloud>=3,<4",
     "mcp>=1.6,<2",
     "langgraph>=0.3,<1",
     "langgraph-checkpoint-redis>=0.3,<0.4",
@@ -92,6 +92,10 @@ disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
 module = ["networkx", "networkx.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["zep_cloud", "zep_cloud.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

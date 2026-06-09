@@ -5,24 +5,22 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from zep_python.types.memory import Memory
+from zep_cloud.types.thread_context_response import ThreadContextResponse
 
 from lib.zep.memory import (
     DEFAULT_FACT_LIMIT,
+    ZepMemory,
     append_session_messages,
     extract_memory_facts,
+    facts_from_context,
     format_memory_facts_block,
     get_session_memory_facts,
 )
 
 
 def test_extract_memory_facts_returns_last_n() -> None:
-    memory = Memory(
+    memory = ZepMemory(
         facts=["Prefers birthday cakes", "Lives in Colombo", "Mom's birthday in June"],
-        messages=[],
-        metadata={},
-        relevant_facts=[],
-        summary="",
     )
 
     result = extract_memory_facts(memory, limit=2)
@@ -31,8 +29,13 @@ def test_extract_memory_facts_returns_last_n() -> None:
 
 
 def test_extract_memory_facts_empty_memory() -> None:
-    memory = Memory(facts=[], messages=[], metadata={}, relevant_facts=[], summary="")
+    memory = ZepMemory(facts=[])
     assert extract_memory_facts(memory) == []
+
+
+def test_facts_from_context_splits_bullets() -> None:
+    context = "- Prefers roses\n- Budget under LKR 5000"
+    assert facts_from_context(context) == ["Prefers roses", "Budget under LKR 5000"]
 
 
 def test_format_memory_facts_block_empty() -> None:
@@ -48,26 +51,21 @@ def test_format_memory_facts_block_renders_bullets() -> None:
 
 @pytest.mark.asyncio
 async def test_get_session_memory_facts_delegates_to_client() -> None:
-    memory = Memory(
-        facts=["Likes chocolate"],
-        messages=[],
-        metadata={},
-        relevant_facts=[],
-        summary="",
-    )
     zep_client = AsyncMock()
-    zep_client.get_memory.return_value = memory
+    zep_client.get_user_context.return_value = ThreadContextResponse(
+        context="- Likes chocolate",
+    )
 
     facts = await get_session_memory_facts(zep_client, "thread-abc")
 
     assert facts == ["Likes chocolate"]
-    zep_client.get_memory.assert_awaited_once_with("thread-abc")
+    zep_client.get_user_context.assert_awaited_once_with("thread-abc")
 
 
 @pytest.mark.asyncio
 async def test_get_session_memory_facts_returns_empty_on_error() -> None:
     zep_client = AsyncMock()
-    zep_client.get_memory.side_effect = RuntimeError("not found")
+    zep_client.get_user_context.side_effect = RuntimeError("not found")
 
     facts = await get_session_memory_facts(zep_client, "missing-thread")
 

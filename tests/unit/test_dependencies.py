@@ -109,10 +109,24 @@ async def test_lifespan_stores_service_clients_on_app_state(
         captured["mcp"] = client
         return client
 
+    worker_start = AsyncMock()
+    worker_stop = AsyncMock()
+
+    class _StubCommunityWorker:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def start(self) -> None:
+            await worker_start()
+
+        async def stop(self) -> None:
+            await worker_stop()
+
     monkeypatch.setattr(RedisClient, "connect", mock_redis_connect)
     monkeypatch.setattr(Neo4jClient, "connect", mock_neo4j_connect)
     monkeypatch.setattr(ZepClient, "connect", mock_zep_connect)
     monkeypatch.setattr(MCPHttpClient, "connect", mock_mcp_connect)
+    monkeypatch.setattr("app.lifespan.NetworkXCommunityWorker", _StubCommunityWorker)
 
     application = FastAPI()
     async with lifespan(application):
@@ -120,4 +134,8 @@ async def test_lifespan_stores_service_clients_on_app_state(
         assert application.state.neo4j is captured["neo4j"]
         assert application.state.zep is captured["zep"]
         assert application.state.mcp_client is captured["mcp"]
+        assert application.state.community_worker is not None
         assert await application.state.redis.ping() is True
+        worker_start.assert_awaited_once()
+
+    worker_stop.assert_awaited_once()

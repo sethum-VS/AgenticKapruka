@@ -1,29 +1,28 @@
-"""Async Zep Cloud client wrapper with session management and health checks."""
+"""Async Zep Cloud v3 client wrapper with thread management and health checks."""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any
 
 import httpx
-from zep_python.client import AsyncZep
-from zep_python.types import Session, SessionListResponse
-from zep_python.types.memory import Memory
-from zep_python.types.message import Message
-from zep_python.types.session_search_response import SessionSearchResponse
-from zep_python.types.success_response import SuccessResponse
-
-SearchScope = Literal["messages", "summary", "facts"]
+from zep_cloud.client import AsyncZep
+from zep_cloud.types.graph_search_results import GraphSearchResults
+from zep_cloud.types.message import Message
+from zep_cloud.types.thread import Thread
+from zep_cloud.types.thread_context_response import ThreadContextResponse
+from zep_cloud.types.thread_list_response import ThreadListResponse
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_ZEP_BASE_URL = "https://api.getzep.com"
+_DEFAULT_ZEP_BASE_URL = "https://api.getzep.com/api/v2"
 _DEFAULT_TIMEOUT = 30.0
+_USER_EXISTS_MARKER = "user already exists"
 
 
 class ZepClient:
-    """Wrap zep-python AsyncZep with session helpers and API key health checks."""
+    """Wrap zep-cloud AsyncZep with thread helpers and API key health checks."""
 
     def __init__(
         self,
@@ -68,27 +67,36 @@ class ZepClient:
 
     @property
     def sdk(self) -> AsyncZep:
-        """Underlying zep-python AsyncZep client for memory and user modules."""
+        """Underlying zep-cloud AsyncZep client."""
         if self._client is None:
             msg = "ZepClient is not connected; call connect() first"
             raise RuntimeError(msg)
         return self._client
 
-    async def list_sessions(
+    async def list_threads(
         self,
         *,
         page_number: int = 1,
         page_size: int = 10,
         order_by: str | None = None,
         asc: bool | None = None,
-    ) -> SessionListResponse:
-        """List memory sessions with optional pagination."""
-        return await self.sdk.memory.list_sessions(
+    ) -> ThreadListResponse:
+        """List Zep threads with optional pagination."""
+        return await self.sdk.thread.list_all(
             page_number=page_number,
             page_size=page_size,
             order_by=order_by,
             asc=asc,
         )
+
+    async def ensure_user(self, user_id: str) -> None:
+        """Create a Zep user when missing; ignore duplicate-user errors."""
+        try:
+            await self.sdk.user.add(user_id=user_id)
+        except Exception as exc:
+            message = str(exc).lower()
+            if _USER_EXISTS_MARKER not in message:
+                raise
 
     async def create_session(
         self,
@@ -96,42 +104,31 @@ class ZepClient:
         *,
         user_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> Session:
-        """Create a new Zep memory session."""
-        if user_id is None and metadata is None:
-            return await self.sdk.memory.add_session(session_id=session_id)
-        if metadata is None:
-            return await self.sdk.memory.add_session(session_id=session_id, user_id=user_id)
-        if user_id is None:
-            return await self.sdk.memory.add_session(session_id=session_id, metadata=metadata)
-        return await self.sdk.memory.add_session(
-            session_id=session_id,
-            user_id=user_id,
-            metadata=metadata,
+    ) -> Thread:
+        """Create a Zep thread for a browser session (session_id maps to thread_id)."""
+        del metadata  # v3 thread.create does not accept metadata
+        resolved_user_id = user_id or session_id
+        await self.ensure_user(resolved_user_id)
+        return await self.sdk.thread.create(
+            thread_id=session_id,
+            user_id=resolved_user_id,
         )
 
-    async def get_memory(
-        self,
-        session_id: str,
-        *,
-        lastn: int | None = None,
-    ) -> Memory:
-        """Return memory (summary, messages, facts) for a session thread."""
-        return await self.sdk.memory.get(session_id, lastn=lastn)
+    async def get_user_context(self, session_id: str) -> ThreadContextResponse:
+        """Return the Zep context block for a thread."""
+        return await self.sdk.thread.get_user_context(thread_id=session_id)
 
-    async def search_session_memory(
+    async def search_graph(
         self,
         *,
-        session_ids: Sequence[str] | None = None,
-        text: str | None = None,
-        search_scope: SearchScope = "facts",
-        limit: int | None = 10,
-    ) -> SessionSearchResponse:
-        """Semantic search across Zep session memory (facts, messages, or summary)."""
-        return await self.sdk.memory.search_sessions(
-            session_ids=session_ids,
-            text=text,
-            search_scope=search_scope,
+        query: str,
+        user_id: str,
+        limit: int = 10,
+    ) -> GraphSearchResults:
+        """Search the user knowledge graph for relevant facts."""
+        return await self.sdk.graph.search(
+            query=query,
+            user_id=user_id,
             limit=limit,
         )
 
@@ -139,14 +136,17 @@ class ZepClient:
         self,
         session_id: str,
         messages: Sequence[Message],
-    ) -> SuccessResponse:
-        """Append chat messages to a session's Zep memory."""
-        return await self.sdk.memory.add(session_id, messages=messages)
+    ) -> Any:
+        """Append chat messages to a Zep thread."""
+        return await self.sdk.thread.add_messages(
+            thread_id=session_id,
+            messages=list(messages),
+        )
 
     async def health_check(self) -> bool:
         """Return True when Zep Cloud accepts the configured API key."""
         try:
-            await self.sdk.memory.list_sessions(page_size=1, page_number=1)
+            await self.sdk.thread.list_all(page_size=1, page_number=1)
         except Exception as exc:
             logger.warning("Zep health check failed: %s", exc)
             return False

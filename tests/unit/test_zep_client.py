@@ -16,20 +16,23 @@ _TEST_API_KEY = "zep-test-api-key"
 def _mock_zep_handler(request: httpx.Request) -> httpx.Response:
     assert request.headers["Authorization"] == f"Api-Key {_TEST_API_KEY}"
 
-    if request.method == "GET" and request.url.path.endswith("/sessions-ordered"):
+    if request.method == "GET" and request.url.path.endswith("/threads"):
         return httpx.Response(
             200,
-            json={"sessions": [], "total_count": 0, "response_count": 0},
+            json={"threads": [], "total_count": 0, "response_count": 0},
         )
 
-    if request.method == "POST" and request.url.path.endswith("/sessions"):
+    if request.method == "POST" and request.url.path.endswith("/users"):
+        body = json.loads(request.content)
+        return httpx.Response(201, json={"user_id": body["user_id"]})
+
+    if request.method == "POST" and request.url.path.endswith("/threads"):
         body = json.loads(request.content)
         return httpx.Response(
             201,
             json={
-                "session_id": body["session_id"],
-                "user_id": body.get("user_id"),
-                "metadata": body.get("metadata"),
+                "thread_id": body["thread_id"],
+                "user_id": body["user_id"],
             },
         )
 
@@ -75,7 +78,7 @@ async def test_zep_client_initializes_with_api_key() -> None:
 
 
 async def test_zep_client_health_check_with_mock_http(zep_client: ZepClient) -> None:
-    """health_check returns True when list_sessions succeeds."""
+    """health_check returns True when list_threads succeeds."""
     assert await zep_client.health_check() is True
 
 
@@ -99,25 +102,23 @@ async def test_zep_client_health_check_returns_false_on_auth_failure(
     await client.close()
 
 
-async def test_zep_client_list_sessions(zep_client: ZepClient) -> None:
-    """list_sessions returns SessionListResponse from mocked HTTP."""
-    result = await zep_client.list_sessions(page_number=1, page_size=10)
+async def test_zep_client_list_threads(zep_client: ZepClient) -> None:
+    """list_threads returns ThreadListResponse from mocked HTTP."""
+    result = await zep_client.list_threads(page_number=1, page_size=10)
 
-    assert result.sessions == []
+    assert result.threads == []
     assert result.total_count == 0
 
 
 async def test_zep_client_create_session(zep_client: ZepClient) -> None:
-    """create_session posts to Zep and returns the created session."""
-    session = await zep_client.create_session(
+    """create_session creates a user and thread in Zep."""
+    thread = await zep_client.create_session(
         "thread-abc123",
         user_id="user-456",
-        metadata={"source": "agentic-kapruka"},
     )
 
-    assert session.session_id == "thread-abc123"
-    assert session.user_id == "user-456"
-    assert session.metadata == {"source": "agentic-kapruka"}
+    assert thread.thread_id == "thread-abc123"
+    assert thread.user_id == "user-456"
 
 
 async def test_zep_client_close_is_idempotent(zep_client: ZepClient) -> None:

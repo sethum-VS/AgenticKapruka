@@ -41,6 +41,7 @@ jobs:
 
   e2e-smoke:
     name: Playwright E2E smoke tests
+    needs: lint-and-test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -65,6 +66,7 @@ jobs:
 
   ragas-eval:
     name: Ragas golden dataset eval
+    needs: lint-and-test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -174,4 +176,14 @@ jobs:
             --region="${GCP_REGION}" \
             --format='value(status.url)')"
           echo "Service URL: ${SERVICE_URL}"
-          curl -fsS "${SERVICE_URL}/health" | grep -q '"status":"healthy"'
+          for attempt in $(seq 1 18); do
+            if curl -fsS "${SERVICE_URL}/health" | grep -q '"status":"healthy"'; then
+              echo "Health check passed on attempt ${attempt}"
+              exit 0
+            fi
+            echo "Attempt ${attempt}: not healthy yet, waiting 10s..."
+            sleep 10
+          done
+          echo "Health check failed after 3 minutes"
+          curl -sS "${SERVICE_URL}/health" || true
+          exit 1

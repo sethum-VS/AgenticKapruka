@@ -3,22 +3,58 @@
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 from typing import Final
 
-from zep_python.types.memory import Memory
-from zep_python.types.message import Message
+from zep_cloud.types.graph_search_results import GraphSearchResults
+from zep_cloud.types.message import Message
 
 from lib.zep.client import ZepClient
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FACT_LIMIT: Final = 10
+_BULLET_PREFIX_RE = re.compile(r"^[-*•]\s+")
 
 
-def extract_memory_facts(memory: Memory, *, limit: int = DEFAULT_FACT_LIMIT) -> list[str]:
+@dataclass(frozen=True, slots=True)
+class ZepMemory:
+    """Normalized Zep memory payload for graph nodes and prompts."""
+
+    facts: list[str]
+    summary: str = ""
+    context: str | None = None
+
+
+def facts_from_context(context: str | None) -> list[str]:
+    """Split a Zep context block into discrete fact strings."""
+    if context is None or not context.strip():
+        return []
+
+    lines: list[str] = []
+    for raw_line in context.splitlines():
+        stripped = _BULLET_PREFIX_RE.sub("", raw_line.strip())
+        if stripped:
+            lines.append(stripped)
+
+    if lines:
+        return lines
+    return [context.strip()]
+
+
+def facts_from_graph_search(results: GraphSearchResults) -> list[str]:
+    """Collect fact strings from a Zep graph search response."""
+    facts = facts_from_context(results.context)
+    for edge in results.edges or []:
+        if edge.fact and edge.fact not in facts:
+            facts.append(edge.fact)
+    return facts
+
+
+def extract_memory_facts(memory: ZepMemory, *, limit: int = DEFAULT_FACT_LIMIT) -> list[str]:
     """Return up to ``limit`` most recent fact strings from a Zep memory payload."""
-    raw_facts = memory.facts or []
-    fact_strings = [str(item) for item in raw_facts if item]
+    fact_strings = [item for item in memory.facts if item]
     if len(fact_strings) <= limit:
         return fact_strings
     return fact_strings[-limit:]
@@ -38,12 +74,17 @@ async def get_session_memory_facts(
     *,
     limit: int = DEFAULT_FACT_LIMIT,
 ) -> list[str]:
-    """Load the last ``limit`` Zep memory facts for a session thread."""
+    """Load Zep memory facts for a session thread."""
     try:
-        memory = await zep_client.get_memory(session_id)
+        context_response = await zep_client.get_user_context(session_id)
     except Exception as exc:
         logger.warning("Failed to load Zep memory for session %s: %s", session_id, exc)
         return []
+
+    memory = ZepMemory(
+        facts=facts_from_context(context_response.context),
+        context=context_response.context,
+    )
     return extract_memory_facts(memory, limit=limit)
 
 
@@ -53,9 +94,9 @@ async def append_session_messages(
     user_message: str,
     assistant_message: str,
 ) -> None:
-    """Append a user/assistant turn to Zep session memory."""
+    """Append a user/assistant turn to Zep thread memory."""
     messages = [
-        Message(role="user", role_type="user", content=user_message),
-        Message(role="assistant", role_type="assistant", content=assistant_message),
+        Message(role="user", content=user_message),
+        Message(role="assistant", content=assistant_message),
     ]
     await zep_client.add_messages(session_id, messages)
