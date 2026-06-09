@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import sys
 
 from app.config import get_settings
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import (
+    clear_ontology_embeddings,
     count_nodes_with_embedding,
     embed_ontology_nodes,
     has_category_embeddings,
@@ -20,7 +22,17 @@ from lib.neo4j.vector_search import (
 )
 
 
-async def _run() -> int:
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--force-reembed",
+        action="store_true",
+        help="Clear existing ontology embeddings before embedding (required after model upgrades)",
+    )
+    return parser.parse_args()
+
+
+async def _run(*, force_reembed: bool = False) -> int:
     settings = get_settings()
     client = await Neo4jClient.connect(
         settings.neo4j_uri,
@@ -28,6 +40,10 @@ async def _run() -> int:
         settings.neo4j_password,
     )
     try:
+        if force_reembed:
+            cleared = await clear_ontology_embeddings(client)
+            print(f"Cleared embeddings from {cleared} ontology node(s).")
+
         stats = await embed_ontology_nodes(client)
         if not await has_category_embeddings(client):
             print("ERROR: no Category nodes with embedding after embed run", file=sys.stderr)
@@ -51,7 +67,8 @@ async def _run() -> int:
 
 
 def main() -> None:
-    raise SystemExit(asyncio.run(_run()))
+    args = _parse_args()
+    raise SystemExit(asyncio.run(_run(force_reembed=args.force_reembed)))
 
 
 if __name__ == "__main__":

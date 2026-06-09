@@ -47,6 +47,15 @@ _HAS_CATEGORY_EMBEDDINGS_CYPHER = """
 MATCH (c:Category) WHERE c.embedding IS NOT NULL RETURN count(c) > 0 AS has_embeddings
 """.strip()
 
+_CLEAR_EMBEDDINGS_CYPHER = """
+MATCH (n)
+WHERE any(l IN labels(n) WHERE l IN $ontology_labels)
+  AND n.embedding IS NOT NULL
+WITH n
+REMOVE n.embedding
+RETURN count(n) AS cleared
+""".strip()
+
 EmbedTextsFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 
@@ -69,7 +78,7 @@ class EmbedOntologyStats:
 
 
 def build_embedding_text(*, display_name: str, description: str | None) -> str:
-    """Combine display_name and description for Vertex text-embedding-005."""
+    """Combine display_name and description for gemini-embedding-2."""
     name = display_name.strip()
     if description and description.strip():
         return f"{name}. {description.strip()}"
@@ -100,6 +109,15 @@ def _chunked(
     size: int,
 ) -> list[list[OntologyNodeForEmbedding]]:
     return [list(items[i : i + size]) for i in range(0, len(items), size)]
+
+
+async def clear_ontology_embeddings(client: Neo4jClient) -> int:
+    """Remove the embedding property from all ontology nodes (for model migrations)."""
+    rows = await client.execute(
+        _CLEAR_EMBEDDINGS_CYPHER,
+        {"ontology_labels": list(_ONTOLOGY_LABELS)},
+    )
+    return int(rows[0]["cleared"]) if rows else 0
 
 
 async def set_node_embeddings(

@@ -23,6 +23,7 @@ dependencies = [
     "langgraph-checkpoint-redis>=0.3,<0.4",
     "google-genai>=1.0,<2",
     "google-cloud-aiplatform>=1.75,<2",
+    "tenacity>=9.0,<10",
     "networkx>=3.4,<4",
     "ragas>=0.2,<1",
 ]

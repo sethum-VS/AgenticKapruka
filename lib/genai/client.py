@@ -16,6 +16,7 @@ def create_genai_client(
     settings: Settings | None = None,
     api_key: str | None = None,
     backend: GeminiBackend | None = None,
+    location: str | None = None,
 ) -> genai.Client:
     """Build a google-genai client.
 
@@ -38,5 +39,5 @@ def create_genai_client(
     return genai.Client(
         vertexai=True,
         project=cfg.gcp_project_id,
-        location=cfg.gcp_location,
+        location=location or cfg.gcp_location,
     )

@@ -6,8 +6,9 @@ import argparse
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from app.config import Settings
 from scripts import bootstrap_neo4j
+
+from app.config import Settings
 
 
 def _bootstrap_settings() -> Settings:
@@ -38,8 +39,8 @@ async def test_bootstrap_runs_all_steps_in_order() -> None:
         call_order.append(f"ingest:{depth}")
         return True
 
-    async def track_embed(c: object) -> bool:
-        call_order.append("embed")
+    async def track_embed(c: object, *, force_reembed: bool = False) -> bool:
+        call_order.append(f"embed:{force_reembed}")
         return True
 
     async def track_index(c: object) -> bool:
@@ -67,11 +68,12 @@ async def test_bootstrap_runs_all_steps_in_order() -> None:
             skip_embed=False,
             skip_index=False,
             depth=2,
+            force_reembed=False,
         )
         code = await bootstrap_neo4j._run(args)
 
     assert code == 0
-    assert call_order == ["migrate", "ingest:2", "embed", "index", "verify"]
+    assert call_order == ["migrate", "ingest:2", "embed:False", "index", "verify"]
     client.close.assert_awaited_once()
 
 
@@ -97,7 +99,7 @@ async def test_bootstrap_honors_skip_flags() -> None:
         patch.object(
             bootstrap_neo4j,
             "_run_embed",
-            side_effect=lambda c: call_order.append("embed") or True,
+            side_effect=lambda c, force_reembed=False: call_order.append("embed") or True,
         ),
         patch.object(
             bootstrap_neo4j,
@@ -118,11 +120,41 @@ async def test_bootstrap_honors_skip_flags() -> None:
             skip_embed=True,
             skip_index=True,
             depth=2,
+            force_reembed=False,
         )
         code = await bootstrap_neo4j._run(args)
 
     assert code == 0
     assert call_order == ["verify"]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_passes_force_reembed_to_embed_step() -> None:
+    client = MagicMock()
+    client.close = AsyncMock()
+
+    with (
+        patch.object(bootstrap_neo4j, "get_settings", return_value=_bootstrap_settings()),
+        patch.object(bootstrap_neo4j, "Neo4jClient") as mock_client_cls,
+        patch.object(bootstrap_neo4j, "_run_migrate", AsyncMock(return_value=True)),
+        patch.object(bootstrap_neo4j, "_run_ingest", AsyncMock(return_value=True)),
+        patch.object(bootstrap_neo4j, "_run_embed", AsyncMock(return_value=True)) as mock_embed,
+        patch.object(bootstrap_neo4j, "_run_index", AsyncMock(return_value=True)),
+        patch.object(bootstrap_neo4j, "_verify", AsyncMock(return_value=True)),
+    ):
+        mock_client_cls.connect = AsyncMock(return_value=client)
+        args = argparse.Namespace(
+            skip_migrate=True,
+            skip_ingest=True,
+            skip_embed=False,
+            skip_index=True,
+            depth=2,
+            force_reembed=True,
+        )
+        code = await bootstrap_neo4j._run(args)
+
+    assert code == 0
+    mock_embed.assert_awaited_once_with(client, force_reembed=True)
 
 
 @pytest.mark.asyncio
@@ -147,6 +179,7 @@ async def test_bootstrap_exits_nonzero_when_verify_fails() -> None:
             skip_embed=False,
             skip_index=False,
             depth=2,
+            force_reembed=False,
         )
         code = await bootstrap_neo4j._run(args)
 
@@ -174,6 +207,7 @@ async def test_bootstrap_exits_nonzero_when_index_step_fails() -> None:
             skip_embed=False,
             skip_index=False,
             depth=2,
+            force_reembed=False,
         )
         code = await bootstrap_neo4j._run(args)
 

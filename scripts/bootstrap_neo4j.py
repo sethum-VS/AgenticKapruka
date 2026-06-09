@@ -12,6 +12,7 @@ from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.service import KaprukaService
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import (
+    clear_ontology_embeddings,
     count_nodes_with_embedding,
     embed_ontology_nodes,
     has_category_embeddings,
@@ -65,6 +66,11 @@ def _parse_args() -> argparse.Namespace:
         choices=(1, 2),
         help="Kapruka category tree depth for ingest (default 2)",
     )
+    parser.add_argument(
+        "--force-reembed",
+        action="store_true",
+        help="Clear existing ontology embeddings before embedding (required after model upgrades)",
+    )
     return parser.parse_args()
 
 
@@ -106,7 +112,10 @@ async def _run_ingest(client: Neo4jClient, depth: int) -> bool:
         await redis.close()
 
 
-async def _run_embed(client: Neo4jClient) -> bool:
+async def _run_embed(client: Neo4jClient, *, force_reembed: bool = False) -> bool:
+    if force_reembed:
+        cleared = await clear_ontology_embeddings(client)
+        print(f"Cleared embeddings from {cleared} ontology node(s).")
     stats = await embed_ontology_nodes(client)
     if not await has_category_embeddings(client):
         print("ERROR: no Category nodes with embedding after embed", file=sys.stderr)
@@ -148,7 +157,7 @@ async def _run(args: argparse.Namespace) -> int:
             return 1
         if not args.skip_ingest and not await _run_ingest(client, args.depth):
             return 1
-        if not args.skip_embed and not await _run_embed(client):
+        if not args.skip_embed and not await _run_embed(client, force_reembed=args.force_reembed):
             return 1
         if not args.skip_index and not await _run_index(client):
             return 1
