@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 from google import genai
@@ -182,6 +183,104 @@ def occasion_rewrite_needed(query: str, occasion: str) -> bool:
     return not _occasion_terms_in_query(stripped, occasion)
 
 
+_PRICE_SORT_RE = re.compile(
+    r"\b("
+    r"lowest|cheapest|low\s*price|budget|affordable|best\s*deal|"
+    r"price\s*asc|under\s*\d|less\s*than"
+    r")\b",
+    re.IGNORECASE,
+)
+_CATALOG_BROWSE_RE = re.compile(
+    r"\b("
+    r"list\s+of|show\s+me\s+(all|everything)|any\s+items?|items?\s+today|"
+    r"something\s+cheap|what.*cheapest|browse|all\s+products?"
+    r")\b",
+    re.IGNORECASE,
+)
+_META_QUERY_TOKENS = frozenset(
+    {
+        "can",
+        "could",
+        "give",
+        "list",
+        "lowest",
+        "price",
+        "items",
+        "today",
+        "show",
+        "something",
+        "cheapest",
+        "budget",
+        "please",
+        "find",
+        "any",
+        "all",
+        "everything",
+        "browse",
+        "products",
+        "product",
+        "cheap",
+        "affordable",
+        "deals",
+        "deal",
+        "under",
+        "less",
+        "than",
+        "you",
+        "your",
+        "the",
+        "for",
+        "and",
+        "with",
+    }
+)
+_CATEGORY_SEARCH_TERMS: dict[str, str] = {
+    "chocolates": "chocolate",
+    "flowers": "flower",
+    "birthday": "cake",
+    "cakes": "cake",
+    "gifts": "cake",
+    "gift": "cake",
+    "food": "cake",
+    "fruits": "fruit",
+    "perfumes": "perfume",
+    "jewellery": "jewelry",
+}
+
+
+def _product_like_tokens(message: str) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[a-z0-9']+", message.lower())
+        if len(token) >= 3 and token not in _META_QUERY_TOKENS
+    ]
+
+
+def _is_meta_catalog_query(message: str) -> bool:
+    """True when the user asks to browse/sort the catalog without naming a product."""
+    stripped = message.strip()
+    if not stripped:
+        return False
+    if _CATALOG_BROWSE_RE.search(stripped):
+        return True
+    return bool(_PRICE_SORT_RE.search(stripped) and not _product_like_tokens(stripped))
+
+
+def _fallback_search_query(category: str | None) -> str:
+    """Pick a broad Kapruka keyword that returns purchasable products."""
+    if category:
+        normalized = category.lower().strip()
+        mapped = _CATEGORY_SEARCH_TERMS.get(normalized)
+        if mapped:
+            return mapped
+        first_word = normalized.split()[0]
+        if len(first_word) >= 3:
+            if first_word.endswith("s") and len(first_word) > 4:
+                return first_word.rstrip("s")
+            return first_word
+    return "cake"
+
+
 def build_discovery_search_args(
     user_message: str,
     hybrid_context: dict[str, Any] | None,
@@ -194,10 +293,18 @@ def build_discovery_search_args(
     preferences = context.get("preferences") or {}
 
     category = hints.get("category") or preferences.get("favorite_category")
+    query = user_message.strip()
 
-    args: dict[str, Any] = {"q": user_message.strip(), "currency": currency}
+    args: dict[str, Any] = {"q": query, "currency": currency}
     if category:
         args["category"] = category
+
+    if _PRICE_SORT_RE.search(query):
+        args["sort"] = "price_asc"
+
+    if _is_meta_catalog_query(query):
+        args["q"] = _fallback_search_query(category)
+
     return args
 
 

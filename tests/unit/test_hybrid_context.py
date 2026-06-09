@@ -140,6 +140,32 @@ def test_build_discovery_search_args_maps_zep_favorite_category() -> None:
     assert args["currency"] == "USD"
 
 
+def test_build_discovery_search_args_rewrites_meta_price_browse_query() -> None:
+    """Catalog-style lowest-price requests map to a searchable q with price_asc sort."""
+    args = build_discovery_search_args(
+        "can u give me list of lowest price items today",
+        {},
+        currency="LKR",
+    )
+
+    assert args["q"] == "cake"
+    assert args["sort"] == "price_asc"
+    assert args["currency"] == "LKR"
+
+
+def test_build_discovery_search_args_price_sort_preserves_product_query() -> None:
+    """Explicit product terms stay in q while still applying price_asc sort."""
+    args = build_discovery_search_args(
+        "cheapest birthday cake",
+        {"hints": {"category": "Birthday"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "cheapest birthday cake"
+    assert args["sort"] == "price_asc"
+    assert args["category"] == "Birthday"
+
+
 def test_occasion_rewrite_needed_when_terms_absent() -> None:
     assert occasion_rewrite_needed("cake for mom", "Birthday") is True
     assert occasion_rewrite_needed("birthday cake for mom", "Birthday") is False

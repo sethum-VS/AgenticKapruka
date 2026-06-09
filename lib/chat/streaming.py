@@ -88,4 +88,3 @@ async def iter_chat_sse_events(
         if stream_started:
             error_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{error_html}'
         yield format_sse_event(error_html)
-        raise

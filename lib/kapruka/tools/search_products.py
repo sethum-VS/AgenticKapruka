@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from lib.kapruka.errors import KaprukaError, parse_mcp_error
+from lib.kapruka.errors import parse_mcp_error
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.types import SearchProductsInput, SearchProductsOutput
 
@@ -45,7 +45,15 @@ async def search_products(
     raw = await client.call_tool(TOOL_NAME, params)
     text = raw.strip()
     if _NO_PRODUCTS.match(text):
-        raise KaprukaError("no_products_found", text)
+        return SearchProductsOutput(
+            results=[],
+            next_cursor=None,
+            applied_filters={
+                key: value
+                for key, value in params.items()
+                if key in {"q", "category", "sort", "limit", "in_stock_only"}
+            },
+        )
 
     parse_mcp_error(text)
     payload = json.loads(text)
