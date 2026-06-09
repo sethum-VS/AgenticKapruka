@@ -56,6 +56,9 @@ def _carousel_harness_html(carousel_html: str) -> str:
         max-width: 100px;
       }}
       [data-testid="product-carousel-track"] {{
+        display: flex;
+        flex-direction: row;
+        flex-wrap: nowrap;
         width: 100px;
         max-width: 100px;
         overflow-x: auto;
