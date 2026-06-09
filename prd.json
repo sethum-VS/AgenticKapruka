@@ -1068,7 +1068,7 @@
       "When no direct hit meets threshold, pick highest-weight TraversalNode from traversal.occasions",
       "Update tests/unit/test_hybrid_context.py covering vector-first hint, traversal fallback, and no-hint path"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "id": "PRD-090",

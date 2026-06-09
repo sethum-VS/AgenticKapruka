@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from lib.neo4j.client import Neo4jClient
@@ -22,9 +21,7 @@ WHERE o.id IN $occasion_ids
 RETURN DISTINCT c.id AS id
 """.strip()
 
-_WORD_RE = re.compile(r"[a-z0-9]+")
-
-# Minimum top vector-search score before graph occasion hints augment MCP `q`.
+# Minimum vector-search score before a direct occasion hit becomes hints.occasion.
 VECTOR_CONFIDENCE_THRESHOLD = 0.65
 
 
@@ -56,24 +53,27 @@ async def fetch_category_ids_for_occasions(
     return [str(row["id"]) for row in rows]
 
 
-def _query_tokens(query: str) -> set[str]:
-    return set(_WORD_RE.findall(query.lower()))
+def _occasion_display_name(occasion_id: str, occasions: list[TraversalNode]) -> str:
+    for node in occasions:
+        if node.id == occasion_id:
+            return node.display_name
+    slug = occasion_id.rsplit(":", maxsplit=1)[-1]
+    return slug.replace("-", " ").title()
 
 
-def _best_occasion_hint(query: str, occasions: list[TraversalNode]) -> str | None:
+def _best_occasion_hint(
+    direct_occasion_hits: list[VectorSearchHit],
+    occasions: list[TraversalNode],
+) -> str | None:
+    """Pick occasion hint from vector hits above threshold, else highest-weight traversal."""
+    sorted_hits = sorted(direct_occasion_hits, key=lambda hit: hit.score, reverse=True)
+    if sorted_hits and sorted_hits[0].score >= VECTOR_CONFIDENCE_THRESHOLD:
+        return _occasion_display_name(sorted_hits[0].id, occasions)
+
     if not occasions:
         return None
-    tokens = _query_tokens(query)
-    scored: list[tuple[int, float, str]] = []
-    for occasion in occasions:
-        name_tokens = _query_tokens(occasion.display_name)
-        overlap = len(tokens & name_tokens)
-        scored.append((overlap, occasion.weight, occasion.display_name))
-    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    best_overlap, _, best_name = scored[0]
-    if best_overlap > 0:
-        return best_name
-    return scored[0][2]
+    best = max(occasions, key=lambda node: node.weight)
+    return best.display_name
 
 
 def build_graph_hybrid_context(
@@ -101,7 +101,7 @@ def build_graph_hybrid_context(
     ]
     top_category_id = vector_hits[0].id if vector_hits else next(iter(display_names), "")
     top_category = str(display_names.get(top_category_id, top_category_id))
-    occasion_hint = _best_occasion_hint(query, traversal.occasions)
+    occasion_hint = _best_occasion_hint(direct_occasion_hits or [], traversal.occasions)
 
     hints: dict[str, str] = {}
     if top_category:
@@ -142,13 +142,11 @@ def _top_vector_confidence(hybrid_context: dict[str, Any]) -> float | None:
 
 
 def _occasion_terms_in_query(query: str, occasion: str) -> bool:
-    """True when substantive occasion tokens already appear in the user query."""
-    query_tokens = _query_tokens(query)
-    occasion_tokens = _query_tokens(occasion)
-    substantive = {token for token in occasion_tokens if len(token) > 2}
-    if not substantive:
-        substantive = occasion_tokens
-    return bool(substantive & query_tokens)
+    """True when occasion text already appears in the user query."""
+    occasion_lower = occasion.lower().strip()
+    if not occasion_lower:
+        return True
+    return occasion_lower in query.lower()
 
 
 def _augment_query_with_occasion(query: str, occasion: str) -> str:

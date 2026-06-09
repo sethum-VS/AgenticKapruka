@@ -713,3 +713,11 @@ Next: PRD-088 Parallel vector search and occasion-to-category seeding.
 - Tests: parallel search + threshold hop in `tests/unit/test_retrieve_hybrid_context.py`; integration mock store routes occasion index + occasion hop; `test_hybrid_rag.py` uses `create_ontology_vector_indexes`.
 Files: graphs/nodes/retrieve_hybrid_context.py, lib/neo4j/{hybrid_context,__init__}.py, tests/unit/test_retrieve_hybrid_context.py, tests/integration/test_hybrid_rag.py, prd.json
 Next: PRD-089 Semantic occasion hint extraction from vector hits.
+
+## PRD-089 — Semantic occasion hint extraction from vector hits
+- Removed lexical `_query_tokens` / `_WORD_RE` overlap from `_best_occasion_hint`; occasion hints now come from top `direct_occasion_hits` when score ≥ `VECTOR_CONFIDENCE_THRESHOLD` (0.65), else highest-weight `traversal.occasions` node.
+- Added `_occasion_display_name` to resolve vector hit ids via traversal nodes or slug fallback.
+- Simplified `_occasion_terms_in_query` to substring check (token splitter removed per PRD; PRD-090 will rework MCP `q` augmentation).
+- Tests: `tests/unit/test_hybrid_context.py` (vector-first hint, traversal fallback, no-hint path).
+Files: lib/neo4j/hybrid_context.py, tests/unit/test_hybrid_context.py, prd.json
+Next: PRD-090 Protect MCP search string integrity in discovery args.
