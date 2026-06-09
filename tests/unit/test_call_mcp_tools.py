@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -23,6 +23,7 @@ from lib.kapruka.types import (
     SearchProductsOutput,
     TrackOrderOutput,
 )
+from lib.neo4j.hybrid_context import RewrittenSearchQuery
 
 _CLIENT_IP = "203.0.113.42"
 
@@ -351,14 +352,20 @@ def test_select_tool_calls_graph_birthday_context_sets_category_filter() -> None
     assert len(selected) == 1
     assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
     assert selected[0]["args"]["category"] == "Birthday"
-    assert selected[0]["args"]["q"] == "cake for mom Birthday"
+    assert selected[0]["args"]["q"] == "cake for mom"
+    assert " Birthday" not in selected[0]["args"]["q"]
 
 
 @pytest.mark.asyncio
 async def test_call_mcp_tools_graph_birthday_context_invokes_search_with_category() -> None:
-    """Discovery search uses graph category filter for birthday intent context."""
+    """Discovery search uses category filter and Gemini rewrite instead of raw concatenation."""
     mock_service = AsyncMock(spec=KaprukaService)
     mock_service.search_products.return_value = _SEARCH_OUTPUT
+    mock_genai = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = RewrittenSearchQuery(q="birthday cake for mom")
+    mock_response.text = '{"q": "birthday cake for mom"}'
+    mock_genai.models.generate_content.return_value = mock_response
 
     state: AgentState = {
         "messages": [HumanMessage(content="cake for mom")],
@@ -376,14 +383,20 @@ async def test_call_mcp_tools_graph_birthday_context_invokes_search_with_categor
         },
     }
 
-    await call_mcp_tools(state, kapruka_service=mock_service, client_ip=_CLIENT_IP)
+    await call_mcp_tools(
+        state,
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        genai_client=mock_genai,
+    )
 
     mock_service.search_products.assert_awaited_once_with(
         _CLIENT_IP,
-        q="cake for mom Birthday",
+        q="birthday cake for mom",
         currency="LKR",
         category="Birthday",
     )
+    mock_genai.models.generate_content.assert_called_once()
 
 
 def test_select_tool_calls_skips_occasion_augment_when_confidence_low() -> None:

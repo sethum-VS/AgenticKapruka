@@ -6,6 +6,8 @@ import logging
 import re
 from typing import Any
 
+from google import genai
+
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.checkout.tracking import extract_order_number
@@ -14,7 +16,12 @@ from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
-from lib.neo4j.hybrid_context import build_discovery_search_args
+from lib.neo4j.hybrid_context import (
+    build_discovery_search_args,
+    get_discovery_occasion_hint,
+    occasion_rewrite_needed,
+    rewrite_search_query_with_occasion,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +119,29 @@ def _serialize_tool_result(result: Any) -> Any:
     return result
 
 
+async def _maybe_rewrite_discovery_query(
+    state: AgentState,
+    args: dict[str, Any],
+    *,
+    genai_client: genai.Client | None = None,
+) -> dict[str, Any]:
+    """Apply Gemini occasion rewrite to discovery search q when graph hints require it."""
+    user_query = str(args.get("q") or "").strip()
+    if not user_query:
+        return args
+
+    occasion = get_discovery_occasion_hint(state.get("hybrid_context"))
+    if not occasion or not occasion_rewrite_needed(user_query, occasion):
+        return args
+
+    rewritten = await rewrite_search_query_with_occasion(
+        user_query,
+        occasion,
+        genai_client=genai_client,
+    )
+    return {**args, "q": rewritten}
+
+
 async def _invoke_tool(
     service: KaprukaService,
     client_ip: str,
@@ -136,6 +166,7 @@ async def call_mcp_tools(
     *,
     kapruka_service: KaprukaService | None = None,
     client_ip: str | None = None,
+    genai_client: genai.Client | None = None,
 ) -> dict[str, Any]:
     """LangGraph node: invoke Kapruka MCP tools and accumulate tool_results."""
     if kapruka_service is None:
@@ -156,6 +187,12 @@ async def call_mcp_tools(
     for call in selected:
         name = call["name"]
         args = _inject_currency_args(name, dict(call.get("args") or {}), currency)
+        if name == SEARCH_PRODUCTS_TOOL:
+            args = await _maybe_rewrite_discovery_query(
+                state,
+                args,
+                genai_client=genai_client,
+            )
         logger.info("call_mcp_tools: invoking %s", name)
         raw = await _invoke_tool(kapruka_service, rate_limit_key, name, args)
         tool_results[name] = _serialize_tool_result(raw)

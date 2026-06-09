@@ -1081,6 +1081,6 @@
       "Add optional async rewrite_search_query_with_occasion(user_message, occasion) via Gemini when occasion hint exists and terms are not already in q; wire from call_mcp_tools when needed",
       "Update tests/unit/test_hybrid_context.py and tests/unit/test_call_mcp_tools.py verifying clean q, category filter, and no raw occasion concatenation"
     ],
-    "passes": false
+    "passes": true
   }
 ]

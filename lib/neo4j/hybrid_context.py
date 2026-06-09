@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 from typing import Any
+
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, ValidationError
 
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.ontology import LABEL_CATEGORY, LABEL_OCCASION, REL_OCCASION_TO_CATEGORY
@@ -23,6 +30,24 @@ RETURN DISTINCT c.id AS id
 
 # Minimum vector-search score before a direct occasion hit becomes hints.occasion.
 VECTOR_CONFIDENCE_THRESHOLD = 0.65
+REWRITE_MODEL = "gemini-2.5-flash"
+
+logger = logging.getLogger(__name__)
+
+REWRITE_SYSTEM_INSTRUCTION = (
+    "You rewrite casual Kapruka gift-shopping messages into concise product search queries.\n\n"
+    "Incorporate the occasion naturally "
+    '(e.g. "cake for mom" + Birthday → "birthday cake for mom").\n'
+    "Do not merely append the occasion word. Keep the query short (under 12 words), "
+    "ecommerce-focused, and faithful to the user's intent. "
+    "Return only the rewritten search string in JSON."
+)
+
+
+class RewrittenSearchQuery(BaseModel):
+    """Structured Gemini response for occasion-aware search rewrite."""
+
+    q: str
 
 
 async def fetch_category_display_names(
@@ -130,17 +155,6 @@ def _serialize_traversal_node(node: TraversalNode) -> dict[str, Any]:
     }
 
 
-def _top_vector_confidence(hybrid_context: dict[str, Any]) -> float | None:
-    """Return the best vector-search score from hybrid_context, if present."""
-    hits = hybrid_context.get("vector_hits") or []
-    if not hits:
-        return None
-    score = hits[0].get("score")
-    if score is None:
-        return None
-    return float(score)
-
-
 def _occasion_terms_in_query(query: str, occasion: str) -> bool:
     """True when occasion text already appears in the user query."""
     occasion_lower = occasion.lower().strip()
@@ -149,12 +163,23 @@ def _occasion_terms_in_query(query: str, occasion: str) -> bool:
     return occasion_lower in query.lower()
 
 
-def _augment_query_with_occasion(query: str, occasion: str) -> str:
-    """Append occasion keywords when they are not already in the query."""
+def get_discovery_occasion_hint(hybrid_context: dict[str, Any] | None) -> str | None:
+    """Return occasion hint from graph or Zep preferences, if any."""
+    context = hybrid_context or {}
+    hints = context.get("hints") or {}
+    preferences = context.get("preferences") or {}
+    occasion = hints.get("occasion") or preferences.get("past_occasion")
+    if occasion and str(occasion).strip():
+        return str(occasion).strip()
+    return None
+
+
+def occasion_rewrite_needed(query: str, occasion: str) -> bool:
+    """True when occasion context should influence q via Gemini rewrite."""
     stripped = query.strip()
-    if not stripped or _occasion_terms_in_query(stripped, occasion):
-        return stripped
-    return f"{stripped} {occasion.strip()}".strip()
+    if not stripped or not occasion.strip():
+        return False
+    return not _occasion_terms_in_query(stripped, occasion)
 
 
 def build_discovery_search_args(
@@ -169,14 +194,93 @@ def build_discovery_search_args(
     preferences = context.get("preferences") or {}
 
     category = hints.get("category") or preferences.get("favorite_category")
-    occasion = hints.get("occasion") or preferences.get("past_occasion")
 
-    query = user_message.strip()
-    confidence = _top_vector_confidence(context)
-    if occasion and confidence is not None and confidence >= VECTOR_CONFIDENCE_THRESHOLD:
-        query = _augment_query_with_occasion(query, occasion)
-
-    args: dict[str, Any] = {"q": query, "currency": currency}
+    args: dict[str, Any] = {"q": user_message.strip(), "currency": currency}
     if category:
         args["category"] = category
     return args
+
+
+def _parse_rewrite_response(response: types.GenerateContentResponse) -> str:
+    """Parse structured or JSON text rewrite from a Gemini response."""
+    if response.parsed is not None:
+        if isinstance(response.parsed, RewrittenSearchQuery):
+            return response.parsed.q.strip()
+        validated = RewrittenSearchQuery.model_validate(response.parsed)
+        return validated.q.strip()
+
+    raw_text = (response.text or "").strip()
+    if not raw_text:
+        msg = "Gemini returned empty search rewrite"
+        raise ValueError(msg)
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        msg = f"Gemini rewrite response is not valid JSON: {raw_text!r}"
+        raise ValueError(msg) from exc
+
+    try:
+        return RewrittenSearchQuery.model_validate(payload).q.strip()
+    except ValidationError as exc:
+        msg = f"Gemini rewrite JSON failed validation: {payload!r}"
+        raise ValueError(msg) from exc
+
+
+def _rewrite_search_query_sync(
+    client: genai.Client,
+    user_message: str,
+    occasion: str,
+) -> str:
+    """Blocking Gemini call; run via asyncio.to_thread from rewrite helper."""
+    prompt = f"User message: {user_message}\nOccasion context: {occasion}"
+    response = client.models.generate_content(
+        model=REWRITE_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=REWRITE_SYSTEM_INSTRUCTION,
+            response_mime_type="application/json",
+            response_schema=RewrittenSearchQuery,
+            temperature=0,
+        ),
+    )
+    rewritten = _parse_rewrite_response(response)
+    if not rewritten:
+        msg = "Gemini returned empty rewritten search query"
+        raise ValueError(msg)
+    return rewritten
+
+
+async def rewrite_search_query_with_occasion(
+    user_message: str,
+    occasion: str,
+    *,
+    genai_client: genai.Client | None = None,
+) -> str:
+    """Rewrite q with Gemini when occasion must influence search without naive concatenation."""
+    stripped = user_message.strip()
+    occasion_stripped = occasion.strip()
+    if not stripped or not occasion_stripped:
+        return stripped
+    if not occasion_rewrite_needed(stripped, occasion_stripped):
+        return stripped
+
+    if genai_client is not None:
+        client = genai_client
+    else:
+        from app.config import get_settings
+
+        client = genai.Client(api_key=get_settings().google_api_key)
+    try:
+        return await asyncio.to_thread(
+            _rewrite_search_query_sync,
+            client,
+            stripped,
+            occasion_stripped,
+        )
+    except Exception:
+        logger.warning(
+            "rewrite_search_query_with_occasion failed; using raw user message",
+            exc_info=True,
+        )
+        return stripped

@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pytest
+
 from lib.neo4j.hybrid_context import (
     VECTOR_CONFIDENCE_THRESHOLD,
+    RewrittenSearchQuery,
+    build_discovery_search_args,
     build_graph_hybrid_context,
+    occasion_rewrite_needed,
+    rewrite_search_query_with_occasion,
 )
 from lib.neo4j.ontology import LABEL_OCCASION
 from lib.neo4j.traverse import TraversalNode, TraversalResult
@@ -101,3 +109,71 @@ def test_best_occasion_hint_omitted_when_no_vector_or_traversal_signal() -> None
 
     assert "occasion" not in context.get("hints", {})
     assert context["hints"]["category"] == "Gifts"
+
+
+def test_build_discovery_search_args_preserves_raw_user_query() -> None:
+    """kapruka_search_products q must stay the user's message without occasion concatenation."""
+    args = build_discovery_search_args(
+        "  cake for mom  ",
+        {
+            "hints": {"category": "Birthday", "occasion": "Birthday"},
+            "vector_hits": [{"id": "category:cakes", "score": 0.91}],
+        },
+        currency="LKR",
+    )
+
+    assert args["q"] == "cake for mom"
+    assert args["category"] == "Birthday"
+    assert args["currency"] == "LKR"
+    assert args["q"] != "cake for mom Birthday"
+
+
+def test_build_discovery_search_args_maps_zep_favorite_category() -> None:
+    args = build_discovery_search_args(
+        "something nice",
+        {"preferences": {"favorite_category": "Flowers"}},
+        currency="USD",
+    )
+
+    assert args["q"] == "something nice"
+    assert args["category"] == "Flowers"
+    assert args["currency"] == "USD"
+
+
+def test_occasion_rewrite_needed_when_terms_absent() -> None:
+    assert occasion_rewrite_needed("cake for mom", "Birthday") is True
+    assert occasion_rewrite_needed("birthday cake for mom", "Birthday") is False
+
+
+@pytest.mark.asyncio
+async def test_rewrite_search_query_with_occasion_uses_gemini() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = RewrittenSearchQuery(q="birthday cake for mom")
+    mock_response.text = '{"q": "birthday cake for mom"}'
+    mock_client.models.generate_content.return_value = mock_response
+
+    rewritten = await rewrite_search_query_with_occasion(
+        "cake for mom",
+        "Birthday",
+        genai_client=mock_client,
+    )
+
+    assert rewritten == "birthday cake for mom"
+    mock_client.models.generate_content.assert_called_once()
+    assert "cake for mom" in mock_client.models.generate_content.call_args.kwargs["contents"]
+    assert "Birthday" in mock_client.models.generate_content.call_args.kwargs["contents"]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_search_query_skips_when_occasion_already_in_query() -> None:
+    mock_client = MagicMock()
+
+    rewritten = await rewrite_search_query_with_occasion(
+        "birthday cake for mom",
+        "Birthday",
+        genai_client=mock_client,
+    )
+
+    assert rewritten == "birthday cake for mom"
+    mock_client.models.generate_content.assert_not_called()

@@ -721,3 +721,12 @@ Next: PRD-089 Semantic occasion hint extraction from vector hits.
 - Tests: `tests/unit/test_hybrid_context.py` (vector-first hint, traversal fallback, no-hint path).
 Files: lib/neo4j/hybrid_context.py, tests/unit/test_hybrid_context.py, prd.json
 Next: PRD-090 Protect MCP search string integrity in discovery args.
+
+## PRD-090 — Protect MCP search string integrity in discovery args
+- `build_discovery_search_args` now keeps `q=user_message.strip()`; category hints map to MCP `category` only (no naive occasion string append).
+- Added `rewrite_search_query_with_occasion` (Gemini 2.5 Flash structured JSON) plus `get_discovery_occasion_hint` / `occasion_rewrite_needed`; wired via `_maybe_rewrite_discovery_query` in `call_mcp_tools` before `kapruka_search_products` when occasion terms absent from q.
+- Avoided `lib`→`graphs` circular import by lazy `get_settings()` client init in rewrite helper (not importing `analyze_intent` at module load).
+- `ShoppingGraphDeps.genai_client` passed into `call_mcp_tools` for rewrite injection in tests and chat graph.
+- Tests: discovery args preserve raw q + category filter; Gemini rewrite for "cake for mom" + Birthday → cohesive query; no `"cake for mom Birthday"` concatenation.
+Files: lib/neo4j/hybrid_context.py, graphs/nodes/call_mcp_tools.py, graphs/shopping_graph.py, tests/unit/{test_hybrid_context,test_call_mcp_tools}.py, prd.json
+Next: All PRDs complete.
