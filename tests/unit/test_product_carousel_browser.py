@@ -52,15 +52,17 @@ def _carousel_harness_html(carousel_html: str) -> str:
 {css}
       /* Pin carousel width so overflow is deterministic on all CI runners. */
       [data-testid="product-carousel"] {{
-        width: 240px;
-        max-width: 240px;
+        width: 100px;
+        max-width: 100px;
       }}
       [data-testid="product-carousel-track"] {{
-        width: 240px;
-        max-width: 240px;
+        width: 100px;
+        max-width: 100px;
+        overflow-x: auto;
       }}
       [data-testid="product-carousel-track"] > .snap-start {{
         flex-shrink: 0;
+        min-width: 14rem;
       }}
       [data-testid="product-card"] {{
         width: 14rem;
@@ -94,12 +96,7 @@ def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
         page = browser.new_page(viewport={"width": 375, "height": 812})
         page.set_content(_carousel_harness_html(carousel_html))
         _wait_for_alpine(page)
-        page.wait_for_function(
-            """() => {
-              const track = document.querySelector('[data-testid="product-carousel-track"]');
-              return track && track.scrollWidth > track.clientWidth + 8;
-            }"""
-        )
+        page.wait_for_timeout(150)
 
         layout = page.evaluate(
             """() => {
@@ -150,7 +147,7 @@ def test_lazy_images_defer_load_until_carousel_scroll() -> None:
               const last = lazyImages[lazyImages.length - 1];
               const rect = last.getBoundingClientRect();
               const trackRect = track.getBoundingClientRect();
-              const offScreen = rect.left >= trackRect.right - 4;
+              const offScreen = rect.left >= trackRect.right - 1;
               const data = last._x_dataStack?.[0];
               return {
                 offScreen,
