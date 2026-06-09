@@ -144,19 +144,26 @@ def test_lazy_images_defer_load_until_carousel_scroll() -> None:
             """() => {
               const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
               const track = document.querySelector('[data-testid="product-carousel-track"]');
-              const last = lazyImages[lazyImages.length - 1];
-              const rect = last.getBoundingClientRect();
+              track.scrollLeft = 0;
               const trackRect = track.getBoundingClientRect();
+              const rightmost = lazyImages.reduce((best, el) => {
+                const left = el.getBoundingClientRect().left;
+                return left > best.left ? { el, left } : best;
+              }, { el: lazyImages[0], left: -1 });
+              const target = rightmost.el;
+              const rect = target.getBoundingClientRect();
               const offScreen = rect.left >= trackRect.right - 1;
-              const data = last._x_dataStack?.[0];
+              const data = target._x_dataStack?.[0];
               return {
                 offScreen,
                 inView: data?.inView ?? false,
                 loaded: data?.loaded ?? false,
-                hasImg: Boolean(last.querySelector('img')),
+                hasImg: Boolean(target.querySelector('img')),
+                lazyCount: lazyImages.length,
               };
             }"""
         )
+        assert off_screen["lazyCount"] >= 12
         assert off_screen["offScreen"] is True
         assert off_screen["inView"] is False
         assert off_screen["hasImg"] is False
@@ -167,24 +174,33 @@ def test_lazy_images_defer_load_until_carousel_scroll() -> None:
               track.scrollLeft = track.scrollWidth;
             }"""
         )
-        page.wait_for_timeout(50)
+        page.wait_for_timeout(100)
 
         page.wait_for_function(
             """() => {
               const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
-              const last = lazyImages[lazyImages.length - 1];
-              const data = last._x_dataStack?.[0];
-              const img = last.querySelector('img');
-              return Boolean(data?.inView && img);
+              const track = document.querySelector('[data-testid="product-carousel-track"]');
+              const rightmost = lazyImages.reduce((best, el) => {
+                const left = el.getBoundingClientRect().left;
+                return left > best.left ? { el, left } : best;
+              }, { el: lazyImages[0], left: -1 });
+              const target = rightmost.el;
+              const data = target._x_dataStack?.[0];
+              const img = target.querySelector('img');
+              return Boolean(track.scrollLeft > 0 && data?.inView && img);
             }"""
         )
 
         page.wait_for_function(
             """() => {
               const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
-              const last = lazyImages[lazyImages.length - 1];
-              const data = last._x_dataStack?.[0];
-              const img = last.querySelector('img');
+              const rightmost = lazyImages.reduce((best, el) => {
+                const left = el.getBoundingClientRect().left;
+                return left > best.left ? { el, left } : best;
+              }, { el: lazyImages[0], left: -1 });
+              const target = rightmost.el;
+              const data = target._x_dataStack?.[0];
+              const img = target.querySelector('img');
               return Boolean(data?.loaded && img?.classList.contains('opacity-100'));
             }"""
         )
