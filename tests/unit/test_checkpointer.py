@@ -23,22 +23,33 @@ async def test_redis_supports_redisearch_false_on_unknown_command() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_checkpointer_returns_none_without_redisearch() -> None:
+async def test_get_checkpointer_returns_none_when_asetup_lacks_redisearch() -> None:
     client = MagicMock(spec=RedisClient)
-    client.client = AsyncMock()
-    client.client.execute_command.side_effect = redis.exceptions.ResponseError(
-        "unknown command 'FT._LIST'"
+    saver = MagicMock()
+    saver.asetup = AsyncMock(
+        side_effect=redis.exceptions.ResponseError("unknown command 'FT._LIST'")
     )
 
-    assert await get_checkpointer(client) is None
+    with patch("lib.redis.checkpointer.create_checkpointer", return_value=saver):
+        assert await get_checkpointer(client) is None
 
 
 @pytest.mark.asyncio
-async def test_get_checkpointer_initializes_when_redisearch_available() -> None:
+async def test_get_checkpointer_reraises_unexpected_redis_errors() -> None:
     client = MagicMock(spec=RedisClient)
-    client.client = AsyncMock()
-    client.client.execute_command.return_value = []
+    saver = MagicMock()
+    saver.asetup = AsyncMock(side_effect=redis.exceptions.ResponseError("OOM"))
 
+    with (
+        patch("lib.redis.checkpointer.create_checkpointer", return_value=saver),
+        pytest.raises(redis.exceptions.ResponseError, match="OOM"),
+    ):
+        await get_checkpointer(client)
+
+
+@pytest.mark.asyncio
+async def test_get_checkpointer_initializes_when_asetup_succeeds() -> None:
+    client = MagicMock(spec=RedisClient)
     saver = MagicMock()
     saver.asetup = AsyncMock()
 
