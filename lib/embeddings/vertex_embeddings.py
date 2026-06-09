@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Sequence
 
 from google.api_core import exceptions as google_exceptions
@@ -21,8 +22,11 @@ EMBEDDING_MODEL = "gemini-embedding-2"
 EMBEDDING_DIMENSION = 768
 # gemini-embedding-2 is served from the global Vertex endpoint (not regional).
 EMBEDDING_LOCATION = "global"
+# Pace requests to stay under per-minute global_embed_content quotas on new projects.
+_EMBED_REQUEST_INTERVAL_SEC = 1.5
 
 _embedding_client: GenaiClient | None = None
+_last_embed_request_at: float = 0.0
 
 
 def _is_resource_exhausted(exc: BaseException) -> bool:
@@ -50,10 +54,20 @@ def _get_embedding_client(*, settings: Settings) -> GenaiClient:
     return _embedding_client
 
 
+def _throttle_embed_request() -> None:
+    """Sleep between embed API calls to avoid bursting past per-minute Vertex quotas."""
+    global _last_embed_request_at
+    now = time.monotonic()
+    elapsed = now - _last_embed_request_at
+    if _last_embed_request_at > 0 and elapsed < _EMBED_REQUEST_INTERVAL_SEC:
+        time.sleep(_EMBED_REQUEST_INTERVAL_SEC - elapsed)
+    _last_embed_request_at = time.monotonic()
+
+
 @retry(
     retry=retry_if_exception(_is_resource_exhausted),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    stop=stop_after_attempt(8),
     reraise=True,
 )
 def _embed_one_text_sync(
@@ -85,14 +99,17 @@ def _embed_texts_sync(
     output_dimensionality: int = EMBEDDING_DIMENSION,
 ) -> list[list[float]]:
     """Embed each text individually; Vertex gemini-embedding-2 accepts one content per call."""
-    return [
-        _embed_one_text_sync(
-            client=client,
-            text=text,
-            output_dimensionality=output_dimensionality,
+    vectors: list[list[float]] = []
+    for text in texts:
+        _throttle_embed_request()
+        vectors.append(
+            _embed_one_text_sync(
+                client=client,
+                text=text,
+                output_dimensionality=output_dimensionality,
+            )
         )
-        for text in texts
-    ]
+    return vectors
 
 
 async def embed_texts(
