@@ -61,8 +61,10 @@ Thumbs.db
 *.log
 ralph-iter.*
 
-# Cursor IDE state (local only)
-.cursor/
+# Cursor — keep project skills, ignore local IDE state
+.cursor/*
+!.cursor/skills/
+!.cursor/skills/**
 
 # gstack tooling artifacts (local only)
 .gstack/
