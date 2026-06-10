@@ -8,9 +8,11 @@ import json
 import logging
 import math
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import fakeredis.aioredis
 from datasets import Dataset
@@ -24,6 +26,7 @@ from ragas.metrics import answer_relevancy, context_precision, faithfulness
 from ragas.run_config import RunConfig
 from tests.fixtures.mcp_mock import MockMCPHttpClient
 
+from app.config import Settings
 from evals.golden_dataset import GoldenCase, GoldenDataset, load_golden_dataset
 from evals.intent_heuristics import infer_intent_from_message
 from evals.ragas_ci_llm import CiRagasChatModel
@@ -43,6 +46,32 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONTEXT_PRECISION_THRESHOLD = 0.7
 _CI_RAGAS_TIMEOUT_SECONDS = 30
 _EVAL_CLIENT_IP = "203.0.113.99"
+
+
+def _minimal_eval_settings() -> Settings:
+    """Settings stub so graph nodes avoid loading a local .env during eval runs."""
+    return Settings(
+        redis_url="redis://localhost:6379/0",
+        neo4j_uri="bolt://localhost:7687",
+        neo4j_user="neo4j",
+        neo4j_password="eval-password",
+        zep_api_key="eval-zep-key",
+        gcp_project_id="eval-project",
+        gcp_location="us-central1",
+        session_secret="x" * 32,
+        _env_file=None,
+    )
+
+
+@contextmanager
+def _patch_eval_settings() -> Iterator[None]:
+    """Patch get_settings at import sites used by graph nodes during Ragas eval."""
+    settings = _minimal_eval_settings()
+    with (
+        patch("lib.chat.model_router.get_settings", return_value=settings),
+        patch("graphs.nodes.retrieve_hybrid_context.get_settings", return_value=settings),
+    ):
+        yield
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,7 +260,8 @@ async def run_graph_for_case(
     if case.user_query.strip() == PROCEED_CHECKOUT_MESSAGE:
         state["intent"] = "checkout"
 
-    result = await graph.ainvoke(state)
+    with _patch_eval_settings():
+        result = await graph.ainvoke(state)
     tool_results = result.get("tool_results")
     tool_dict = tool_results if isinstance(tool_results, dict) else {}
 
