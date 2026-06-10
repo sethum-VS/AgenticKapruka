@@ -25,6 +25,7 @@ from ragas.run_config import RunConfig
 from tests.fixtures.mcp_mock import MockMCPHttpClient
 
 from evals.golden_dataset import GoldenCase, GoldenDataset, load_golden_dataset
+from evals.intent_heuristics import infer_intent_from_message
 from evals.ragas_ci_llm import CiRagasChatModel
 from graphs.nodes.analyze_intent import PROCEED_CHECKOUT_MESSAGE, IntentClassification
 from graphs.nodes.generate_response import AssistantReply
@@ -132,12 +133,16 @@ def _synthesize_assistant_reply(user_prompt: str) -> str:
     return "Here is what I found on Kapruka based on our catalog data."
 
 
-def build_eval_genai_client(intent: Intent) -> MagicMock:
-    """Gemini client mock: structured intent then faithful catalog reply."""
+def build_eval_genai_client(intent: Intent | None = None) -> MagicMock:
+    """Gemini client mock: structured intent then faithful catalog reply.
+
+    When ``intent`` is None, infer routing from the user message (E2E / shadow tests).
+    """
     client = MagicMock()
+    default_intent: Intent = intent or "discovery"
     intent_response = MagicMock()
-    intent_response.parsed = IntentClassification(intent=intent)
-    intent_response.text = json.dumps({"intent": intent})
+    intent_response.parsed = IntentClassification(intent=default_intent)
+    intent_response.text = json.dumps({"intent": default_intent})
 
     def generate_content(
         *,
@@ -149,8 +154,9 @@ def build_eval_genai_client(intent: Intent) -> MagicMock:
         _ = model, kwargs
         response = MagicMock()
         if config is not None and config.response_schema is IntentClassification:
-            response.parsed = IntentClassification(intent=intent)
-            response.text = intent_response.text
+            resolved: Intent = intent if intent is not None else infer_intent_from_message(contents)
+            response.parsed = IntentClassification(intent=resolved)
+            response.text = json.dumps({"intent": resolved})
             return response
 
         if config is not None and config.response_schema is AssistantReply:
