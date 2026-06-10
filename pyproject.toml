@@ -26,6 +26,7 @@ dependencies = [
     "tenacity>=9.0,<10",
     "networkx>=3.4,<4",
     "ragas>=0.2,<1",
+    "sentence-transformers>=3.3,<4",
 ]
 
 [project.optional-dependencies]
@@ -100,6 +101,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["cugraph", "cugraph.*", "cudf", "cudf.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["sentence_transformers", "sentence_transformers.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

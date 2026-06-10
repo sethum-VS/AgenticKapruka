@@ -1,0 +1,176 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "id": "mt-001-nut-free-chocolates",
+      "persona": "busy_parent",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "I need nut-free chocolates for my niece"},
+        {"role": "user", "content": "Something under 5000 rupees please"},
+        {"role": "user", "content": "Show me what's in stock"}
+      ],
+      "constraints": {
+        "preserved_terms": ["chocolate"],
+        "must_not_contain_in_final": ["peanut", "almond"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-002-kandy-sunday-delivery",
+      "persona": "busy_parent",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Birthday cake for my son"},
+        {"role": "user", "content": "Can you deliver to Kandy on Sunday?"}
+      ],
+      "constraints": {
+        "preserved_terms": ["cake", "Kandy"],
+        "expected_tools_any_turn": ["kapruka_search_products", "kapruka_check_delivery"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-003-breakup-empathy",
+      "persona": "emotional_gifter",
+      "query_mode": "situational",
+      "turns": [
+        {"role": "user", "content": "I broke up with my girlfriend and feel terrible"},
+        {"role": "user", "content": "Maybe flowers would help — something gentle"}
+      ],
+      "constraints": {
+        "preserved_terms": ["flower"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-004-tanglish-cake",
+      "persona": "vernacular_user",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Mage ammata cake ekak ona — birthday surprise"},
+        {"role": "user", "content": "Colombo delivery puluvan da?"}
+      ],
+      "constraints": {
+        "preserved_terms": ["cake"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-005-corporate-hamper",
+      "persona": "corporate_buyer",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Ceylon tea gift hamper for a colleague"},
+        {"role": "user", "content": "Under 8000 rupees"},
+        {"role": "user", "content": "Add the best match to cart"}
+      ],
+      "constraints": {
+        "preserved_terms": ["tea", "hamper"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-006-tracking-then-gift",
+      "persona": "expat_sender",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Track order VIMP34456CB2"},
+        {"role": "user", "content": "Thanks — now find anniversary roses"}
+      ],
+      "constraints": {
+        "preserved_terms": ["rose"],
+        "expected_tools_any_turn": ["kapruka_track_order", "kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-007-cart-checkout-flow",
+      "persona": "budget_shopper",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Chocolate birthday cake"},
+        {"role": "user", "content": "Proceed to checkout"}
+      ],
+      "constraints": {
+        "preserved_terms": ["checkout"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_checkout_ui": true
+    },
+    {
+      "id": "mt-008-colombo-flowers",
+      "persona": "busy_parent",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Wedding flowers for Colombo"},
+        {"role": "user", "content": "What's the delivery rate to Colombo 03?"}
+      ],
+      "constraints": {
+        "preserved_terms": ["flower", "Colombo"],
+        "expected_tools_any_turn": ["kapruka_search_products", "kapruka_check_delivery"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-009-category-browse",
+      "persona": "budget_shopper",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "What kinds of gifts can I buy here?"},
+        {"role": "user", "content": "Show me chocolate options"}
+      ],
+      "constraints": {
+        "preserved_terms": ["chocolate"],
+        "expected_tools_any_turn": ["kapruka_list_categories", "kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-010-valentine-combo",
+      "persona": "emotional_gifter",
+      "query_mode": "situational",
+      "turns": [
+        {"role": "user", "content": "Valentine's surprise for my partner — I'm nervous"},
+        {"role": "user", "content": "Cake and flower combo please"}
+      ],
+      "constraints": {
+        "preserved_terms": ["cake", "flower"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-011-galle-cities",
+      "persona": "expat_sender",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Red roses for anniversary"},
+        {"role": "user", "content": "Which cities near Galle can you deliver to?"}
+      ],
+      "constraints": {
+        "preserved_terms": ["rose", "Galle"],
+        "expected_tools_any_turn": ["kapruka_search_products", "kapruka_list_delivery_cities"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-012-get-well-fruit",
+      "persona": "busy_parent",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Fresh fruit basket for a get-well gift"},
+        {"role": "user", "content": "Deliver to Kandy on 2026-06-15"}
+      ],
+      "constraints": {
+        "preserved_terms": ["fruit", "Kandy"],
+        "expected_tools_any_turn": ["kapruka_search_products", "kapruka_check_delivery"]
+      },
+      "final_expect_product_ui": true
+    }
+  ]
+}

@@ -229,13 +229,10 @@ async def test_generate_response_checkout_review_uses_pro_model_and_embeds_summa
 @pytest.mark.asyncio
 async def test_generate_response_no_carousel_when_search_empty() -> None:
     mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(message="No cakes matched your search.")
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
 
     state: AgentState = {
         "messages": [HumanMessage(content="obscure cake query")],
+        "intent": "discovery",
         "tool_results": {SEARCH_PRODUCTS_TOOL: {"results": []}},
         "session_id": "sess-gen-004",
     }
@@ -243,3 +240,5 @@ async def test_generate_response_no_carousel_when_search_empty() -> None:
     result = await generate_response(state, genai_client=mock_client)
 
     assert 'data-testid="product-carousel"' not in result["response_html"]
+    assert "couldn't find products" in result["assistant_message"].lower()
+    mock_client.models.generate_content.assert_not_called()

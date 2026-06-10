@@ -7,8 +7,10 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
+from app.config import get_settings
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, Intent
+from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.embeddings.vertex_embeddings import embed_texts
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
@@ -65,6 +67,8 @@ async def _fetch_graph_hybrid_context(
     *,
     neo4j_client: Neo4jClient,
     embed_fn: EmbedTextsFn,
+    reranker: CrossEncoderService | None = None,
+    reranker_threshold: float | None = None,
 ) -> dict[str, Any]:
     """Embed query, parallel Category/Occasion vector search, seed traversal, build hints."""
     stripped = query.strip()
@@ -101,12 +105,18 @@ async def _fetch_graph_hybrid_context(
         seed_category_ids,
         max_hops=_GRAPH_TRAVERSE_MAX_HOPS,
     )
+    ranker = reranker if reranker is not None else get_reranker()
+    threshold = (
+        reranker_threshold if reranker_threshold is not None else get_settings().reranker_threshold
+    )
     return build_graph_hybrid_context(
         stripped,
         vector_hits=category_hits,
         direct_occasion_hits=occasion_hits,
         display_names=display_names,
         traversal=traversal,
+        reranker=ranker,
+        reranker_threshold=threshold,
     )
 
 

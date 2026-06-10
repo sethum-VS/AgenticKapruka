@@ -39,7 +39,10 @@ async def test_analyze_intent_discovery_for_birthday_cake() -> None:
         "session_id": "sess-intent-001",
     }
 
-    with patch("graphs.nodes.analyze_intent.INTENT_MODEL", "gemini-2.5-flash"):
+    with patch(
+        "graphs.nodes.analyze_intent.select_intent_model",
+        return_value="gemini-2.5-flash",
+    ):
         result = await analyze_intent(state, genai_client=mock_client)
 
     assert result == {"intent": "discovery"}
@@ -93,6 +96,29 @@ async def test_analyze_intent_parses_json_text_when_parsed_missing() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     assert result == {"intent": "tracking"}
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_uses_lora_endpoint_when_configured() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = IntentClassification(intent="discovery")
+    mock_client.models.generate_content.return_value = mock_response
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="avurudu cake ona")],
+        "session_id": "sess-intent-lora",
+    }
+    lora_model = "projects/test/locations/us-central1/endpoints/lora-1"
+
+    with patch(
+        "graphs.nodes.analyze_intent.select_intent_model",
+        return_value=lora_model,
+    ):
+        result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result == {"intent": "discovery"}
+    assert mock_client.models.generate_content.call_args.kwargs["model"] == lora_model
 
 
 @pytest.mark.asyncio

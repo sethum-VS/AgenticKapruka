@@ -87,14 +87,14 @@ async def test_iter_chat_sse_events_emits_error_event_on_graph_failure() -> None
     mock_graph.astream = failing_astream
 
     collected: list[str] = []
-    with pytest.raises(RuntimeError, match="graph exploded"):
-        async for event in iter_chat_sse_events(
-            graph=mock_graph,
-            state={},
-            config={"configurable": {"thread_id": "t-err"}},
-            user_html="<p>user</p>",
-        ):
-            collected.append(event)
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={},
+        config={"configurable": {"thread_id": "t-err"}},
+        user_html="<p>user</p>",
+    ):
+        collected.append(event)
 
     assert collected
     assert "Something went wrong" in collected[-1]
+    assert sum("Something went wrong" in event for event in collected) == 1

@@ -356,6 +356,26 @@ async def generate_response(
                 "assistant_message": checkout_reply,
             }
 
+    if state.get("intent") == "discovery":
+        search_payload = (tool_results or {}).get(SEARCH_PRODUCTS_TOOL)
+        if isinstance(search_payload, dict):
+            error_message = search_payload.get("message")
+            if search_payload.get("error") and isinstance(error_message, str):
+                return {
+                    "response_html": render_assistant_html(error_message),
+                    "assistant_message": error_message,
+                }
+            if search_payload.get("results") == []:
+                empty_reply = (
+                    "I couldn't find products matching that search on Kapruka. "
+                    "Try naming a specific gift type, such as birthday cake, flowers, "
+                    "or chocolates."
+                )
+                return {
+                    "response_html": render_assistant_html(empty_reply),
+                    "assistant_message": empty_reply,
+                }
+
     client = genai_client or create_genai_client()
     model = select_model(state)
     user_prompt = _build_user_prompt(user_message, tool_results)

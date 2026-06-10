@@ -11,6 +11,7 @@ from google import genai
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.checkout.tracking import extract_order_number
+from lib.kapruka.errors import KaprukaError
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -194,7 +195,18 @@ async def call_mcp_tools(
                 genai_client=genai_client,
             )
         logger.info("call_mcp_tools: invoking %s", name)
-        raw = await _invoke_tool(kapruka_service, rate_limit_key, name, args)
+        try:
+            raw = await _invoke_tool(kapruka_service, rate_limit_key, name, args)
+        except KaprukaError as exc:
+            from app.middleware.errors import human_readable_message
+
+            logger.warning("call_mcp_tools: %s failed (%s)", name, exc.code, exc_info=True)
+            tool_results[name] = {
+                "error": exc.code,
+                "message": human_readable_message(exc),
+            }
+            invocations += 1
+            continue
         tool_results[name] = _serialize_tool_result(raw)
         invocations += 1
 

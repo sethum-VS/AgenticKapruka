@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from lib.kapruka.errors import KaprukaError
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.tools.search_products import TOOL_NAME, search_products
 
@@ -96,18 +95,19 @@ async def test_search_products_forces_response_format_json(
     )
 
 
-async def test_search_products_raises_on_no_products_message(
+async def test_search_products_returns_empty_on_no_products_message(
     mcp_client: MCPHttpClient,
 ) -> None:
-    """Plain-text 'No products found' MCP responses raise KaprukaError."""
+    """Plain-text 'No products found' MCP responses become an empty result set."""
     mcp_client.call_tool = AsyncMock(  # type: ignore[method-assign]
         return_value="No products found for 'xyz'"
     )
 
-    with pytest.raises(KaprukaError) as exc_info:
-        await search_products(mcp_client, q="xyz")
+    result = await search_products(mcp_client, q="xyz")
 
-    assert exc_info.value.code == "no_products_found"
+    assert result.results == []
+    assert result.next_cursor is None
+    assert result.applied_filters["q"] == "xyz"
 
 
 async def test_search_products_validates_query_before_mcp_call(

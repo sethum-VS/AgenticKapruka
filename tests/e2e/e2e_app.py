@@ -77,7 +77,7 @@ def create_e2e_app() -> FastAPI:
         return ShoppingGraphDeps(
             kapruka_service=kapruka_service,
             client_ip=client_ip_from_request(request),
-            genai_client=build_eval_genai_client("discovery"),
+            genai_client=build_eval_genai_client(None),
             zep_client=None,
             redis_client=redis,
         )
@@ -88,5 +88,11 @@ def create_e2e_app() -> FastAPI:
     async def e2e_mcp_calls() -> dict[str, list[str]]:
         """Expose mock MCP call log for smoke-test assertions (E2E only)."""
         return {"tools": list(_mcp_client.call_log)}
+
+    @application.post("/e2e/mcp-calls/reset", include_in_schema=False)
+    async def e2e_mcp_calls_reset() -> dict[str, str]:
+        """Clear the mock MCP call log between HybridRAG E2E cases."""
+        _mcp_client.call_log.clear()
+        return {"status": "ok"}
 
     return application

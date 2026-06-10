@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lib.embeddings.reranker import CrossEncoderService
 from lib.neo4j.hybrid_context import (
-    VECTOR_CONFIDENCE_THRESHOLD,
+    DEFAULT_RERANKER_THRESHOLD,
     RewrittenSearchQuery,
     build_discovery_search_args,
     build_graph_hybrid_context,
     occasion_rewrite_needed,
+    rerank_and_prune_traversal,
     rewrite_search_query_with_occasion,
 )
 from lib.neo4j.ontology import LABEL_OCCASION
@@ -24,11 +26,13 @@ def _occasion_node(
     occasion_id: str,
     display_name: str,
     weight: float,
+    description: str | None = None,
 ) -> TraversalNode:
     return TraversalNode(
         id=occasion_id,
         label=LABEL_OCCASION,
         display_name=display_name,
+        description=description,
         hop=1,
         relationship_type="OCCASION_TO_CATEGORY",
         weight=weight,
@@ -36,8 +40,20 @@ def _occasion_node(
     )
 
 
-def test_best_occasion_hint_prefers_high_confidence_vector_hit() -> None:
-    """Direct occasion vector hit at or above threshold wins over traversal overlap."""
+class _SequenceReranker(CrossEncoderService):
+    """Return predetermined scores in pair order for unit tests."""
+
+    def __init__(self, scores: list[float]) -> None:
+        super().__init__(model=None)  # type: ignore[arg-type]
+        self._scores = scores
+
+    def score_pairs(self, query: str, texts: list[str]) -> list[float]:
+        assert len(texts) == len(self._scores)
+        return list(self._scores)
+
+
+def test_hints_use_highest_reranker_score_not_vector_or_weight() -> None:
+    """Cross-encoder score overrides vector similarity and traversal edge weight."""
     traversal = TraversalResult(
         nodes=(
             _occasion_node(
@@ -53,23 +69,28 @@ def test_best_occasion_hint_prefers_high_confidence_vector_hit() -> None:
         ),
     )
     direct_hits = [
-        VectorSearchHit(id="occasion:wedding", score=VECTOR_CONFIDENCE_THRESHOLD),
+        VectorSearchHit(id="occasion:wedding", score=0.99),
         VectorSearchHit(id="occasion:birthday", score=0.4),
     ]
+    # targets: birthday traversal, wedding traversal, cakes vector (wedding direct deduped)
+    reranker = _SequenceReranker([0.5, 0.9, 0.6])
 
     context = build_graph_hybrid_context(
         "cake for mom",
-        vector_hits=[VectorSearchHit(id="category:cakes", score=0.9)],
+        vector_hits=[VectorSearchHit(id="category:cakes", score=0.1)],
         direct_occasion_hits=direct_hits,
         display_names={"category:cakes": "Cakes"},
         traversal=traversal,
+        reranker=reranker,
+        reranker_threshold=DEFAULT_RERANKER_THRESHOLD,
     )
 
     assert context["hints"]["occasion"] == "Wedding"
+    assert context["hints"]["category"] == "Cakes"
 
 
-def test_best_occasion_hint_falls_back_to_highest_weight_traversal() -> None:
-    """Below-threshold vector hits defer to the heaviest traversed occasion node."""
+def test_reranker_prunes_low_scoring_traversal_nodes() -> None:
+    """Occasion/Category traversal nodes below RERANKER_THRESHOLD are dropped."""
     traversal = TraversalResult(
         nodes=(
             _occasion_node(
@@ -84,31 +105,40 @@ def test_best_occasion_hint_falls_back_to_highest_weight_traversal() -> None:
             ),
         ),
     )
-    direct_hits = [VectorSearchHit(id="occasion:wedding", score=0.4)]
+    reranker = _SequenceReranker([0.8, 0.2, 0.9])
 
-    context = build_graph_hybrid_context(
+    pruned, category_hint, occasion_hint = rerank_and_prune_traversal(
         "something elegant",
+        traversal,
         vector_hits=[VectorSearchHit(id="category:flowers", score=0.7)],
-        direct_occasion_hits=direct_hits,
+        direct_occasion_hits=[],
         display_names={"category:flowers": "Flowers"},
-        traversal=traversal,
+        reranker=reranker,
+        threshold=DEFAULT_RERANKER_THRESHOLD,
     )
 
-    assert context["hints"]["occasion"] == "Birthday"
+    assert occasion_hint == "Anniversary"
+    assert category_hint == "Flowers"
+    assert len(pruned.occasions) == 1
+    assert pruned.occasions[0].display_name == "Anniversary"
 
 
-def test_best_occasion_hint_omitted_when_no_vector_or_traversal_signal() -> None:
-    """No hints.occasion when vector scores are low and traversal found no occasions."""
+def test_reranker_omits_hints_below_threshold() -> None:
+    """No hints when every Occasion/Category candidate scores below threshold."""
+    reranker = _SequenceReranker([0.2, 0.1])
+
     context = build_graph_hybrid_context(
         "gift ideas",
         vector_hits=[VectorSearchHit(id="category:gifts", score=0.8)],
         direct_occasion_hits=[VectorSearchHit(id="occasion:wedding", score=0.3)],
         display_names={"category:gifts": "Gifts"},
         traversal=TraversalResult(nodes=()),
+        reranker=reranker,
+        reranker_threshold=DEFAULT_RERANKER_THRESHOLD,
     )
 
-    assert "occasion" not in context.get("hints", {})
-    assert context["hints"]["category"] == "Gifts"
+    assert context.get("hints") == {}
+    assert context["vector_hits"][0]["id"] == "category:gifts"
 
 
 def test_build_discovery_search_args_preserves_raw_user_query() -> None:
@@ -140,6 +170,32 @@ def test_build_discovery_search_args_maps_zep_favorite_category() -> None:
     assert args["currency"] == "USD"
 
 
+def test_build_discovery_search_args_rewrites_meta_price_browse_query() -> None:
+    """Catalog-style lowest-price requests map to a searchable q with price_asc sort."""
+    args = build_discovery_search_args(
+        "can u give me list of lowest price items today",
+        {},
+        currency="LKR",
+    )
+
+    assert args["q"] == "cake"
+    assert args["sort"] == "price_asc"
+    assert args["currency"] == "LKR"
+
+
+def test_build_discovery_search_args_price_sort_preserves_product_query() -> None:
+    """Explicit product terms stay in q while still applying price_asc sort."""
+    args = build_discovery_search_args(
+        "cheapest birthday cake",
+        {"hints": {"category": "Birthday"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "cheapest birthday cake"
+    assert args["sort"] == "price_asc"
+    assert args["category"] == "Birthday"
+
+
 def test_occasion_rewrite_needed_when_terms_absent() -> None:
     assert occasion_rewrite_needed("cake for mom", "Birthday") is True
     assert occasion_rewrite_needed("birthday cake for mom", "Birthday") is False
@@ -153,16 +209,44 @@ async def test_rewrite_search_query_with_occasion_uses_gemini() -> None:
     mock_response.text = '{"q": "birthday cake for mom"}'
     mock_client.models.generate_content.return_value = mock_response
 
-    rewritten = await rewrite_search_query_with_occasion(
-        "cake for mom",
-        "Birthday",
-        genai_client=mock_client,
-    )
+    with patch(
+        "lib.neo4j.hybrid_context.select_rewrite_model",
+        return_value="gemini-2.5-flash",
+    ):
+        rewritten = await rewrite_search_query_with_occasion(
+            "cake for mom",
+            "Birthday",
+            genai_client=mock_client,
+        )
 
     assert rewritten == "birthday cake for mom"
     mock_client.models.generate_content.assert_called_once()
-    assert "cake for mom" in mock_client.models.generate_content.call_args.kwargs["contents"]
-    assert "Birthday" in mock_client.models.generate_content.call_args.kwargs["contents"]
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    assert call_kwargs["model"] == "gemini-2.5-flash"
+    assert "cake for mom" in call_kwargs["contents"]
+    assert "Birthday" in call_kwargs["contents"]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_search_query_uses_lora_endpoint_when_configured() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = RewrittenSearchQuery(q="avurudu cake gifts")
+    mock_client.models.generate_content.return_value = mock_response
+    lora_model = "projects/test/locations/us-central1/endpoints/lora-rewrite"
+
+    with patch(
+        "lib.neo4j.hybrid_context.select_rewrite_model",
+        return_value=lora_model,
+    ):
+        rewritten = await rewrite_search_query_with_occasion(
+            "cake ona",
+            "Avurudu",
+            genai_client=mock_client,
+        )
+
+    assert rewritten == "avurudu cake gifts"
+    assert mock_client.models.generate_content.call_args.kwargs["model"] == lora_model
 
 
 @pytest.mark.asyncio

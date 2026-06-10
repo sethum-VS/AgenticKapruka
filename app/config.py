@@ -41,6 +41,19 @@ class Settings(BaseSettings):
         description="Kapruka MCP JSON-RPC endpoint",
     )
     session_secret: str = Field(..., min_length=32)
+    reranker_threshold: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="Minimum cross-encoder score to keep Occasion/Category traversal nodes",
+    )
+    kapruka_lora_endpoint_id: str | None = Field(
+        default=None,
+        description=(
+            "Vertex AI LoRA-tuned endpoint ID for intent classification "
+            "and discovery query rewrite; falls back to gemini-2.5-flash when unset"
+        ),
+    )
 
     @field_validator("redis_url")
     @classmethod
@@ -86,6 +99,14 @@ class Settings(BaseSettings):
     @field_validator("google_api_key", mode="before")
     @classmethod
     def empty_google_api_key_to_none(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = str(value).strip()
+        return stripped or None
+
+    @field_validator("kapruka_lora_endpoint_id", mode="before")
+    @classmethod
+    def empty_lora_endpoint_id_to_none(cls, value: str | None) -> str | None:
         if value is None:
             return None
         stripped = str(value).strip()
