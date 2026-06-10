@@ -1,0 +1,117 @@
+{% set meta = result.intent_metadata %}
+{% set s2 = result.stage2 %}
+{% set s3 = result.stage3 %}
+
+<div class="space-y-5" data-testid="simulator-results">
+  <!-- Stage 1: Preprocessor -->
+  <section class="card-commerce p-5" data-testid="stage-preprocessor">
+    <div class="mb-3 flex items-center gap-2">
+      <span class="flex h-7 w-7 items-center justify-center rounded-full bg-kapruka-600 text-xs font-bold text-white">1</span>
+      <h2 class="text-base font-semibold text-commerce-ink">Preprocessor output</h2>
+      <span class="rounded-full bg-commerce-parchment px-2 py-0.5 text-xs text-commerce-ink/70">QueryPreprocessor</span>
+    </div>
+    <dl class="grid gap-3 sm:grid-cols-2">
+      <div class="rounded-lg bg-commerce-cream/60 px-3 py-2">
+        <dt class="text-xs font-medium uppercase tracking-wide text-commerce-ink/60">is_situational</dt>
+        <dd class="mt-0.5 font-mono text-sm" data-field="is_situational">{{ meta.is_situational }}</dd>
+      </div>
+      <div class="rounded-lg bg-commerce-cream/60 px-3 py-2">
+        <dt class="text-xs font-medium uppercase tracking-wide text-commerce-ink/60">detected_vernacular</dt>
+        <dd class="mt-0.5 font-mono text-sm" data-field="detected_vernacular">{{ meta.detected_vernacular }}</dd>
+      </div>
+      <div class="rounded-lg bg-commerce-cream/60 px-3 py-2">
+        <dt class="text-xs font-medium uppercase tracking-wide text-commerce-ink/60">requires_delivery_validation</dt>
+        <dd class="mt-0.5 font-mono text-sm" data-field="requires_delivery_validation">{{ meta.requires_delivery_validation }}</dd>
+      </div>
+      <div class="rounded-lg bg-commerce-cream/60 px-3 py-2">
+        <dt class="text-xs font-medium uppercase tracking-wide text-commerce-ink/60">target_city</dt>
+        <dd class="mt-0.5 font-mono text-sm" data-field="target_city">{{ meta.target_city | default("null", true) }}</dd>
+      </div>
+    </dl>
+  </section>
+
+  <!-- Stage 2: Routing diagram -->
+  <section class="card-commerce p-5" data-testid="stage-routing">
+    <div class="mb-3 flex items-center gap-2">
+      <span class="flex h-7 w-7 items-center justify-center rounded-full bg-kapruka-600 text-xs font-bold text-white">2</span>
+      <h2 class="text-base font-semibold text-commerce-ink">Routing diagram</h2>
+    </div>
+
+    <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center">
+      <div class="rounded-lg border border-commerce-parchment bg-white px-4 py-3 text-center text-sm">
+        <p class="text-xs uppercase tracking-wide text-commerce-ink/50">User query</p>
+        <p class="mt-1 font-medium text-commerce-ink">{{ result.scenario.query }}</p>
+      </div>
+      <span class="hidden text-commerce-ink/40 sm:inline" aria-hidden="true">→</span>
+      <div
+        class="rounded-lg border-2 px-4 py-3 text-center text-sm {% if s2.prompt_template == 'Localized Concierge' %}border-commerce-terracotta bg-commerce-terracotta/10{% else %}border-kapruka-500 bg-kapruka-50{% endif %}"
+        data-testid="prompt-template"
+      >
+        <p class="text-xs uppercase tracking-wide text-commerce-ink/50">Prompt template</p>
+        <p class="mt-1 font-semibold text-commerce-ink">{{ s2.prompt_template }}</p>
+        <p class="mt-1 text-xs text-commerce-ink/60">{{ s2.prompt_excerpt }}</p>
+      </div>
+      <span class="hidden text-commerce-ink/40 sm:inline" aria-hidden="true">→</span>
+      <div class="rounded-lg border border-commerce-parchment bg-white px-4 py-3 text-center text-sm" data-testid="tool-binding">
+        <p class="text-xs uppercase tracking-wide text-commerce-ink/50">Discovery tools</p>
+        <p class="mt-1 font-semibold text-commerce-ink">{{ s2.tool_binding_label }}</p>
+        <ul class="mt-2 space-y-0.5 text-left font-mono text-xs text-commerce-ink/70">
+          {% for tool in s2.tools %}
+          <li>• {{ tool }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <div class="mt-4 grid gap-2 text-xs text-commerce-ink/60 sm:grid-cols-2">
+      <p><span class="font-medium text-commerce-ink">Utility:</span> {{ utility_prompt_preview }}</p>
+      <p><span class="font-medium text-commerce-ink">Concierge:</span> {{ concierge_prompt_preview }}</p>
+    </div>
+  </section>
+
+  <!-- Stage 3: CI report card -->
+  <section class="card-commerce p-5" data-testid="stage-ci-report">
+    <div class="mb-3 flex items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <span class="flex h-7 w-7 items-center justify-center rounded-full bg-kapruka-600 text-xs font-bold text-white">3</span>
+        <h2 class="text-base font-semibold text-commerce-ink">CI report card</h2>
+        <span class="rounded-full bg-commerce-parchment px-2 py-0.5 text-xs text-commerce-ink/70">{{ result.tone_label }}</span>
+      </div>
+      <span
+        class="rounded-full px-3 py-1 text-xs font-semibold {% if s3.overall_pass %}bg-green-100 text-green-800{% else %}bg-red-100 text-red-800{% endif %}"
+        data-testid="overall-verdict"
+      >
+        {% if s3.overall_pass %}PASS{% else %}FAIL{% endif %} @ {{ "%.2f"|format(s3.strictness) }}
+      </span>
+    </div>
+
+    <div class="mb-4 rounded-lg border border-commerce-parchment bg-commerce-cream/40 p-3 text-sm" data-testid="mock-response">
+      <p class="mb-1 text-xs font-medium uppercase tracking-wide text-commerce-ink/50">Mock response preview</p>
+      {{ s3.mock_response_html | safe }}
+    </div>
+
+    <div class="grid gap-3 sm:grid-cols-3">
+      {% set cards = [
+        (s3.intent_preservation, "intent_preservation"),
+        (s3.constraint_fidelity, "constraint_fidelity"),
+        (s3.local_flavor, "local_flavor"),
+      ] %}
+      {% for score, slug in cards %}
+      <div
+        class="rounded-lg border px-3 py-3 {% if score.verdict == 'pass' %}border-green-200 bg-green-50{% else %}border-red-200 bg-red-50{% endif %}"
+        data-testid="rubric-{{ slug }}"
+      >
+        <div class="flex items-center justify-between">
+          <p class="text-xs font-medium uppercase tracking-wide text-commerce-ink/70">{{ score.name }}</p>
+          <span class="font-mono text-sm font-semibold {% if score.verdict == 'pass' %}text-green-700{% else %}text-red-700{% endif %}">
+            {{ "%.2f"|format(score.score) }}
+          </span>
+        </div>
+        <p class="mt-2 text-xs {% if score.verdict == 'pass' %}text-green-800{% else %}text-red-800{% endif %}">
+          {{ score.verdict | upper }} — {{ score.reason }}
+        </p>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
