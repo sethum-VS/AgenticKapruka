@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -383,12 +383,16 @@ async def test_call_mcp_tools_graph_birthday_context_invokes_search_with_categor
         },
     }
 
-    await call_mcp_tools(
-        state,
-        kapruka_service=mock_service,
-        client_ip=_CLIENT_IP,
-        genai_client=mock_genai,
-    )
+    with patch(
+        "lib.neo4j.hybrid_context.select_rewrite_model",
+        return_value="gemini-2.5-flash",
+    ):
+        await call_mcp_tools(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+            genai_client=mock_genai,
+        )
 
     mock_service.search_products.assert_awaited_once_with(
         _CLIENT_IP,

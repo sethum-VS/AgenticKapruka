@@ -93,7 +93,11 @@ async def test_analyze_intent_parses_json_text_when_parsed_missing() -> None:
         "session_id": "sess-intent-004",
     }
 
-    result = await analyze_intent(state, genai_client=mock_client)
+    with patch(
+        "graphs.nodes.analyze_intent.select_intent_model",
+        return_value="gemini-2.5-flash",
+    ):
+        result = await analyze_intent(state, genai_client=mock_client)
 
     assert result == {"intent": "tracking"}
 
