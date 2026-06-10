@@ -13,12 +13,11 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel, ValidationError
 
 from graphs.state import AgentState, Intent
+from lib.chat.model_router import select_intent_model
 from lib.genai.client import create_genai_client
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
-
-INTENT_MODEL = "gemini-2.5-flash"
 
 SYSTEM_INSTRUCTION = """You classify user messages for the Kapruka gift shopping assistant.
 
@@ -99,11 +98,12 @@ def _classify_intent_sync(
     client: genai.Client,
     user_message: str,
     *,
+    model: str,
     zep_memory_facts: list[str] | None = None,
 ) -> Intent:
     """Blocking Gemini call; run via asyncio.to_thread from analyze_intent."""
     response = client.models.generate_content(
-        model=INTENT_MODEL,
+        model=model,
         contents=user_message,
         config=types.GenerateContentConfig(
             system_instruction=_build_intent_system_instruction(zep_memory_facts),
@@ -138,10 +138,12 @@ async def analyze_intent(
 
     client = genai_client or create_genai_client()
     zep_memory_facts = state.get("zep_memory_facts")
+    model = select_intent_model()
     intent = await asyncio.to_thread(
         _classify_intent_sync,
         client,
         user_message,
+        model=model,
         zep_memory_facts=zep_memory_facts,
     )
     logger.info("analyze_intent: classified message as %s", intent)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -209,16 +209,44 @@ async def test_rewrite_search_query_with_occasion_uses_gemini() -> None:
     mock_response.text = '{"q": "birthday cake for mom"}'
     mock_client.models.generate_content.return_value = mock_response
 
-    rewritten = await rewrite_search_query_with_occasion(
-        "cake for mom",
-        "Birthday",
-        genai_client=mock_client,
-    )
+    with patch(
+        "lib.neo4j.hybrid_context.select_rewrite_model",
+        return_value="gemini-2.5-flash",
+    ):
+        rewritten = await rewrite_search_query_with_occasion(
+            "cake for mom",
+            "Birthday",
+            genai_client=mock_client,
+        )
 
     assert rewritten == "birthday cake for mom"
     mock_client.models.generate_content.assert_called_once()
-    assert "cake for mom" in mock_client.models.generate_content.call_args.kwargs["contents"]
-    assert "Birthday" in mock_client.models.generate_content.call_args.kwargs["contents"]
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    assert call_kwargs["model"] == "gemini-2.5-flash"
+    assert "cake for mom" in call_kwargs["contents"]
+    assert "Birthday" in call_kwargs["contents"]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_search_query_uses_lora_endpoint_when_configured() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = RewrittenSearchQuery(q="avurudu cake gifts")
+    mock_client.models.generate_content.return_value = mock_response
+    lora_model = "projects/test/locations/us-central1/endpoints/lora-rewrite"
+
+    with patch(
+        "lib.neo4j.hybrid_context.select_rewrite_model",
+        return_value=lora_model,
+    ):
+        rewritten = await rewrite_search_query_with_occasion(
+            "cake ona",
+            "Avurudu",
+            genai_client=mock_client,
+        )
+
+    assert rewritten == "avurudu cake gifts"
+    assert mock_client.models.generate_content.call_args.kwargs["model"] == lora_model
 
 
 @pytest.mark.asyncio

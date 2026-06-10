@@ -13,7 +13,9 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
+from lib.chat.model_router import select_rewrite_model
 from lib.embeddings.reranker import CrossEncoderService
+from lib.genai.client import create_genai_client
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import build_embedding_text
 from lib.neo4j.ontology import LABEL_CATEGORY, LABEL_OCCASION, REL_OCCASION_TO_CATEGORY
@@ -35,7 +37,6 @@ RETURN DISTINCT c.id AS id
 # Minimum vector-search score before a direct occasion hit seeds category traversal.
 VECTOR_CONFIDENCE_THRESHOLD = 0.65
 DEFAULT_RERANKER_THRESHOLD = 0.45
-REWRITE_MODEL = "gemini-2.5-flash"
 
 logger = logging.getLogger(__name__)
 
@@ -486,7 +487,7 @@ def _rewrite_search_query_sync(
     """Blocking Gemini call; run via asyncio.to_thread from rewrite helper."""
     prompt = f"User message: {user_message}\nOccasion context: {occasion}"
     response = client.models.generate_content(
-        model=REWRITE_MODEL,
+        model=select_rewrite_model(),
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=REWRITE_SYSTEM_INSTRUCTION,
@@ -516,12 +517,7 @@ async def rewrite_search_query_with_occasion(
     if not occasion_rewrite_needed(stripped, occasion_stripped):
         return stripped
 
-    if genai_client is not None:
-        client = genai_client
-    else:
-        from app.config import get_settings
-
-        client = genai.Client(api_key=get_settings().google_api_key)
+    client = genai_client if genai_client is not None else create_genai_client()
     try:
         return await asyncio.to_thread(
             _rewrite_search_query_sync,
