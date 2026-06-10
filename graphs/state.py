@@ -7,6 +7,8 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage
 
+from lib.chat.intent_metadata import IntentMetadata
+
 Intent = Literal["discovery", "checkout", "tracking", "general"]
 ModelTier = Literal["flash", "pro"]
 CheckoutStep = Literal[
@@ -26,6 +28,7 @@ class AgentState(TypedDict):
 
     messages: Annotated[list[BaseMessage], operator.add]
     intent: Intent | None
+    intent_metadata: IntentMetadata | None
     hybrid_context: dict[str, Any] | None
     tool_calls: list[dict[str, Any]] | None
     tool_results: dict[str, Any] | None

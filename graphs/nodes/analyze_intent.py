@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 
 from graphs.state import AgentState, Intent
 from lib.chat.model_router import select_intent_model
+from lib.chat.query_preprocessor import QueryPreprocessor
 from lib.genai.client import create_genai_client
 from lib.zep.memory import format_memory_facts_block
 
@@ -33,6 +34,8 @@ VALID_INTENTS: frozenset[Intent] = frozenset(
 )
 
 PROCEED_CHECKOUT_MESSAGE = "Proceed to checkout"
+
+_query_preprocessor = QueryPreprocessor()
 
 
 class IntentClassification(BaseModel):
@@ -127,14 +130,15 @@ async def analyze_intent(
     """LangGraph node: classify the latest user message into routing intent."""
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
+    intent_metadata = _query_preprocessor.process(user_message)
 
     if not user_message.strip():
         logger.debug("analyze_intent: empty user message, defaulting to general")
-        return {"intent": "general"}
+        return {"intent": "general", "intent_metadata": intent_metadata}
 
     if user_message.strip() == PROCEED_CHECKOUT_MESSAGE:
         logger.info("analyze_intent: proceed-to-checkout trigger from cart drawer")
-        return {"intent": "checkout"}
+        return {"intent": "checkout", "intent_metadata": intent_metadata}
 
     client = genai_client or create_genai_client()
     zep_memory_facts = state.get("zep_memory_facts")
@@ -147,4 +151,4 @@ async def analyze_intent(
         zep_memory_facts=zep_memory_facts,
     )
     logger.info("analyze_intent: classified message as %s", intent)
-    return {"intent": intent}
+    return {"intent": intent, "intent_metadata": intent_metadata}
