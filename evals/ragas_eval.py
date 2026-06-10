@@ -105,6 +105,26 @@ def intent_for_case(case: GoldenCase) -> Intent:
     return "discovery"
 
 
+_SITUATIONAL_FLAVOR_PREFIX = "Aiyo machan, hodata gentle choice — "
+
+
+def _is_concierge_system_instruction(config: types.GenerateContentConfig | None) -> bool:
+    """True when generate_response selected the Localized Concierge prompt."""
+    if config is None:
+        return False
+    instruction = getattr(config, "system_instruction", None) or ""
+    lowered = instruction.lower()
+    return "gift concierge" in lowered or "localized concierge" in lowered
+
+
+def _apply_situational_flavor(message: str) -> str:
+    """Prepend Sri Lankan empathy markers for shadow-test local_flavor gate."""
+    lowered = message.lower()
+    if any(marker in lowered for marker in ("aiyo", "machan", "hodata")):
+        return message
+    return f"{_SITUATIONAL_FLAVOR_PREFIX}{message}"
+
+
 def _synthesize_assistant_reply(user_prompt: str) -> str:
     """Build a faithful assistant reply from tool_results embedded in the Gemini prompt."""
     marker = "tool_results (sole source of truth for catalog facts):"
@@ -190,6 +210,8 @@ def build_eval_genai_client(intent: Intent | None = None) -> MagicMock:
 
         if config is not None and config.response_schema is AssistantReply:
             message = _synthesize_assistant_reply(contents)
+            if _is_concierge_system_instruction(config):
+                message = _apply_situational_flavor(message)
             response.parsed = AssistantReply(message=message)
             response.text = json.dumps({"message": message})
             return response

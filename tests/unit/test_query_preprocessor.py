@@ -77,3 +77,9 @@ def test_query_preprocessor_situational_breakup() -> None:
     assert metadata["detected_vernacular"] == "en"
     assert metadata["requires_delivery_validation"] is False
     assert metadata["target_city"] is None
+
+
+def test_classify_situational_for_valentine_nerves() -> None:
+    message = "Valentine's surprise for my partner — I'm nervous"
+    assert classify_query_mode(message) == "situational"
+    assert _preprocessor.process(message)["is_situational"] is True

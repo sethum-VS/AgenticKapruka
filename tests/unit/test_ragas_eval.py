@@ -83,6 +83,29 @@ def test_build_eval_genai_client_returns_intent_and_reply() -> None:
     assert "Chocolate Birthday Cake" in reply_response.parsed.message
 
 
+def test_build_eval_genai_client_adds_situational_flavor_for_concierge() -> None:
+    client = build_eval_genai_client("discovery")
+    tool_block = json.dumps({SEARCH_PRODUCTS_TOOL: SEARCH_PRODUCTS_JSON}, indent=2)
+    user_prompt = (
+        "Customer message:\nI broke up and need gentle flowers\n\n"
+        "tool_results (sole source of truth for catalog facts):\n"
+        f"{tool_block}"
+    )
+    reply_response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction="You are the Kapruka gift concierge — warm, locally grounded.",
+            response_mime_type="application/json",
+            response_schema=AssistantReply,
+        ),
+    )
+    message = reply_response.parsed.message.lower()
+    assert "aiyo" in message
+    assert "machan" in message
+    assert "hodata" in message
+
+
 @pytest.mark.asyncio
 async def test_run_graph_for_discovery_case(redis_client: RedisClient) -> None:
     case = GoldenCase(

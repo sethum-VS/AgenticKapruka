@@ -21,10 +21,14 @@ _UTILITY_PATTERNS: tuple[re.Pattern[str], ...] = (
 _SITUATIONAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"\b(broke up|breakup|passed away|funeral|condolence|sorry|heartbroken|"
-        r"missing (?:her|him|them)|devastated|lonely|stressed|anxious)\b",
+        r"missing (?:her|him|them)|devastated|lonely|stressed|anxious|nervous)\b",
         re.I,
     ),
     re.compile(r"\b(girlfriend|boyfriend|ex-|divorce|separated)\b", re.I),
+    re.compile(
+        r"\b(valentine(?:'?s)?|anniversary surprise|romantic surprise|surprise my partner)\b",
+        re.I,
+    ),
 )
 
 # Sinhala script or common Tanglish tokens.

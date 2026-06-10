@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 from evals.llm_judge import (
+    extract_html_text,
     score_intent_preservation,
+    score_local_flavor,
     score_mcp_tool_alignment,
     score_visual_fidelity,
 )
@@ -80,3 +82,14 @@ def test_multi_turn_shadow_preserves_intent(
             require_carousel=True,
         )
         assert visual.verdict == "pass", f"{multi_turn_case.id}: {visual.reason}"
+
+    if multi_turn_case.query_mode == "situational":
+        final_text = extract_html_text(final_html)
+        local_flavor_score = score_local_flavor(
+            final_text,
+            query_mode="situational",
+            threshold=0.75,
+        )
+        assert local_flavor_score.score >= 0.75, (
+            f"Response failed local flavor alignment gate. Score: {local_flavor_score.score}"
+        )
