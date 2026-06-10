@@ -17,6 +17,12 @@ from graphs.nodes.generate_response import (
     render_assistant_html,
 )
 from graphs.state import AgentState
+from lib.chat.intent_metadata import IntentMetadata
+from lib.chat.system_prompts import (
+    LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION,
+    UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION,
+    select_response_system_instruction,
+)
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 
 _CHECKOUT_REVIEW_HTML = '<section data-testid="checkout-review">Review summary</section>'
@@ -224,6 +230,92 @@ async def test_generate_response_checkout_review_uses_pro_model_and_embeds_summa
     call_kwargs = mock_client.models.generate_content.call_args.kwargs
     assert call_kwargs["model"] == PRO_MODEL
     assert "checkout_summary" in call_kwargs["contents"]
+
+
+def test_select_response_system_instruction_utility_mode() -> None:
+    metadata: IntentMetadata = {
+        "is_situational": False,
+        "detected_vernacular": "en",
+        "requires_delivery_validation": False,
+        "target_city": None,
+    }
+    prompt = select_response_system_instruction(metadata)
+    assert prompt == UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION
+    assert "transactional" in prompt.lower()
+    assert "concierge" not in prompt.lower()
+
+
+def test_select_response_system_instruction_situational_tanglish() -> None:
+    metadata: IntentMetadata = {
+        "is_situational": True,
+        "detected_vernacular": "tanglish",
+        "requires_delivery_validation": False,
+        "target_city": None,
+    }
+    prompt = select_response_system_instruction(metadata)
+    assert prompt.startswith(LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION)
+    assert "Tanglish" in prompt
+    assert "machan" in prompt
+
+
+def test_select_response_system_instruction_defaults_to_utility() -> None:
+    prompt = select_response_system_instruction(None)
+    assert prompt == UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION
+
+
+@pytest.mark.asyncio
+async def test_generate_response_utility_metadata_uses_ecommerce_prompt() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(message="Chocolate Birthday Cake — LKR 4,500.")
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="show birthday cakes under 5000")],
+        "tool_results": _SEARCH_TOOL_RESULTS,
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "en",
+            "requires_delivery_validation": False,
+            "target_city": None,
+        },
+        "session_id": "sess-gen-utility",
+    }
+
+    await generate_response(state, genai_client=mock_client)
+
+    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert "transactional" in config.system_instruction.lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_situational_metadata_uses_concierge_prompt() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="Aiyo machan, here are gentle condolence flowers for her.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="mage girlfriend broke up, flowers ona")],
+        "tool_results": _SEARCH_TOOL_RESULTS,
+        "intent_metadata": {
+            "is_situational": True,
+            "detected_vernacular": "tanglish",
+            "requires_delivery_validation": False,
+            "target_city": None,
+        },
+        "session_id": "sess-gen-concierge",
+    }
+
+    await generate_response(state, genai_client=mock_client)
+
+    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert "concierge" in config.system_instruction.lower()
+    assert "Tanglish" in config.system_instruction
 
 
 @pytest.mark.asyncio

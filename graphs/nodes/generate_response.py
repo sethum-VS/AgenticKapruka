@@ -16,6 +16,8 @@ from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
+from lib.chat.intent_metadata import IntentMetadata
+from lib.chat.system_prompts import build_response_system_instruction
 from lib.checkout.tracking import extract_order_number, tracking_output_from_tool_results
 from lib.genai.client import create_genai_client
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
@@ -33,17 +35,6 @@ CHECKOUT_REVIEW_SYSTEM_INSTRUCTION = (
     "- Mention that the next step will provide a secure Kapruka checkout link.\n"
     "- Keep the reply under 150 words.\n"
 )
-
-SYSTEM_INSTRUCTION = """You are the Kapruka gift shopping assistant.
-
-Synthesize a helpful, concise reply for the customer using ONLY the tool_results JSON provided.
-
-Rules:
-- Never invent products, prices, stock status, categories, or delivery facts.
-- Quote product names and prices exactly as they appear in tool_results.
-- If tool_results are empty or contain no useful data, say so politely and suggest next steps.
-- Keep the reply conversational and under 200 words unless listing several products.
-"""
 
 
 class AssistantReply(BaseModel):
@@ -93,28 +84,20 @@ def _parse_reply_response(response: types.GenerateContentResponse) -> str:
         raise ValueError(msg) from exc
 
 
-def _build_response_system_instruction(zep_memory_facts: list[str] | None) -> str:
-    """Combine base response prompt with optional Zep memory context."""
-    instruction = SYSTEM_INSTRUCTION
-    if zep_memory_facts:
-        instruction += format_memory_facts_block(zep_memory_facts)
-        instruction += (
-            "\nDo not treat prior session facts as catalog data; "
-            "tool_results remain the sole source of truth for products and prices."
-        )
-    return instruction
-
-
 def _generate_reply_sync(
     client: genai.Client,
     *,
     model: str,
     user_prompt: str,
     zep_memory_facts: list[str] | None = None,
+    intent_metadata: IntentMetadata | None = None,
     system_instruction: str | None = None,
 ) -> str:
     """Blocking Gemini call; run via asyncio.to_thread from generate_response."""
-    instruction = system_instruction or _build_response_system_instruction(zep_memory_facts)
+    instruction = system_instruction or build_response_system_instruction(
+        intent_metadata,
+        zep_memory_facts=zep_memory_facts,
+    )
     if system_instruction is not None and zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
 
@@ -381,12 +364,14 @@ async def generate_response(
     user_prompt = _build_user_prompt(user_message, tool_results)
 
     zep_memory_facts = state.get("zep_memory_facts")
+    intent_metadata = state.get("intent_metadata")
     reply_text = await asyncio.to_thread(
         _generate_reply_sync,
         client,
         model=model,
         user_prompt=user_prompt,
         zep_memory_facts=zep_memory_facts,
+        intent_metadata=intent_metadata,
     )
 
     if not reply_text:
