@@ -7,12 +7,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from langchain_core.messages import HumanMessage
 
+from graphs.nodes.call_mcp_tools import select_tool_calls
 from graphs.nodes.retrieve_hybrid_context import (
     _fetch_graph_hybrid_context,
     retrieve_hybrid_context,
     route_after_analyze_intent,
 )
 from graphs.state import AgentState, Intent
+from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import VECTOR_CONFIDENCE_THRESHOLD
 from lib.neo4j.traverse import TraversalResult
@@ -281,3 +283,46 @@ async def test_fetch_graph_hybrid_context_skips_low_confidence_occasion_hop() ->
         max_hops=2,
     )
     assert VECTOR_CONFIDENCE_THRESHOLD == 0.65
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_pruned_graph_flows_to_call_mcp_tools() -> None:
+    """Cross-encoder-pruned hybrid_context merges into state and selects discovery MCP args."""
+    pruned_graph_context = {
+        "hints": {"category": "Flowers"},
+        "vector_hits": [
+            {"id": "category:flowers", "score": 0.7, "display_name": "Flowers"},
+        ],
+        "direct_occasion_hits": [],
+        "occasions": [],
+        "categories": [
+            {
+                "id": "category:flowers",
+                "display_name": "Flowers",
+                "hop": 0,
+                "relationship_type": "SEED",
+                "weight": 1.0,
+                "seed_id": "category:flowers",
+            },
+        ],
+        "product_types": [],
+    }
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    base_state: AgentState = {
+        "messages": [HumanMessage(content="something elegant")],
+        "intent": "discovery",
+    }
+
+    with patch(
+        "graphs.nodes.retrieve_hybrid_context._fetch_graph_hybrid_context",
+        new=AsyncMock(return_value=pruned_graph_context),
+    ):
+        updates = await retrieve_hybrid_context(base_state, neo4j_client=neo4j_client)
+
+    mcp_state: AgentState = {**base_state, **updates}
+    selected = select_tool_calls(mcp_state)
+
+    assert len(selected) == 1
+    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
+    assert selected[0]["args"]["category"] == "Flowers"
+    assert selected[0]["args"]["q"] == "something elegant"
