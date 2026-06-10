@@ -10,11 +10,13 @@ from langchain_core.messages import HumanMessage
 from graphs.nodes.call_mcp_tools import call_mcp_tools, select_tool_calls
 from graphs.state import AgentState
 from lib.kapruka.service import KaprukaService
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import (
+    CheckDeliveryOutput,
     GetProductOutput,
     ListCategoriesOutput,
     Money,
@@ -443,3 +445,85 @@ async def test_call_mcp_tools_does_not_merge_prior_turn_tool_results() -> None:
 
     assert set(result["tool_results"].keys()) == {LIST_CATEGORIES_TOOL}
     assert SEARCH_PRODUCTS_TOOL not in result["tool_results"]
+
+
+def test_select_tool_calls_discovery_kandy_delivery_binds_check_delivery() -> None:
+    """Tanglish Kandy delivery query must bind kapruka_check_delivery alongside search."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="Machan, can you deliver to Kandy on Sunday?")],
+        "intent": "discovery",
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "tanglish",
+            "requires_delivery_validation": True,
+            "target_city": "Kandy",
+        },
+    }
+
+    selected = select_tool_calls(state)
+
+    assert len(selected) == 2
+    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
+    assert selected[0]["args"]["q"] == "Machan, can you deliver to Kandy on Sunday?"
+    assert selected[1]["name"] == CHECK_DELIVERY_TOOL
+    assert selected[1]["args"] == {"city": "Kandy"}
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tools_kandy_tanglish_invokes_check_delivery_before_results() -> None:
+    """Discovery with delivery metadata runs search then check_delivery in one MCP turn."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = _SEARCH_OUTPUT
+    mock_service.check_delivery.return_value = CheckDeliveryOutput(
+        city="Kandy",
+        now="2026-06-10T12:00:00+05:30",
+        checked_date="2026-06-10",
+        available=True,
+        rate=450.0,
+        currency="LKR",
+    )
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="Machan, can you deliver to Kandy on Sunday?")],
+        "intent": "discovery",
+        "session_id": "sess-mcp-kandy-delivery",
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "tanglish",
+            "requires_delivery_validation": True,
+            "target_city": "Kandy",
+        },
+    }
+
+    result = await call_mcp_tools(
+        state,
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+    )
+
+    assert mock_service.search_products.await_count == 1
+    assert mock_service.check_delivery.await_count == 1
+    assert mock_service.search_products.await_args_list[0].kwargs["q"].startswith("Machan")
+    mock_service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy")
+    assert result["tool_call_count"] == 2
+    assert SEARCH_PRODUCTS_TOOL in result["tool_results"]
+    assert CHECK_DELIVERY_TOOL in result["tool_results"]
+    assert result["tool_results"][CHECK_DELIVERY_TOOL]["available"] is True
+
+
+def test_select_tool_calls_discovery_without_delivery_metadata_is_search_only() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom")],
+        "intent": "discovery",
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "en",
+            "requires_delivery_validation": False,
+            "target_city": None,
+        },
+    }
+
+    selected = select_tool_calls(state)
+
+    assert len(selected) == 1
+    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL

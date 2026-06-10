@@ -10,9 +10,12 @@ from lib.embeddings.reranker import CrossEncoderService
 from lib.neo4j.hybrid_context import (
     DEFAULT_RERANKER_THRESHOLD,
     RewrittenSearchQuery,
+    build_discovery_delivery_args,
     build_discovery_search_args,
     build_graph_hybrid_context,
+    discovery_tool_manifest,
     occasion_rewrite_needed,
+    requires_discovery_delivery_check,
     rerank_and_prune_traversal,
     rewrite_search_query_with_occasion,
 )
@@ -139,6 +142,28 @@ def test_reranker_omits_hints_below_threshold() -> None:
 
     assert context.get("hints") == {}
     assert context["vector_hits"][0]["id"] == "category:gifts"
+
+
+def test_discovery_tool_manifest_includes_check_delivery_for_city_metadata() -> None:
+    metadata = {
+        "requires_delivery_validation": True,
+        "target_city": "Kandy",
+    }
+    assert requires_discovery_delivery_check(metadata) is True
+    assert discovery_tool_manifest(metadata) == frozenset(
+        {"kapruka_search_products", "kapruka_check_delivery"},
+    )
+    assert build_discovery_delivery_args(metadata) == {"city": "Kandy"}
+
+
+def test_discovery_tool_manifest_search_only_without_delivery_flag() -> None:
+    metadata = {
+        "requires_delivery_validation": False,
+        "target_city": None,
+    }
+    assert requires_discovery_delivery_check(metadata) is False
+    assert discovery_tool_manifest(metadata) == frozenset({"kapruka_search_products"})
+    assert build_discovery_delivery_args(metadata) == {}
 
 
 def test_build_discovery_search_args_preserves_raw_user_query() -> None:

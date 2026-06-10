@@ -13,11 +13,13 @@ from graphs.state import AgentState
 from lib.checkout.tracking import extract_order_number
 from lib.kapruka.errors import KaprukaError
 from lib.kapruka.service import KaprukaService
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.neo4j.hybrid_context import (
+    build_discovery_delivery_args,
     build_discovery_search_args,
     get_discovery_occasion_hint,
     occasion_rewrite_needed,
@@ -27,7 +29,13 @@ from lib.neo4j.hybrid_context import (
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_TOOLS: frozenset[str] = frozenset(
-    {SEARCH_PRODUCTS_TOOL, GET_PRODUCT_TOOL, LIST_CATEGORIES_TOOL, TRACK_ORDER_TOOL},
+    {
+        SEARCH_PRODUCTS_TOOL,
+        GET_PRODUCT_TOOL,
+        LIST_CATEGORIES_TOOL,
+        TRACK_ORDER_TOOL,
+        CHECK_DELIVERY_TOOL,
+    },
 )
 
 # Kapruka product IDs often embed digits (e.g. cake00ka002034, EF_PC_CHOC0V2774P00065).
@@ -79,26 +87,35 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
     currency = _resolve_currency(state)
 
     if intent == "discovery":
+        intent_metadata = state.get("intent_metadata")
         product_id = _extract_product_id(user_message)
         if product_id:
-            return [
+            calls: list[dict[str, Any]] = [
                 {
                     "name": GET_PRODUCT_TOOL,
                     "args": {"product_id": product_id, "currency": currency},
                 },
             ]
+            delivery_args = build_discovery_delivery_args(intent_metadata)
+            if delivery_args:
+                calls.append({"name": CHECK_DELIVERY_TOOL, "args": delivery_args})
+            return calls
         if len(user_message) >= 3:
             search_args = build_discovery_search_args(
                 user_message,
                 hybrid_context,
                 currency=currency,
             )
-            return [
+            calls = [
                 {
                     "name": SEARCH_PRODUCTS_TOOL,
                     "args": search_args,
                 },
             ]
+            delivery_args = build_discovery_delivery_args(intent_metadata)
+            if delivery_args:
+                calls.append({"name": CHECK_DELIVERY_TOOL, "args": delivery_args})
+            return calls
         return []
 
     if intent == "general":
@@ -158,6 +175,8 @@ async def _invoke_tool(
         return await service.list_categories(client_ip, **args)
     if name == TRACK_ORDER_TOOL:
         return await service.track_order(client_ip, **args)
+    if name == CHECK_DELIVERY_TOOL:
+        return await service.check_delivery(client_ip, **args)
     msg = f"Unsupported MCP tool: {name}"
     raise ValueError(msg)
 

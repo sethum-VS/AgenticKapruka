@@ -13,6 +13,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
+from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import select_rewrite_model
 from lib.embeddings.reranker import CrossEncoderService
 from lib.genai.client import create_genai_client
@@ -424,6 +425,37 @@ def _fallback_search_query(category: str | None) -> str:
                 return first_word.rstrip("s")
             return first_word
     return "cake"
+
+
+DISCOVERY_SEARCH_TOOL = "kapruka_search_products"
+DISCOVERY_CHECK_DELIVERY_TOOL = "kapruka_check_delivery"
+
+
+def requires_discovery_delivery_check(intent_metadata: IntentMetadata | None) -> bool:
+    """True when preprocessing flagged a destination city needing MCP delivery validation."""
+    if intent_metadata is None:
+        return False
+    return bool(intent_metadata.get("requires_delivery_validation")) and bool(
+        intent_metadata.get("target_city"),
+    )
+
+
+def discovery_tool_manifest(intent_metadata: IntentMetadata | None) -> frozenset[str]:
+    """Discovery-turn MCP tools bound from hybrid context and delivery metadata."""
+    tools: set[str] = {DISCOVERY_SEARCH_TOOL}
+    if requires_discovery_delivery_check(intent_metadata):
+        tools.add(DISCOVERY_CHECK_DELIVERY_TOOL)
+    return frozenset(tools)
+
+
+def build_discovery_delivery_args(intent_metadata: IntentMetadata | None) -> dict[str, Any]:
+    """Map intent_metadata city constraint to kapruka_check_delivery arguments."""
+    if not requires_discovery_delivery_check(intent_metadata):
+        return {}
+    city = intent_metadata.get("target_city") if intent_metadata else None
+    if not city:
+        return {}
+    return {"city": city}
 
 
 def build_discovery_search_args(
