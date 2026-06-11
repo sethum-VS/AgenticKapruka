@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from google import genai
@@ -11,6 +10,7 @@ from google import genai
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.checkout.tracking import extract_order_number
+from lib.kapruka.product_id import extract_product_id
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tool_executor import SUPPORTED_TOOL_NAMES, inject_currency, invoke_tool
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
@@ -27,15 +27,6 @@ from lib.neo4j.hybrid_context import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Kapruka product IDs often embed digits (e.g. cake00ka002034, EF_PC_CHOC0V2774P00065).
-_PRODUCT_ID_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*\d[A-Za-z0-9_]{2,})\b")
-
-
-def _extract_product_id(user_message: str) -> str | None:
-    """Return the first Kapruka-like product id token in the message, if any."""
-    match = _PRODUCT_ID_RE.search(user_message)
-    return match.group(1) if match else None
 
 
 def _resolve_currency(state: AgentState) -> str:
@@ -71,7 +62,7 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
 
     if intent == "discovery":
         intent_metadata = state.get("intent_metadata")
-        product_id = _extract_product_id(user_message)
+        product_id = extract_product_id(user_message)
         if product_id:
             calls: list[dict[str, Any]] = [
                 {
@@ -103,6 +94,14 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
         return []
 
     if intent == "general":
+        product_id = extract_product_id(user_message)
+        if product_id:
+            return [
+                {
+                    "name": GET_PRODUCT_TOOL,
+                    "args": {"product_id": product_id, "currency": currency},
+                },
+            ]
         return [{"name": LIST_CATEGORIES_TOOL, "args": {"depth": 1}}]
 
     if intent == "tracking":

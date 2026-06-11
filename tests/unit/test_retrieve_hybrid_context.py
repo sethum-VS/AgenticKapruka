@@ -159,6 +159,17 @@ def test_route_after_analyze_intent_defaults_to_retrieve_when_intent_missing() -
     assert route_after_analyze_intent(state) == "retrieve_hybrid_context"
 
 
+@pytest.mark.parametrize("intent", ["discovery", "general"])
+def test_route_after_analyze_intent_product_id_skips_hybrid_context(intent: Intent) -> None:
+    """Product ID in message bypasses retrieve_hybrid_context (and future agent_loop)."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="tell me about cake00ka002034")],
+        "intent": intent,
+        "session_id": "sess-route-product-id",
+    }
+    assert route_after_analyze_intent(state) == "call_mcp_tools"
+
+
 @pytest.mark.asyncio
 async def test_fetch_graph_hybrid_context_runs_parallel_vector_searches() -> None:
     """Category and Occasion indexes are queried concurrently with one embedding."""

@@ -13,6 +13,7 @@ from graphs.state import AgentState, Intent
 from lib.debug.trace import trace_route_decision
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.embeddings.vertex_embeddings import embed_texts
+from lib.kapruka.product_id import contains_product_id
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
     VECTOR_CONFIDENCE_THRESHOLD,
@@ -68,6 +69,20 @@ def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
             reason="intent skips hybrid context retrieval",
         )
         return "call_mcp_tools"
+    if intent in ("discovery", "general"):
+        user_message = _extract_latest_user_message(state.get("messages") or [])
+        if contains_product_id(user_message):
+            logger.debug(
+                "route_after_analyze_intent: product ID fast-path for intent=%s",
+                intent,
+            )
+            trace_route_decision(
+                from_node="analyze_intent",
+                target="call_mcp_tools",
+                intent=intent,
+                reason="product ID in message",
+            )
+            return "call_mcp_tools"
     trace_route_decision(
         from_node="analyze_intent",
         target="retrieve_hybrid_context",

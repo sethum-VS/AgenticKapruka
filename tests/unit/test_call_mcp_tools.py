@@ -194,6 +194,44 @@ def test_select_tool_calls_discovery_with_product_id_prefers_get_product() -> No
     assert selected[0]["args"]["product_id"] == "cake00ka002034"
 
 
+def test_select_tool_calls_general_with_product_id_prefers_get_product() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="cake00ka002034")],
+        "intent": "general",
+    }
+
+    selected = select_tool_calls(state)
+
+    assert len(selected) == 1
+    assert selected[0]["name"] == GET_PRODUCT_TOOL
+    assert selected[0]["args"]["product_id"] == "cake00ka002034"
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tools_general_product_id_invokes_get_product_without_search() -> None:
+    """Product ID fast-path issues kapruka_get_product only — no hybrid context or search."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.get_product.return_value = _GET_PRODUCT_OUTPUT
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="cake00ka002034")],
+        "intent": "general",
+        "session_id": "sess-mcp-product-id-fast",
+    }
+
+    result = await call_mcp_tools(state, kapruka_service=mock_service, client_ip=_CLIENT_IP)
+
+    mock_service.get_product.assert_awaited_once_with(
+        _CLIENT_IP,
+        product_id="cake00ka002034",
+        currency="LKR",
+    )
+    mock_service.search_products.assert_not_called()
+    mock_service.list_categories.assert_not_called()
+    assert result["tool_call_count"] == 1
+    assert result["tool_results"][GET_PRODUCT_TOOL]["id"] == "cake00ka002034"
+
+
 def test_select_tool_calls_tracking_returns_empty_without_order_number() -> None:
     state: AgentState = {
         "messages": [HumanMessage(content="where is my order?")],
