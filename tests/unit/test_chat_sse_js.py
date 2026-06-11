@@ -16,6 +16,8 @@ def test_chat_sse_js_wires_post_stream_bridge() -> None:
     assert "sse-connect" in source
     assert 'CHAT_STREAM_PATH = "/chat/stream"' in source
     assert 'eventName = "message"' in source
+    assert "swapStatusHtml" in source
+    assert 'event.eventName === "status"' in source
     assert "htmx.swap" in source
     assert 'HX-Request": "true"' in source
     assert "htmx:afterSwap" in source

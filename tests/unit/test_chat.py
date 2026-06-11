@@ -68,7 +68,7 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'hx-post="/chat/stream"' in html
     assert 'hx-ext="sse"' in html
     assert 'sse-connect="/chat/stream"' in html
-    assert 'sse-swap="message"' in html
+    assert 'sse-swap="message,status"' in html
     assert 'id="chat-sse-listener"' in html
     assert 'hx-target="#chat-messages"' in html
     assert 'hx-swap="beforeend"' in html
@@ -102,14 +102,17 @@ def _mock_streaming_graph() -> MagicMock:
     async def fake_astream(
         state: object,
         config: dict[str, Any],
-        stream_mode: str | None = None,
+        stream_mode: str | list[str] | None = None,
     ) -> Any:
-        yield {
-            "generate_response": {
-                "response_html": assistant_html,
-                "assistant_message": "Here are some birthday cake options.",
+        yield (
+            "updates",
+            {
+                "generate_response": {
+                    "response_html": assistant_html,
+                    "assistant_message": "Here are some birthday cake options.",
+                },
             },
-        }
+        )
 
     mock_graph.astream = fake_astream
     mock_graph.aget_state = AsyncMock(return_value=MagicMock(values=None))
@@ -271,7 +274,7 @@ async def test_chat_index_returns_200_html_with_empty_state(chat_index_env: Redi
     assert 'id="chat-form"' in html
     assert 'hx-post="/chat/stream"' in html
     assert 'sse-connect="/chat/stream"' in html
-    assert 'sse-swap="message"' in html
+    assert 'sse-swap="message,status"' in html
     assert 'x-data="chatHelpers()"' in html
     assert "/static/js/chat-sse.js" in html
     assert "/static/js/chat-helpers.js" in html

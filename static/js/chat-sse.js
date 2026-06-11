@@ -121,6 +121,14 @@
     );
   }
 
+  function swapStatusHtml(html) {
+    // Status events OOB-update the pending assistant bubble without appending.
+    htmx.swap(document.body, html, { swapStyle: "none" });
+    document.body.dispatchEvent(
+      new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
+    );
+  }
+
   function toggleRequestState(form, active) {
     const indicator = document.getElementById("chat-loading");
     if (active) {
@@ -192,14 +200,23 @@
             event: event.eventName,
             htmlChars: event.data?.length ?? 0,
           });
-          swapListenerHtml(listener, event.data);
+          if (event.eventName === "status") {
+            swapStatusHtml(event.data);
+          } else {
+            swapListenerHtml(listener, event.data);
+          }
         }
       }
 
       if (buffer.trim()) {
         const parsed = parseSseChunk(`${buffer}\n\n`);
         for (const event of parsed.events) {
-          if (acceptedEvents.includes(event.eventName)) {
+          if (!acceptedEvents.includes(event.eventName)) {
+            continue;
+          }
+          if (event.eventName === "status") {
+            swapStatusHtml(event.data);
+          } else {
             swapListenerHtml(listener, event.data);
           }
         }
