@@ -1,5 +1,6 @@
 """LangGraph node implementations for the shopping assistant."""
 
+from graphs.nodes.agent_loop import agent_loop
 from graphs.nodes.analyze_intent import analyze_intent
 from graphs.nodes.call_mcp_tools import call_mcp_tools, select_tool_calls
 from graphs.nodes.generate_response import generate_response, render_assistant_html
@@ -11,6 +12,7 @@ from graphs.nodes.retrieve_hybrid_context import (
 from graphs.nodes.zep_memory_write import zep_memory_write
 
 __all__ = [
+    "agent_loop",
     "analyze_intent",
     "call_mcp_tools",
     "generate_response",

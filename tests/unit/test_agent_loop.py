@@ -1,20 +1,38 @@
-"""Unit tests for graphs.nodes.agent_loop planner trace summarization."""
+"""Unit tests for graphs.nodes.agent_loop planner loop and trace summarization."""
 
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from langchain_core.messages import HumanMessage
+
+from graphs.model_router import FLASH_MODEL
 from graphs.nodes.agent_loop import (
+    MAX_ITERATIONS,
     PLANNER_CATEGORY_NODE_LIMIT,
     PLANNER_SEARCH_RESULT_LIMIT,
+    AgentPlannerStep,
+    agent_loop,
     build_planner_prior_iterations,
     format_planner_prior_iterations,
 )
-from graphs.state import ToolInvocation
+from graphs.state import AgentState, ToolInvocation
+from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.kapruka.types import SearchProductsOutput
+
+_CLIENT_IP = "203.0.113.99"
+
+_SEARCH_OUTPUT = SearchProductsOutput(
+    results=[],
+    next_cursor=None,
+    applied_filters={"q": "birthday cake", "limit": 10, "in_stock_only": False},
+)
 
 
 def _make_search_product(index: int) -> dict[str, object]:
@@ -180,3 +198,204 @@ def test_summarize_errors_message_only() -> None:
     ]
     summary = build_planner_prior_iterations(tool_trace)[0]["summary"]
     assert summary == {"error": "product_not_found", "message": "No products found"}
+
+
+def _base_state() -> AgentState:
+    return {
+        "messages": [HumanMessage(content="birthday cake for mom")],
+        "session_id": "sess-agent-loop-001",
+        "currency": "LKR",
+    }
+
+
+def _mock_kapruka_service() -> AsyncMock:
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = _SEARCH_OUTPUT
+    mock_service.get_product.return_value = _SEARCH_OUTPUT
+    mock_service.list_categories.return_value = _SEARCH_OUTPUT
+    mock_service.check_delivery.return_value = _SEARCH_OUTPUT
+    return mock_service
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_finish_sets_done() -> None:
+    """Planner finish action ends the loop immediately with agent_loop_done=True."""
+    mock_service = _mock_kapruka_service()
+    finish_step = AgentPlannerStep(action="finish", rationale="products found")
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        return_value=finish_step,
+    ):
+        result = await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result.get("agent_clarifying_question") is None
+    assert result["tool_trace"] == []
+    mock_service.search_products.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_ask_user_sets_clarifying_question_and_exits() -> None:
+    """ask_user stores clarifying question and exits without tool calls."""
+    mock_service = _mock_kapruka_service()
+    ask_step = AgentPlannerStep(
+        action="ask_user",
+        rationale="Which city should we deliver to?",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        return_value=ask_step,
+    ):
+        result = await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_clarifying_question"] == "Which city should we deliver to?"
+    assert result["tool_trace"] == []
+    mock_service.search_products.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_iteration_cap_limits_tool_calls() -> None:
+    """Bounded loop runs at most MAX_ITERATIONS planner steps with tool invocations."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": f"query-{index}"},
+            rationale=f"search {index}",
+        )
+        for index in range(MAX_ITERATIONS + 2)
+    ]
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert len(result["tool_trace"]) == MAX_ITERATIONS
+    assert result["tool_call_count"] == MAX_ITERATIONS
+    assert mock_service.search_products.call_count == MAX_ITERATIONS
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_duplicate_tool_guard_forces_finish() -> None:
+    """Duplicate tool+args skips re-invocation and forces finish on the next iteration."""
+    mock_service = _mock_kapruka_service()
+    search_args = {"q": "birthday cake", "currency": "LKR"}
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "birthday cake"},
+            rationale="initial search",
+        ),
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "birthday cake"},
+            rationale="duplicate search",
+        ),
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "should not run"},
+            rationale="never reached",
+        ),
+    ]
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert len(result["tool_trace"]) == 1
+    assert result["tool_trace"][0]["args"] == search_args
+    assert mock_service.search_products.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_emits_status_events() -> None:
+    """Status events are emitted at loop entry and per tool invocation."""
+    mock_service = _mock_kapruka_service()
+    mock_writer = MagicMock()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Kandy", "date": "2026-06-15"},
+            rationale="check delivery",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+    ]
+
+    with (
+        patch("graphs.nodes.agent_loop.get_stream_writer", return_value=mock_writer),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    status_messages = [
+        call.args[0]["message"]
+        for call in mock_writer.call_args_list
+        if call.args and call.args[0].get("type") == "status"
+    ]
+    assert "Searching catalog…" in status_messages
+    assert "Checking delivery…" in status_messages
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_planner_uses_flash_model_only() -> None:
+    """Planner never escalates to Pro — always gemini-2.5-flash."""
+    mock_service = _mock_kapruka_service()
+    mock_response = MagicMock()
+    mock_response.parsed = AgentPlannerStep(action="finish", rationale="done")
+
+    with patch(
+        "graphs.nodes.agent_loop.generate_content_with_fallback",
+        return_value=mock_response,
+    ) as mock_generate:
+        await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+            genai_client=MagicMock(),
+        )
+
+    assert mock_generate.call_args.kwargs["model"] == FLASH_MODEL
+    assert mock_generate.call_args.kwargs["model"] != "gemini-2.5-pro"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_requires_kapruka_service() -> None:
+    with pytest.raises(ValueError, match="kapruka_service is required"):
+        await agent_loop(_base_state())
