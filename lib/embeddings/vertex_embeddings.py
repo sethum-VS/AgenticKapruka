@@ -7,14 +7,13 @@ import logging
 import time
 from collections.abc import Sequence
 
-from google.api_core import exceptions as google_exceptions
-from google.genai import errors as genai_errors
 from google.genai import types
 from google.genai.client import Client as GenaiClient
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.config import Settings, get_settings
 from lib.genai.client import create_genai_client
+from lib.genai.errors import is_resource_exhausted
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +26,6 @@ _EMBED_REQUEST_INTERVAL_SEC = 1.5
 
 _embedding_client: GenaiClient | None = None
 _last_embed_request_at: float = 0.0
-
-
-def _is_resource_exhausted(exc: BaseException) -> bool:
-    """Return True for Vertex/Gemini 429 RESOURCE_EXHAUSTED errors."""
-    if isinstance(exc, google_exceptions.ResourceExhausted):
-        return True
-    if isinstance(exc, genai_errors.ClientError):
-        if exc.code == 429:
-            return True
-        if exc.status == "RESOURCE_EXHAUSTED":
-            return True
-    return False
 
 
 def _get_embedding_client(*, settings: Settings) -> GenaiClient:
@@ -65,7 +52,7 @@ def _throttle_embed_request() -> None:
 
 
 @retry(
-    retry=retry_if_exception(_is_resource_exhausted),
+    retry=retry_if_exception(is_resource_exhausted),
     wait=wait_exponential(multiplier=1, min=2, max=60),
     stop=stop_after_attempt(8),
     reraise=True,

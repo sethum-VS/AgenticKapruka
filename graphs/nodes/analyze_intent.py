@@ -13,9 +13,11 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel, ValidationError
 
 from graphs.state import AgentState, Intent
+from lib.chat.intent_heuristics import infer_intent_from_message
 from lib.chat.model_router import select_intent_model
 from lib.chat.query_preprocessor import QueryPreprocessor
-from lib.genai.client import create_genai_client
+from lib.genai.errors import is_resource_exhausted
+from lib.genai.fallback import generate_content_with_fallback
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
@@ -98,14 +100,15 @@ def _build_intent_system_instruction(zep_memory_facts: list[str] | None) -> str:
 
 
 def _classify_intent_sync(
-    client: genai.Client,
+    client: genai.Client | None,
     user_message: str,
     *,
     model: str,
     zep_memory_facts: list[str] | None = None,
 ) -> Intent:
     """Blocking Gemini call; run via asyncio.to_thread from analyze_intent."""
-    response = client.models.generate_content(
+    response = generate_content_with_fallback(
+        client=client,
         model=model,
         contents=user_message,
         config=types.GenerateContentConfig(
@@ -140,15 +143,25 @@ async def analyze_intent(
         logger.info("analyze_intent: proceed-to-checkout trigger from cart drawer")
         return {"intent": "checkout", "intent_metadata": intent_metadata}
 
-    client = genai_client or create_genai_client()
+    client = genai_client
     zep_memory_facts = state.get("zep_memory_facts")
     model = select_intent_model()
-    intent = await asyncio.to_thread(
-        _classify_intent_sync,
-        client,
-        user_message,
-        model=model,
-        zep_memory_facts=zep_memory_facts,
-    )
+    try:
+        intent = await asyncio.to_thread(
+            _classify_intent_sync,
+            client,
+            user_message,
+            model=model,
+            zep_memory_facts=zep_memory_facts,
+        )
+    except Exception as exc:
+        if not is_resource_exhausted(exc):
+            raise
+        intent = infer_intent_from_message(user_message)
+        logger.warning(
+            "analyze_intent: Gemini rate limited; heuristic fallback -> %s",
+            intent,
+            exc_info=True,
+        )
     logger.info("analyze_intent: classified message as %s", intent)
     return {"intent": intent, "intent_metadata": intent_metadata}

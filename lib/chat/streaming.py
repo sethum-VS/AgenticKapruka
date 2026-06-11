@@ -11,6 +11,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from graphs.state import AgentState
 from lib.chat.sse import chunk_text, format_sse_event
+from lib.debug.trace import trace_error, trace_node_update, trace_turn_complete
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +49,19 @@ async def iter_chat_sse_events(
     pending_id = f"assistant-stream-{stream_id or secrets.token_hex(4)}"
     stream_started = False
 
+    thread_id = ""
+    configurable = config.get("configurable") if isinstance(config, dict) else None
+    if isinstance(configurable, dict):
+        thread_id = str(configurable.get("thread_id") or "")
+
     try:
         async for update in graph.astream(state, config, stream_mode="updates"):
             if not isinstance(update, dict):
                 continue
             for node_name, node_update in update.items():
+                if not isinstance(node_update, dict):
+                    continue
+                trace_node_update(node_name, node_update)
                 if node_name != "generate_response":
                     continue
                 response_html = node_update.get("response_html")
@@ -77,7 +86,13 @@ async def iter_chat_sse_events(
 
                 cleanup = f'<div id="{pending_id}" hx-swap-oob="delete"></div>'
                 yield format_sse_event(cleanup + response_html)
-    except Exception:
+                trace_turn_complete(
+                    thread_id=thread_id,
+                    assistant_message=assistant_message,
+                    response_html_chars=len(response_html or ""),
+                )
+    except Exception as exc:
+        trace_error("graph.astream failed", exc)
         logger.exception("chat stream failed during graph.astream")
         error_html = (
             '<div class="flex justify-start">'

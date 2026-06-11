@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from google.genai import errors as genai_errors
 from langchain_core.messages import HumanMessage
 
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
@@ -116,6 +117,29 @@ async def test_generate_response_html_contains_product_names_from_tool_results()
     config = call_kwargs["config"]
     assert config.response_mime_type == "application/json"
     assert config.response_schema is AssistantReply
+
+
+@pytest.mark.asyncio
+async def test_generate_response_template_fallback_on_gemini_429() -> None:
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = genai_errors.ClientError(
+        429,
+        {"error": {"status": "RESOURCE_EXHAUSTED"}},
+        None,
+    )
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom")],
+        "tool_results": _SEARCH_TOOL_RESULTS,
+        "session_id": "sess-gen-429",
+        "intent": "discovery",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "Chocolate Birthday Cake" in result["assistant_message"]
+    assert "Vanilla Celebration Cake" in result["assistant_message"]
+    assert 'data-testid="product-carousel"' in result["response_html"]
 
 
 @pytest.mark.asyncio

@@ -156,10 +156,15 @@ start_tailwind() {
 
 start_backend() {
   log "Starting backend on http://127.0.0.1:$BACKEND_PORT ..."
+  export APP_ENV="${APP_ENV:-development}"
+  export DEBUG_TRACE="${DEBUG_TRACE:-1}"
+  export LOG_LEVEL="${LOG_LEVEL:-INFO}"
+  UVICORN_LOG_LEVEL="$(printf '%s' "$LOG_LEVEL" | tr '[:upper:]' '[:lower:]')"
   nohup "$PYTHON" -m uvicorn app.main:app \
     --reload \
     --host 127.0.0.1 \
     --port "$BACKEND_PORT" \
+    --log-level "$UVICORN_LOG_LEVEL" \
     >"$BACKEND_LOG" 2>&1 &
   echo $! >"$BACKEND_PID"
 }
@@ -193,6 +198,7 @@ cmd_start() {
   log "  Health:   http://127.0.0.1:$BACKEND_PORT/health"
   log "  Backend:  $BACKEND_LOG"
   log "  Tailwind: $TAILWIND_LOG"
+  log "  Trace:    DEBUG_TRACE=$DEBUG_TRACE LOG_LEVEL=$LOG_LEVEL (make logs)"
   log "  Stop all: make stop-all"
 }
 

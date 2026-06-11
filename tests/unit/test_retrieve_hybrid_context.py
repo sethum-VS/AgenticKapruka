@@ -324,5 +324,5 @@ async def test_retrieve_hybrid_context_pruned_graph_flows_to_call_mcp_tools() ->
 
     assert len(selected) == 1
     assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
-    assert selected[0]["args"]["category"] == "Flowers"
+    assert "category" not in selected[0]["args"]
     assert selected[0]["args"]["q"] == "something elegant"

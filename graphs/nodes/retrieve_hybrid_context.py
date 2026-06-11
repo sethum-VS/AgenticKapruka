@@ -10,6 +10,7 @@ from typing import Any, Literal
 from app.config import get_settings
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, Intent
+from lib.debug.trace import trace_route_decision
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.embeddings.vertex_embeddings import embed_texts
 from lib.neo4j.client import Neo4jClient
@@ -51,10 +52,28 @@ def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
     intent = state.get("intent")
     if intent == "checkout":
         logger.debug("route_after_analyze_intent: routing to checkout sub-graph")
+        trace_route_decision(
+            from_node="analyze_intent",
+            target="run_checkout_graph",
+            intent=intent,
+            reason="checkout intent",
+        )
         return "run_checkout_graph"
     if intent in _INTENTS_SKIP_HYBRID_CONTEXT:
         logger.debug("route_after_analyze_intent: skipping hybrid context for %s", intent)
+        trace_route_decision(
+            from_node="analyze_intent",
+            target="call_mcp_tools",
+            intent=intent,
+            reason="intent skips hybrid context retrieval",
+        )
         return "call_mcp_tools"
+    trace_route_decision(
+        from_node="analyze_intent",
+        target="retrieve_hybrid_context",
+        intent=intent,
+        reason="discovery/general path",
+    )
     return "retrieve_hybrid_context"
 
 

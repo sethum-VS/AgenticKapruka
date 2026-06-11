@@ -124,6 +124,24 @@ async def test_kapruka_rate_limit_error_returns_429_with_retry_after() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unknown_route_returns_friendly_404_html_page() -> None:
+    """Unknown browser navigations render a full not-found page with chat link."""
+    application = create_app()
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/does-not-exist-qa",
+            headers={"Accept": "text/html"},
+        )
+
+    assert response.status_code == 404
+    assert "text/html" in response.headers["content-type"]
+    assert 'data-testid="not-found-page"' in response.text
+    assert 'data-testid="not-found-back-to-chat"' in response.text
+    assert 'href="/chat"' in response.text
+
+
+@pytest.mark.asyncio
 async def test_kapruka_not_found_error_returns_404_html() -> None:
     """KaprukaNotFoundError maps to 404 HTML partial."""
     application = create_app()

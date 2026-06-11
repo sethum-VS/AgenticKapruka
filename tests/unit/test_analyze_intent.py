@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from google.genai import errors as genai_errors
 from langchain_core.messages import AIMessage, HumanMessage
 
 from graphs.nodes.analyze_intent import (
@@ -132,6 +133,25 @@ async def test_analyze_intent_uses_lora_endpoint_when_configured() -> None:
     expected_metadata: IntentMetadata = _preprocessor.process("avurudu cake ona")
     assert result == {"intent": "discovery", "intent_metadata": expected_metadata}
     assert mock_client.models.generate_content.call_args.kwargs["model"] == lora_model
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_falls_back_to_heuristic_on_gemini_429() -> None:
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = genai_errors.ClientError(
+        429,
+        {"error": {"status": "RESOURCE_EXHAUSTED"}},
+        None,
+    )
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom in Colombo")],
+        "session_id": "sess-intent-429",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent"] == "discovery"
 
 
 @pytest.mark.asyncio

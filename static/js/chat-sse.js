@@ -10,6 +10,21 @@
   const CHAT_FORM_ID = "chat-form";
   const CHAT_STREAM_PATH = "/chat/stream";
 
+  function chatDebugEnabled(form) {
+    return form?.dataset?.chatDebug === "true";
+  }
+
+  function chatDebugLog(form, label, detail) {
+    if (!chatDebugEnabled(form)) {
+      return;
+    }
+    if (detail === undefined) {
+      console.info(`[chat] ${label}`);
+      return;
+    }
+    console.info(`[chat] ${label}`, detail);
+  }
+
   const originalCreateEventSource = htmx.createEventSource;
 
   htmx.createEventSource = function createChatSafeEventSource(url) {
@@ -129,6 +144,11 @@
       .filter(Boolean);
     const connectPath = form.dataset.chatStreamPath || CHAT_STREAM_PATH;
     const formData = new FormData(form);
+    const outboundMessage = formData.get("message");
+    chatDebugLog(form, "send", {
+      path: connectPath,
+      message: outboundMessage,
+    });
 
     toggleRequestState(form, true);
 
@@ -141,8 +161,11 @@
       });
 
       if (!response.ok) {
+        chatDebugLog(form, "http error", { status: response.status });
         throw new Error(`Chat stream failed (${response.status})`);
       }
+
+      chatDebugLog(form, "stream open", { status: response.status });
 
       const reader = response.body?.getReader();
       if (!reader) {
@@ -165,6 +188,10 @@
           if (!acceptedEvents.includes(event.eventName)) {
             continue;
           }
+          chatDebugLog(form, "sse event", {
+            event: event.eventName,
+            htmlChars: event.data?.length ?? 0,
+          });
           swapListenerHtml(listener, event.data);
         }
       }
@@ -178,6 +205,7 @@
         }
       }
 
+      chatDebugLog(form, "stream complete");
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {
           detail: { elt: form, successful: true },
@@ -185,6 +213,7 @@
       );
       form.reset();
     } catch (error) {
+      chatDebugLog(form, "stream failed", error);
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {
           detail: { elt: form, successful: false },

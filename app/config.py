@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 GeminiBackend = Literal["vertex", "api_key"]
 
@@ -36,6 +36,30 @@ class Settings(BaseSettings):
     )
     gcp_project_id: str = Field(..., min_length=1)
     gcp_location: str = Field(..., min_length=1)
+    gemini_chat_location: str = Field(
+        default="global",
+        description=(
+            "Vertex AI region for Gemini chat/intent/rewrite calls. "
+            "Use global to reduce 429 shared-capacity errors per Google guidance; "
+            "embeddings still use the global embedding endpoint separately."
+        ),
+    )
+    gemini_fallback_regions: Annotated[
+        list[str],
+        NoDecode,
+        Field(
+            default=[
+                "europe-west4",
+                "us-east4",
+                "asia-northeast1",
+                "us-central1",
+            ],
+            description=(
+                "Vertex regions to try after GEMINI_CHAT_LOCATION on 429 RESOURCE_EXHAUSTED. "
+                "Comma-separated in env, e.g. europe-west4,us-east4,asia-northeast1,us-central1"
+            ),
+        ),
+    ]
     kapruka_mcp_url: str = Field(
         default="https://mcp.kapruka.com/mcp",
         description="Kapruka MCP JSON-RPC endpoint",
@@ -103,6 +127,15 @@ class Settings(BaseSettings):
             return None
         stripped = str(value).strip()
         return stripped or None
+
+    @field_validator("gemini_fallback_regions", mode="before")
+    @classmethod
+    def parse_gemini_fallback_regions(cls, value: object) -> list[str]:
+        if isinstance(value, str):
+            return [region.strip() for region in value.split(",") if region.strip()]
+        if isinstance(value, list):
+            return [str(region).strip() for region in value if str(region).strip()]
+        return []
 
     @field_validator("kapruka_lora_endpoint_id", mode="before")
     @classmethod

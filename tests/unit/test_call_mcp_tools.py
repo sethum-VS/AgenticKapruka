@@ -417,7 +417,7 @@ def test_select_tool_calls_skips_occasion_augment_when_confidence_low() -> None:
 
     selected = select_tool_calls(state)
 
-    assert selected[0]["args"]["category"] == "Flowers"
+    assert selected[0]["args"]["category"] == "Wedding"
     assert selected[0]["args"]["q"] == "something elegant"
 
 
@@ -464,7 +464,7 @@ def test_select_tool_calls_discovery_kandy_delivery_binds_check_delivery() -> No
 
     assert len(selected) == 2
     assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
-    assert selected[0]["args"]["q"] == "Machan, can you deliver to Kandy on Sunday?"
+    assert selected[0]["args"]["q"] == "Machan, can you deliver on Sunday?"
     assert selected[1]["name"] == CHECK_DELIVERY_TOOL
     assert selected[1]["args"] == {"city": "Kandy"}
 

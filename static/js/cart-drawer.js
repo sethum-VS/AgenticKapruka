@@ -24,7 +24,45 @@ document.addEventListener("alpine:init", () => {
     },
 
     openDrawer() {
-      this.open = true;
+      const panel = document.getElementById("cart-panel");
+      if (!panel || !window.htmx) {
+        this.open = true;
+        return;
+      }
+
+      let opened = false;
+      const finish = (event) => {
+        if (opened) {
+          return;
+        }
+        opened = true;
+        cleanup();
+        if (event) {
+          this.syncCountFromPanel(event);
+        }
+        this.open = true;
+      };
+
+      const onSettle = (event) => {
+        if (event.detail?.target?.id !== "cart-panel") {
+          return;
+        }
+        finish(event);
+      };
+
+      const onError = () => finish(null);
+
+      const cleanup = () => {
+        document.body.removeEventListener("htmx:afterSettle", onSettle);
+        document.body.removeEventListener("htmx:responseError", onError);
+      };
+
+      document.body.addEventListener("htmx:afterSettle", onSettle);
+      document.body.addEventListener("htmx:responseError", onError);
+      window.htmx.ajax("GET", "/cart/panel", {
+        target: "#cart-panel",
+        swap: "outerHTML",
+      });
     },
 
     close() {

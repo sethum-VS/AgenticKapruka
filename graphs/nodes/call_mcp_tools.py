@@ -105,6 +105,7 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
                 user_message,
                 hybrid_context,
                 currency=currency,
+                intent_metadata=state.get("intent_metadata"),
             )
             calls = [
                 {

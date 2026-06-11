@@ -93,6 +93,7 @@
       hx-trigger="submit"
       hx-indicator="#chat-loading"
       class="relative"
+      {% if debug_trace %}data-chat-debug="true"{% endif %}
     >
       <div
         id="chat-sse-listener"
