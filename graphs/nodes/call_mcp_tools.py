@@ -11,8 +11,8 @@ from google import genai
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.checkout.tracking import extract_order_number
-from lib.kapruka.errors import KaprukaError
 from lib.kapruka.service import KaprukaService
+from lib.kapruka.tool_executor import SUPPORTED_TOOL_NAMES, inject_currency, invoke_tool
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -27,16 +27,6 @@ from lib.neo4j.hybrid_context import (
 )
 
 logger = logging.getLogger(__name__)
-
-_SUPPORTED_TOOLS: frozenset[str] = frozenset(
-    {
-        SEARCH_PRODUCTS_TOOL,
-        GET_PRODUCT_TOOL,
-        LIST_CATEGORIES_TOOL,
-        TRACK_ORDER_TOOL,
-        CHECK_DELIVERY_TOOL,
-    },
-)
 
 # Kapruka product IDs often embed digits (e.g. cake00ka002034, EF_PC_CHOC0V2774P00065).
 _PRODUCT_ID_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*\d[A-Za-z0-9_]{2,})\b")
@@ -56,13 +46,6 @@ def _resolve_currency(state: AgentState) -> str:
     return state.get("currency") or hints.get("currency") or preferences.get("currency") or "LKR"
 
 
-def _inject_currency_args(name: str, args: dict[str, Any], currency: str) -> dict[str, Any]:
-    """Ensure price-bearing MCP tools receive the session currency."""
-    if name in {SEARCH_PRODUCTS_TOOL, GET_PRODUCT_TOOL} and "currency" not in args:
-        return {**args, "currency": currency}
-    return args
-
-
 def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
     """Choose MCP tool invocations from explicit LLM tool_calls or routing intent."""
     explicit = state.get("tool_calls")
@@ -71,14 +54,14 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
         return [
             {
                 "name": call["name"],
-                "args": _inject_currency_args(
+                "args": inject_currency(
                     call["name"],
                     dict(call.get("args") or {}),
                     currency,
                 ),
             }
             for call in explicit
-            if call.get("name") in _SUPPORTED_TOOLS
+            if call.get("name") in SUPPORTED_TOOL_NAMES
         ]
 
     intent = state.get("intent")
@@ -131,13 +114,6 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
     return []
 
 
-def _serialize_tool_result(result: Any) -> Any:
-    """Convert Pydantic tool outputs to JSON-serializable dicts for AgentState."""
-    if hasattr(result, "model_dump"):
-        return result.model_dump(mode="json")
-    return result
-
-
 async def _maybe_rewrite_discovery_query(
     state: AgentState,
     args: dict[str, Any],
@@ -159,27 +135,6 @@ async def _maybe_rewrite_discovery_query(
         genai_client=genai_client,
     )
     return {**args, "q": rewritten}
-
-
-async def _invoke_tool(
-    service: KaprukaService,
-    client_ip: str,
-    name: str,
-    args: dict[str, Any],
-) -> Any:
-    """Dispatch a single supported tool call to KaprukaService."""
-    if name == SEARCH_PRODUCTS_TOOL:
-        return await service.search_products(client_ip, **args)
-    if name == GET_PRODUCT_TOOL:
-        return await service.get_product(client_ip, **args)
-    if name == LIST_CATEGORIES_TOOL:
-        return await service.list_categories(client_ip, **args)
-    if name == TRACK_ORDER_TOOL:
-        return await service.track_order(client_ip, **args)
-    if name == CHECK_DELIVERY_TOOL:
-        return await service.check_delivery(client_ip, **args)
-    msg = f"Unsupported MCP tool: {name}"
-    raise ValueError(msg)
 
 
 async def call_mcp_tools(
@@ -207,7 +162,7 @@ async def call_mcp_tools(
 
     for call in selected:
         name = call["name"]
-        args = _inject_currency_args(name, dict(call.get("args") or {}), currency)
+        args = inject_currency(name, dict(call.get("args") or {}), currency)
         if name == SEARCH_PRODUCTS_TOOL:
             args = await _maybe_rewrite_discovery_query(
                 state,
@@ -215,19 +170,13 @@ async def call_mcp_tools(
                 genai_client=genai_client,
             )
         logger.info("call_mcp_tools: invoking %s", name)
-        try:
-            raw = await _invoke_tool(kapruka_service, rate_limit_key, name, args)
-        except KaprukaError as exc:
-            from app.middleware.errors import human_readable_message
-
-            logger.warning("call_mcp_tools: %s failed (%s)", name, exc.code, exc_info=True)
-            tool_results[name] = {
-                "error": exc.code,
-                "message": human_readable_message(exc),
-            }
-            invocations += 1
-            continue
-        tool_results[name] = _serialize_tool_result(raw)
+        tool_results[name] = await invoke_tool(
+            name,
+            args,
+            kapruka_service=kapruka_service,
+            client_ip=rate_limit_key,
+            currency=currency,
+        )
         invocations += 1
 
     prior_count = state.get("tool_call_count") or 0

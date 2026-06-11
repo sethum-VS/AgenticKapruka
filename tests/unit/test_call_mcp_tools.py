@@ -9,7 +9,9 @@ from langchain_core.messages import HumanMessage
 
 from graphs.nodes.call_mcp_tools import call_mcp_tools, select_tool_calls
 from graphs.state import AgentState
+from lib.kapruka.errors import KaprukaNotFoundError
 from lib.kapruka.service import KaprukaService
+from lib.kapruka.tool_executor import invoke_tool
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -527,3 +529,108 @@ def test_select_tool_calls_discovery_without_delivery_metadata_is_search_only() 
 
     assert len(selected) == 1
     assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_tracking_serializes_order_status() -> None:
+    """Shared executor validates tracking args and returns serialized MCP output."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.track_order.return_value = TrackOrderOutput.model_validate(
+        {
+            "order_number": "VIMP34456CB2",
+            "pnref": "1",
+            "status": "confirmed",
+            "status_display": "Confirmed",
+            "order_date": "June 5, 2026",
+            "delivery_date": "June 7, 2026",
+            "amount": "1000.00",
+            "payment_method": "Visa",
+            "recipient": {
+                "name": "Test",
+                "phone": "0771234567",
+                "address": "1 Road",
+                "city": "Colombo 03",
+            },
+            "progress": [],
+            "live_tracking_available": False,
+            "has_delivery_video": False,
+            "has_delivery_photo": False,
+            "items": [],
+        }
+    )
+
+    result = await invoke_tool(
+        TRACK_ORDER_TOOL,
+        {"order_number": "VIMP34456CB2"},
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+    )
+
+    mock_service.track_order.assert_awaited_once_with(
+        _CLIENT_IP,
+        order_number="VIMP34456CB2",
+    )
+    assert result["order_number"] == "VIMP34456CB2"
+    assert result["status"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_rejects_invalid_tracking_args() -> None:
+    """Pydantic validation failures map to structured executor errors."""
+    mock_service = AsyncMock(spec=KaprukaService)
+
+    result = await invoke_tool(
+        TRACK_ORDER_TOOL,
+        {"order_number": "ab"},
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+    )
+
+    assert result["error"] == "validation_error"
+    mock_service.track_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_maps_kapruka_errors() -> None:
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.track_order.side_effect = KaprukaNotFoundError(
+        "order_not_found",
+        "Order not found",
+    )
+
+    result = await invoke_tool(
+        TRACK_ORDER_TOOL,
+        {"order_number": "VIMP34456CB2"},
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+    )
+
+    assert result["error"] == "order_not_found"
+    assert "message" in result
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tools_delegates_invocation_to_shared_executor() -> None:
+    """Tracking path routes through lib.kapruka.tool_executor.invoke_tool."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    state: AgentState = {
+        "messages": [HumanMessage(content="where is order VIMP34456CB2")],
+        "intent": "tracking",
+    }
+
+    with patch(
+        "graphs.nodes.call_mcp_tools.invoke_tool",
+        new_callable=AsyncMock,
+        return_value={"order_number": "VIMP34456CB2", "status": "confirmed"},
+    ) as mock_invoke:
+        result = await call_mcp_tools(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_invoke.assert_awaited_once()
+    call_kwargs = mock_invoke.await_args.kwargs
+    assert call_kwargs["kapruka_service"] is mock_service
+    assert call_kwargs["client_ip"] == _CLIENT_IP
+    assert result["tool_results"][TRACK_ORDER_TOOL]["status"] == "confirmed"
