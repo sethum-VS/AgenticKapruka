@@ -60,6 +60,28 @@ def test_settings_kapruka_lora_endpoint_id_from_env(monkeypatch: pytest.MonkeyPa
     assert settings.kapruka_lora_endpoint_id == "lora-endpoint-001"
 
 
+def test_settings_gemini_fallback_regions_from_comma_separated_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_settings.cache_clear()
+    _apply_env(
+        monkeypatch,
+        {
+            **_VALID_ENV,
+            "GEMINI_FALLBACK_REGIONS": "europe-west4,us-east4,asia-northeast1,us-central1",
+        },
+    )
+
+    settings = get_settings()
+
+    assert settings.gemini_fallback_regions == [
+        "europe-west4",
+        "us-east4",
+        "asia-northeast1",
+        "us-central1",
+    ]
+
+
 def test_settings_reranker_threshold_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
     _apply_env(monkeypatch, {**_VALID_ENV, "RERANKER_THRESHOLD": "0.55"})

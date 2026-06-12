@@ -302,6 +302,18 @@ def render_tracking_status(*, tracking: TrackOrderOutput) -> str:
     return template.render(tracking=tracking)
 
 
+def render_not_found_page() -> str:
+    """Render templates/errors/not_found.html for unknown browser navigations."""
+    templates = get_templates()
+    template = templates.env.get_template("errors/not_found.html")
+    return template.render(
+        cart_items=[],
+        cart_item_count=0,
+        currency="LKR",
+        supported_currencies=SUPPORTED_CURRENCY_CODES,
+    )
+
+
 def render_error_banner(
     *,
     error_code: str,

@@ -6,6 +6,7 @@ import logging
 from typing import Final
 
 from fastapi import FastAPI, Request
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from lib.kapruka.errors import (
@@ -165,6 +166,24 @@ def _error_response(
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Register Kapruka and fallback exception handlers on the FastAPI app."""
+
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_starlette_http_exception(
+        request: Request,
+        exc: StarletteHTTPException,
+    ) -> Response:
+        if exc.status_code == 404 and _wants_html_response(request):
+            from app.templating import render_not_found_page
+
+            return HTMLResponse(render_not_found_page(), status_code=404)
+        detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
+        return _error_response(
+            request,
+            status_code=exc.status_code,
+            error_code=str(exc.status_code),
+            message=detail,
+            title="Not found" if exc.status_code == 404 else "Unable to complete request",
+        )
 
     @app.exception_handler(KaprukaValidationError)
     async def handle_kapruka_validation_error(

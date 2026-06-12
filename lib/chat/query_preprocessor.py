@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Literal
 
+from lib.chat.intent_metadata import IntentMetadata, Vernacular
+
 QueryMode = Literal["utility", "situational"]
 
 # Transactional shopping cues — route for speed over empathy.
@@ -19,10 +21,14 @@ _UTILITY_PATTERNS: tuple[re.Pattern[str], ...] = (
 _SITUATIONAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"\b(broke up|breakup|passed away|funeral|condolence|sorry|heartbroken|"
-        r"missing (?:her|him|them)|devastated|lonely|stressed|anxious)\b",
+        r"missing (?:her|him|them)|devastated|lonely|stressed|anxious|nervous)\b",
         re.I,
     ),
     re.compile(r"\b(girlfriend|boyfriend|ex-|divorce|separated)\b", re.I),
+    re.compile(
+        r"\b(valentine(?:'?s)?|anniversary surprise|romantic surprise|surprise my partner)\b",
+        re.I,
+    ),
 )
 
 # Sinhala script or common Tanglish tokens.
@@ -44,6 +50,21 @@ _TANGLISH_TOKENS: frozenset[str] = frozenset(
         "hodata",
         "puluvan",
     },
+)
+
+_DELIVERY_INTENT = re.compile(
+    r"\b(?:deliver(?:y|able)?|ship(?:ping)?|send(?:\s+to)?)\b",
+    re.I,
+)
+
+_DELIVER_TO_CITY = re.compile(
+    r"\bdeliver(?:y)?\s+(?:to\s+)?(Colombo(?:\s+\d{2})?|Kandy|Galle|Negombo|Jaffna|Matara)\b",
+    re.I,
+)
+
+_CITY_DELIVERY = re.compile(
+    r"\b(Colombo(?:\s+\d{2})?|Kandy|Galle|Negombo|Jaffna)\s+delivery\b",
+    re.I,
 )
 
 
@@ -83,3 +104,55 @@ def vernacular_score_hint(text: str) -> float:
     overlap = len(tokens & _TANGLISH_TOKENS)
     score += min(0.5, overlap * 0.15)
     return min(1.0, score)
+
+
+def detect_vernacular(text: str) -> Vernacular:
+    """Classify vernacular as English, Sinhala script, or Tanglish."""
+    stripped = text.strip()
+    if not stripped:
+        return "en"
+    if _SINHALA_SCRIPT.search(stripped):
+        return "si"
+    tokens = {token.lower() for token in re.findall(r"[A-Za-z']+", stripped)}
+    if tokens & _TANGLISH_TOKENS:
+        return "tanglish"
+    return "en"
+
+
+def _has_delivery_intent(text: str) -> bool:
+    return bool(_DELIVERY_INTENT.search(text))
+
+
+def _normalize_city(raw: str) -> str:
+    parts = raw.strip().split()
+    if len(parts) >= 2 and parts[0].lower() == "colombo" and parts[1].isdigit():
+        return f"Colombo {parts[1]}"
+    return parts[0].capitalize() if parts else raw.strip()
+
+
+def extract_target_city(text: str) -> str | None:
+    """Extract a delivery destination city when delivery intent is present."""
+    if not _has_delivery_intent(text):
+        return None
+    for pattern in (_DELIVER_TO_CITY, _CITY_DELIVERY):
+        match = pattern.search(text)
+        if match:
+            return _normalize_city(match.group(1))
+    return None
+
+
+class QueryPreprocessor:
+    """Derive IntentMetadata from raw user text before LLM intent classification."""
+
+    def process(self, text: str) -> IntentMetadata:
+        stripped = text.strip()
+        mode = classify_query_mode(stripped)
+        vernacular = detect_vernacular(stripped)
+        target_city = extract_target_city(stripped)
+        requires_delivery = target_city is not None and _has_delivery_intent(stripped)
+        return {
+            "is_situational": mode == "situational",
+            "detected_vernacular": vernacular,
+            "requires_delivery_validation": requires_delivery,
+            "target_city": target_city,
+        }

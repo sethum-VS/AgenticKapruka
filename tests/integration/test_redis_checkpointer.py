@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import fakeredis.aioredis
 import pytest
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from langgraph.checkpoint.redis.key_registry import AsyncCheckpointKeyRegistry
+from tests.helpers.mock_genai import build_mock_genai_client
 
-from graphs.nodes.analyze_intent import IntentClassification
-from graphs.nodes.generate_response import AssistantReply
 from graphs.shopping_graph import (
     ShoppingGraphDeps,
     append_message_state,
@@ -74,24 +73,13 @@ def _checkpoint_graph_deps() -> ShoppingGraphDeps:
     mock_service = AsyncMock(spec=KaprukaService)
     mock_service.search_products.return_value = _SEARCH_OUTPUT
 
-    mock_client = MagicMock()
-    intent_response = MagicMock()
-    intent_response.parsed = IntentClassification(intent="discovery")
-    intent_response.text = '{"intent": "discovery"}'
-    reply_response = MagicMock()
-    reply_response.parsed = AssistantReply(message="Here are some birthday cake options.")
-    reply_response.text = reply_response.parsed.model_dump_json()
-    mock_client.models.generate_content.side_effect = [
-        intent_response,
-        reply_response,
-        intent_response,
-        reply_response,
-    ]
-
     return ShoppingGraphDeps(
         kapruka_service=mock_service,
         client_ip=_CLIENT_IP,
-        genai_client=mock_client,
+        genai_client=build_mock_genai_client(
+            search_query="birthday cake",
+            assistant_message="Here are some birthday cake options.",
+        ),
     )
 
 
@@ -145,23 +133,11 @@ async def test_tracking_turn_clears_stale_tool_results_from_prior_discovery(
     mock_service.search_products.return_value = _SEARCH_OUTPUT
     mock_service.track_order.return_value = _TRACK_OUTPUT
 
-    mock_client = MagicMock()
-    discovery_intent = MagicMock()
-    discovery_intent.parsed = IntentClassification(intent="discovery")
-    discovery_intent.text = '{"intent": "discovery"}'
-    discovery_reply = MagicMock()
-    discovery_reply.parsed = AssistantReply(message="Here are some birthday cake options.")
-    discovery_reply.text = discovery_reply.parsed.model_dump_json()
-
-    tracking_intent = MagicMock()
-    tracking_intent.parsed = IntentClassification(intent="tracking")
-    tracking_intent.text = '{"intent": "tracking"}'
-
-    mock_client.models.generate_content.side_effect = [
-        discovery_intent,
-        discovery_reply,
-        tracking_intent,
-    ]
+    mock_client = build_mock_genai_client(
+        intent=["discovery", "tracking"],
+        search_query="birthday cake",
+        assistant_message="Here are some birthday cake options.",
+    )
 
     deps = ShoppingGraphDeps(
         kapruka_service=mock_service,
@@ -189,7 +165,7 @@ async def test_tracking_turn_clears_stale_tool_results_from_prior_discovery(
     second_results = second.get("tool_results") or {}
     assert TRACK_ORDER_TOOL in second_results
     assert SEARCH_PRODUCTS_TOOL not in second_results
-    assert mock_client.models.generate_content.call_count == 3
+    assert mock_client.models.generate_content.call_count == 5
 
 
 @pytest.mark.asyncio

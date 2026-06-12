@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Preprocessor Routing Simulator — AgenticKapruka{% endblock %}
+
+{% block header_start %}
+<a href="/chat" class="text-sm font-medium text-kapruka-700 hover:text-kapruka-800">← Chat</a>
+<h1 class="text-lg font-semibold text-commerce-ink">Routing Simulator</h1>
+{% endblock %}
+
+{% block content %}
+<main class="mx-auto w-full max-w-4xl flex-1 px-4 py-6 sm:px-6">
+  <p class="mb-6 text-sm text-commerce-ink/70">
+  Local dev dashboard: trace how <code class="rounded bg-commerce-parchment px-1">QueryPreprocessor</code>
+  shapes LangGraph prompt routing, discovery tool binding, and CI tone gates.
+  </p>
+
+  <form
+    id="simulator-form"
+    class="card-commerce mb-6 space-y-5 p-5"
+    hx-post="/dev/simulator/run"
+    hx-target="#simulator-results"
+    hx-swap="innerHTML"
+    hx-trigger="change delay:150ms, submit"
+  >
+    <div>
+      <label for="scenario" class="mb-1 block text-sm font-medium text-commerce-ink">Scenario</label>
+      <select
+        id="scenario"
+        name="scenario"
+        class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm focus:border-kapruka-500 focus:outline-none focus:ring-1 focus:ring-kapruka-500"
+      >
+        {% for sid, sc in scenarios.items() %}
+        <option value="{{ sid }}" {% if sid == selected_scenario %}selected{% endif %}>
+          {{ sc.label }}
+        </option>
+        {% endfor %}
+      </select>
+      <p class="mt-1 text-xs text-commerce-ink/60" id="scenario-query-preview">
+        “{{ result.scenario.query }}”
+      </p>
+    </div>
+
+    <div class="grid gap-5 sm:grid-cols-2">
+      <div>
+        <label for="tone" class="mb-1 block text-sm font-medium text-commerce-ink">
+          Mock AI tone calibration
+        </label>
+        <select
+          id="tone"
+          name="tone"
+          class="w-full rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm focus:border-kapruka-500 focus:outline-none focus:ring-1 focus:ring-kapruka-500"
+        >
+          {% for tid, label in tone_profiles.items() %}
+          <option value="{{ tid }}" {% if tid == selected_tone %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label for="strictness" class="mb-1 flex items-center justify-between text-sm font-medium text-commerce-ink">
+          <span>Judge strictness</span>
+          <span id="strictness-value" class="font-mono text-kapruka-700">{{ "%.2f"|format(strictness) }}</span>
+        </label>
+        <input
+          type="range"
+          id="strictness"
+          name="strictness"
+          min="{{ min_strictness }}"
+          max="{{ max_strictness }}"
+          step="0.05"
+          value="{{ strictness }}"
+          class="w-full accent-kapruka-600"
+          oninput="document.getElementById('strictness-value').textContent = Number(this.value).toFixed(2)"
+        />
+        <p class="mt-1 text-xs text-commerce-ink/60">CI local flavor gate threshold (0.50–0.95)</p>
+      </div>
+    </div>
+  </form>
+
+  <div id="simulator-results">
+    {% include "dev/routing_simulator_results.html" %}
+  </div>
+</main>
+{% endblock %}

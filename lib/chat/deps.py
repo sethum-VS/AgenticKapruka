@@ -12,7 +12,6 @@ from starlette.requests import Request
 from app.config import get_settings
 from graphs.shopping_graph import ShoppingGraphDeps, get_shopping_graph
 from graphs.state import AgentState
-from lib.genai.client import create_genai_client
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.service import KaprukaService
 from lib.redis.client import RedisClient
@@ -75,11 +74,10 @@ async def build_shopping_graph_deps(
 ) -> ShoppingGraphDeps:
     """Assemble injectable graph dependencies for a chat turn."""
     kapruka_service = await ensure_kapruka_service(request, redis_client)
-    genai_client = create_genai_client()
     return ShoppingGraphDeps(
         kapruka_service=kapruka_service,
         client_ip=client_ip_from_request(request),
-        genai_client=genai_client,
+        genai_client=None,
         zep_client=zep_client_from_app(request),
         redis_client=redis_client,
     )

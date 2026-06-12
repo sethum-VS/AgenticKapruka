@@ -20,6 +20,13 @@ def test_format_sse_event_includes_event_and_data_lines() -> None:
     assert encoded.endswith("\n\n")
 
 
+def test_format_sse_event_status_event_type() -> None:
+    """Status SSE events use event: status for OOB thinking-bubble updates."""
+    encoded = format_sse_event('<div id="pending" hx-swap-oob="outerHTML">…</div>', event="status")
+    assert encoded.startswith("event: status\n")
+    assert 'hx-swap-oob="outerHTML"' in encoded
+
+
 def test_format_sse_event_multiline_data() -> None:
     """Multiline HTML is split across multiple data: lines."""
     encoded = format_sse_event("line-one\nline-two")
@@ -34,6 +41,71 @@ def test_chunk_text_splits_words() -> None:
 
 
 @pytest.mark.asyncio
+async def test_iter_chat_sse_events_yields_thinking_bubble_on_stream_start() -> None:
+    """User turn is followed immediately by a pending 'Searching catalog…' bubble."""
+    mock_graph = MagicMock()
+
+    async def empty_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        if False:
+            yield ("updates", {})
+
+    mock_graph.astream = empty_astream
+
+    events: list[str] = []
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={},
+        config={"configurable": {"thread_id": "t-think"}},
+        user_html='<div id="user">hi</div>',
+        stream_id="abc123",
+    ):
+        events.append(event)
+
+    assert len(events) >= 2
+    assert 'data: <div id="user">hi</div>' in events[0]
+    assert "Searching catalog…" in events[1]
+    assert 'id="assistant-stream-abc123"' in events[1]
+    assert 'hx-swap-oob="outerHTML"' not in events[1]
+
+
+@pytest.mark.asyncio
+async def test_iter_chat_sse_events_maps_custom_status_to_status_sse() -> None:
+    """LangGraph custom status events become SSE status events with OOB HTML."""
+    mock_graph = MagicMock()
+
+    async def status_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        yield ("custom", {"type": "status", "message": "Checking delivery…"})
+        if False:
+            yield ("updates", {})
+
+    mock_graph.astream = status_astream
+
+    events: list[str] = []
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={},
+        config={"configurable": {"thread_id": "t-status"}},
+        user_html="<p>user</p>",
+        stream_id="status1",
+    ):
+        events.append(event)
+
+    status_events = [event for event in events if event.startswith("event: status\n")]
+    assert len(status_events) == 1
+    assert "Checking delivery…" in status_events[0]
+    assert 'id="assistant-stream-status1"' in status_events[0]
+    assert 'hx-swap-oob="outerHTML"' in status_events[0]
+
+
+@pytest.mark.asyncio
 async def test_iter_chat_sse_events_yields_user_then_assistant_chunks() -> None:
     """Graph astream updates are mapped to SSE HTML events."""
     assistant_html = render_assistant_html("Hello from Kapruka assistant.")
@@ -42,14 +114,17 @@ async def test_iter_chat_sse_events_yields_user_then_assistant_chunks() -> None:
     async def fake_astream(
         state: object,
         config: dict[str, Any],
-        stream_mode: str | None = None,
+        stream_mode: str | list[str] | None = None,
     ) -> Any:
-        yield {
-            "generate_response": {
-                "response_html": assistant_html,
-                "assistant_message": "Hello from Kapruka assistant.",
+        yield (
+            "updates",
+            {
+                "generate_response": {
+                    "response_html": assistant_html,
+                    "assistant_message": "Hello from Kapruka assistant.",
+                },
             },
-        }
+        )
 
     mock_graph.astream = fake_astream
 
@@ -62,9 +137,10 @@ async def test_iter_chat_sse_events_yields_user_then_assistant_chunks() -> None:
     ):
         events.append(event)
 
-    assert len(events) >= 3
+    assert len(events) >= 4
     assert 'data: <div id="user">hi</div>' in events[0]
-    assert any("assistant-stream-" in event for event in events[1:])
+    assert "Searching catalog…" in events[1]
+    assert any("assistant-stream-" in event for event in events[2:])
     assert "Hello from Kapruka assistant." in events[-1]
     assert 'aria-label="Assistant message"' in events[-1]
     assert 'hx-swap-oob="delete"' in events[-1]
@@ -78,7 +154,7 @@ async def test_iter_chat_sse_events_emits_error_event_on_graph_failure() -> None
     async def failing_astream(
         state: object,
         config: dict[str, Any],
-        stream_mode: str | None = None,
+        stream_mode: str | list[str] | None = None,
     ) -> Any:
         if False:
             yield {}
@@ -96,5 +172,7 @@ async def test_iter_chat_sse_events_emits_error_event_on_graph_failure() -> None
         collected.append(event)
 
     assert collected
+    assert "Searching catalog…" in collected[1]
     assert "Something went wrong" in collected[-1]
     assert sum("Something went wrong" in event for event in collected) == 1
+    assert 'hx-swap-oob="delete"' in collected[-1]

@@ -14,6 +14,7 @@ from app.dependencies import get_redis
 from app.templating import get_templates
 from lib.chat.deps import (
     build_shopping_graph_deps,
+    client_ip_from_request,
     get_compiled_chat_graph,
     resolve_turn_state,
 )
@@ -26,6 +27,7 @@ from lib.chat.page_context import (
 from lib.chat.session import SESSION_COOKIE_NAME, cookie_params, resolve_chat_thread_id
 from lib.chat.sse import format_sse_event
 from lib.chat.streaming import iter_chat_sse_events
+from lib.debug.trace import is_debug_trace_enabled, trace_error, trace_turn_start
 from lib.redis.client import RedisClient
 from lib.redis.session import get_session_currency
 from lib.zep.session import get_or_create_session
@@ -78,6 +80,13 @@ async def _chat_event_stream(
         config=config,
         currency=currency,
     )
+    trace_turn_start(
+        thread_id=thread_id,
+        message=message,
+        currency=currency,
+        client_ip=client_ip_from_request(request),
+        state=dict(state),
+    )
     user_html = _render_user_turn_html(message)
 
     async for event in iter_chat_sse_events(
@@ -100,6 +109,7 @@ async def chat_index(request: Request, redis_client: RedisDep) -> Response:
         "chat/index.html",
         {
             "title": "Chat — AgenticKapruka",
+            "debug_trace": is_debug_trace_enabled(),
             **currency_template_context(currency),
             **cart_template_context(cart_items),
         },
@@ -128,7 +138,8 @@ async def chat_stream(
                 thread_id=thread_id,
             ):
                 yield payload
-        except Exception:
+        except Exception as exc:
+            trace_error(f"chat stream setup failed (session={thread_id})", exc)
             logger.exception("chat stream failed for session %s", thread_id)
             yield format_sse_event(_STREAM_SETUP_ERROR_HTML)
 

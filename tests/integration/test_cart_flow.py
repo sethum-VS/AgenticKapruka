@@ -75,6 +75,27 @@ def _session_cookie_from_response(response) -> str:
 
 
 @pytest.mark.asyncio
+async def test_get_cart_panel_returns_current_cart_partial(cart_app) -> None:
+    transport = ASGITransport(app=cart_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        add = await client.post(
+            "/cart/add",
+            data={"product_id": _PRODUCT_ID},
+            headers={"HX-Request": "true"},
+        )
+        session_cookie = _session_cookie_from_response(add)
+        panel = await client.get(
+            "/cart/panel",
+            headers={"HX-Request": "true", "Cookie": f"{SESSION_COOKIE_NAME}={session_cookie}"},
+        )
+
+    assert panel.status_code == 200
+    assert _PRODUCT_NAME in panel.text
+    assert 'data-testid="cart-line-item"' in panel.text
+    assert 'data-item-count="1"' in panel.text
+
+
+@pytest.mark.asyncio
 async def test_post_cart_add_returns_html_with_product_name(cart_app) -> None:
     transport = ASGITransport(app=cart_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

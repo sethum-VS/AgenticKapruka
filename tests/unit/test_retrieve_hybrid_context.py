@@ -14,7 +14,6 @@ from graphs.nodes.retrieve_hybrid_context import (
     route_after_analyze_intent,
 )
 from graphs.state import AgentState, Intent
-from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import VECTOR_CONFIDENCE_THRESHOLD
 from lib.neo4j.traverse import TraversalResult
@@ -159,6 +158,17 @@ def test_route_after_analyze_intent_defaults_to_retrieve_when_intent_missing() -
     assert route_after_analyze_intent(state) == "retrieve_hybrid_context"
 
 
+@pytest.mark.parametrize("intent", ["discovery", "general"])
+def test_route_after_analyze_intent_product_id_skips_hybrid_context(intent: Intent) -> None:
+    """Product ID in message bypasses retrieve_hybrid_context (and future agent_loop)."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="tell me about cake00ka002034")],
+        "intent": intent,
+        "session_id": "sess-route-product-id",
+    }
+    assert route_after_analyze_intent(state) == "call_mcp_tools"
+
+
 @pytest.mark.asyncio
 async def test_fetch_graph_hybrid_context_runs_parallel_vector_searches() -> None:
     """Category and Occasion indexes are queried concurrently with one embedding."""
@@ -286,8 +296,8 @@ async def test_fetch_graph_hybrid_context_skips_low_confidence_occasion_hop() ->
 
 
 @pytest.mark.asyncio
-async def test_retrieve_hybrid_context_pruned_graph_flows_to_call_mcp_tools() -> None:
-    """Cross-encoder-pruned hybrid_context merges into state and selects discovery MCP args."""
+async def test_retrieve_hybrid_context_pruned_graph_hints_only_for_planner() -> None:
+    """Hybrid context merges into state as soft hints — discovery MCP args are not auto-built."""
     pruned_graph_context = {
         "hints": {"category": "Flowers"},
         "vector_hits": [
@@ -322,7 +332,5 @@ async def test_retrieve_hybrid_context_pruned_graph_flows_to_call_mcp_tools() ->
     mcp_state: AgentState = {**base_state, **updates}
     selected = select_tool_calls(mcp_state)
 
-    assert len(selected) == 1
-    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
-    assert selected[0]["args"]["category"] == "Flowers"
-    assert selected[0]["args"]["q"] == "something elegant"
+    assert updates["hybrid_context"]["hints"]["category"] == "Flowers"
+    assert selected == []

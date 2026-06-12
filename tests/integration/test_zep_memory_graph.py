@@ -8,9 +8,8 @@ from typing import Any
 import httpx
 import pytest
 from langchain_core.messages import HumanMessage
+from tests.helpers.mock_genai import build_mock_genai_client
 
-from graphs.nodes.analyze_intent import IntentClassification
-from graphs.nodes.generate_response import AssistantReply
 from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initial_shopping_state
 from graphs.state import AgentState
 from lib.kapruka.service import KaprukaService
@@ -66,23 +65,6 @@ class _ZepMemoryCapture:
         return httpx.Response(404, json={"message": "not found"})
 
 
-def _mock_genai_client() -> Any:
-    from unittest.mock import MagicMock
-
-    mock_client = MagicMock()
-
-    intent_response = MagicMock()
-    intent_response.parsed = IntentClassification(intent="discovery")
-    intent_response.text = '{"intent": "discovery"}'
-
-    reply_response = MagicMock()
-    reply_response.parsed = AssistantReply(message=_ASSISTANT_MESSAGE)
-    reply_response.text = reply_response.parsed.model_dump_json()
-
-    mock_client.models.generate_content.side_effect = [intent_response, reply_response]
-    return mock_client
-
-
 def _mock_kapruka_service() -> Any:
     from unittest.mock import AsyncMock
 
@@ -113,7 +95,10 @@ async def test_shopping_graph_persists_turn_to_zep_after_chat(
         deps=ShoppingGraphDeps(
             kapruka_service=_mock_kapruka_service(),
             client_ip=_CLIENT_IP,
-            genai_client=_mock_genai_client(),
+            genai_client=build_mock_genai_client(
+                search_query=_USER_MESSAGE,
+                assistant_message=_ASSISTANT_MESSAGE,
+            ),
             zep_client=zep_client,
         ),
     )
@@ -151,7 +136,10 @@ async def test_shopping_graph_zep_node_order_includes_memory_nodes(
         deps=ShoppingGraphDeps(
             kapruka_service=_mock_kapruka_service(),
             client_ip=_CLIENT_IP,
-            genai_client=_mock_genai_client(),
+            genai_client=build_mock_genai_client(
+                search_query=_USER_MESSAGE,
+                assistant_message=_ASSISTANT_MESSAGE,
+            ),
             zep_client=zep_client,
         ),
     )
@@ -168,7 +156,7 @@ async def test_shopping_graph_zep_node_order_includes_memory_nodes(
             "load_zep_memory",
             "analyze_intent",
             "retrieve_hybrid_context",
-            "call_mcp_tools",
+            "agent_loop",
             "generate_response",
             "zep_memory_write",
         }:
@@ -178,7 +166,7 @@ async def test_shopping_graph_zep_node_order_includes_memory_nodes(
         "load_zep_memory",
         "analyze_intent",
         "retrieve_hybrid_context",
-        "call_mcp_tools",
+        "agent_loop",
         "generate_response",
         "zep_memory_write",
     ]

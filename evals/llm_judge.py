@@ -28,6 +28,11 @@ def _html_text(html: str) -> str:
     return parser.text()
 
 
+def extract_html_text(html: str) -> str:
+    """Public helper: strip tags from rendered HTMX partials for rubric scoring."""
+    return _html_text(html)
+
+
 def _has_testid(html: str, testid: str) -> bool:
     return f'data-testid="{testid}"' in html
 

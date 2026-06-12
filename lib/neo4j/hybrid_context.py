@@ -13,9 +13,10 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
+from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import select_rewrite_model
 from lib.embeddings.reranker import CrossEncoderService
-from lib.genai.client import create_genai_client
+from lib.genai.fallback import generate_content_with_fallback
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import build_embedding_text
 from lib.neo4j.ontology import LABEL_CATEGORY, LABEL_OCCASION, REL_OCCASION_TO_CATEGORY
@@ -337,9 +338,13 @@ _PRICE_SORT_RE = re.compile(
 )
 _CATALOG_BROWSE_RE = re.compile(
     r"\b("
-    r"list\s+of|show\s+me\s+(all|everything)|any\s+items?|items?\s+today|"
+    r"list\s+of|show\s+me\s+(all|everything)|any\s+(?:items?|itmes)|items?\s+today|"
     r"something\s+cheap|what.*cheapest|browse|all\s+products?"
     r")\b",
+    re.IGNORECASE,
+)
+_MAX_PRICE_RE = re.compile(
+    r"\b(?:under|below|less\s+than|upto|up\s+to)\s*(?:rs\.?|lkr)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
     re.IGNORECASE,
 )
 _META_QUERY_TOKENS = frozenset(
@@ -371,6 +376,9 @@ _META_QUERY_TOKENS = frozenset(
         "under",
         "less",
         "than",
+        "rs",
+        "lkr",
+        "itmes",
         "you",
         "your",
         "the",
@@ -392,6 +400,45 @@ _CATEGORY_SEARCH_TERMS: dict[str, str] = {
     "jewellery": "jewelry",
 }
 
+# Neo4j Category nodes are Kapruka parent departments (e.g. Cakes, Flowers). They are not
+# valid kapruka_search_products category filters — only occasion/subcategory names work
+# (e.g. Birthday). Passing parent names yields empty MCP results.
+_INVALID_MCP_CATEGORY_FILTERS = frozenset(
+    {
+        "cakes",
+        "birthday cakes",
+        "flowers",
+        "gifts",
+        "gift",
+        "chocolates",
+        "food",
+        "fruits",
+        "perfumes",
+        "jewellery",
+        "jewelry",
+    }
+)
+
+# Sri Lankan delivery cities often appear in chat queries ("cake for mom in Colombo") but
+# pollute Kapruka keyword search when passed verbatim as q.
+_DELIVERY_CITY_NAMES = (
+    r"Colombo(?:\s+\d{2})?",
+    r"Kandy",
+    r"Galle",
+    r"Negombo",
+    r"Jaffna",
+    r"Matara",
+)
+_CITY_PATTERN = "|".join(_DELIVERY_CITY_NAMES)
+_STRIP_IN_CITY_RE = re.compile(
+    rf"\b(?:in|to|near|around|within)\s+({_CITY_PATTERN})\b",
+    re.IGNORECASE,
+)
+_STRIP_TRAILING_CITY_RE = re.compile(
+    rf"\b(?:in|to)\s+({_CITY_PATTERN})\s*$",
+    re.IGNORECASE,
+)
+
 
 def _product_like_tokens(message: str) -> list[str]:
     return [
@@ -411,6 +458,30 @@ def _is_meta_catalog_query(message: str) -> bool:
     return bool(_PRICE_SORT_RE.search(stripped) and not _product_like_tokens(stripped))
 
 
+def _extract_max_price(message: str) -> float | None:
+    """Parse budget caps like 'under 2000rs' into a numeric max_price."""
+    match = _MAX_PRICE_RE.search(message)
+    if not match:
+        return None
+    digits = match.group(1).replace(",", "")
+    try:
+        value = float(digits)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _product_search_keyword(token: str) -> str:
+    """Map a user token to a Kapruka-friendly product keyword."""
+    normalized = token.lower().strip()
+    mapped = _CATEGORY_SEARCH_TERMS.get(normalized)
+    if mapped:
+        return mapped
+    if normalized.endswith("s") and len(normalized) > 4:
+        return normalized.rstrip("s")
+    return normalized
+
+
 def _fallback_search_query(category: str | None) -> str:
     """Pick a broad Kapruka keyword that returns purchasable products."""
     if category:
@@ -426,19 +497,103 @@ def _fallback_search_query(category: str | None) -> str:
     return "cake"
 
 
+DISCOVERY_SEARCH_TOOL = "kapruka_search_products"
+DISCOVERY_CHECK_DELIVERY_TOOL = "kapruka_check_delivery"
+
+
+def requires_discovery_delivery_check(intent_metadata: IntentMetadata | None) -> bool:
+    """True when preprocessing flagged a destination city needing MCP delivery validation."""
+    if intent_metadata is None:
+        return False
+    return bool(intent_metadata.get("requires_delivery_validation")) and bool(
+        intent_metadata.get("target_city"),
+    )
+
+
+def discovery_tool_manifest(intent_metadata: IntentMetadata | None) -> frozenset[str]:
+    """Discovery-turn MCP tools bound from hybrid context and delivery metadata."""
+    tools: set[str] = {DISCOVERY_SEARCH_TOOL}
+    if requires_discovery_delivery_check(intent_metadata):
+        tools.add(DISCOVERY_CHECK_DELIVERY_TOOL)
+    return frozenset(tools)
+
+
+def build_discovery_delivery_args(intent_metadata: IntentMetadata | None) -> dict[str, Any]:
+    """Map intent_metadata city constraint to kapruka_check_delivery arguments."""
+    if not requires_discovery_delivery_check(intent_metadata):
+        return {}
+    city = intent_metadata.get("target_city") if intent_metadata else None
+    if not city:
+        return {}
+    return {"city": city}
+
+
+def _is_valid_mcp_category_filter(name: str) -> bool:
+    stripped = name.strip()
+    if not stripped:
+        return False
+    return stripped.lower() not in _INVALID_MCP_CATEGORY_FILTERS
+
+
+def _resolve_mcp_category_filter(hybrid_context: dict[str, Any] | None) -> str | None:
+    """Pick a Kapruka MCP subcategory filter from graph/Zep hints.
+
+    Graph reranker stores parent departments under ``hints['category']`` (Neo4j
+    Category nodes) and browse subcategories under ``hints['occasion']`` (Neo4j
+    Occasion nodes). Only occasion-level names are valid MCP category filters.
+    """
+    context = hybrid_context or {}
+    hints = context.get("hints") or {}
+    preferences = context.get("preferences") or {}
+
+    for raw in (
+        hints.get("occasion"),
+        preferences.get("favorite_category"),
+    ):
+        if not raw:
+            continue
+        name = str(raw).strip()
+        if _is_valid_mcp_category_filter(name):
+            return name
+    return None
+
+
+def strip_location_from_search_query(
+    query: str,
+    intent_metadata: IntentMetadata | None = None,
+) -> str:
+    """Remove delivery city phrases from product search q.
+
+    Cities belong in kapruka_check_delivery, not kapruka_search_products q.
+    """
+    stripped = query.strip()
+    if not stripped:
+        return stripped
+
+    cleaned = _STRIP_IN_CITY_RE.sub("", stripped)
+    cleaned = _STRIP_TRAILING_CITY_RE.sub("", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.-")
+
+    target_city = intent_metadata.get("target_city") if intent_metadata else None
+    if target_city:
+        city_pattern = re.compile(rf"\b{re.escape(target_city)}\b", re.IGNORECASE)
+        cleaned = city_pattern.sub("", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.-")
+
+    return cleaned or stripped
+
+
 def build_discovery_search_args(
     user_message: str,
     hybrid_context: dict[str, Any] | None,
     *,
     currency: str,
+    intent_metadata: IntentMetadata | None = None,
 ) -> dict[str, Any]:
     """Map graph/Zep hybrid_context hints to kapruka_search_products arguments."""
     context = hybrid_context or {}
-    hints = context.get("hints") or {}
-    preferences = context.get("preferences") or {}
-
-    category = hints.get("category") or preferences.get("favorite_category")
-    query = user_message.strip()
+    category = _resolve_mcp_category_filter(context)
+    query = strip_location_from_search_query(user_message.strip(), intent_metadata)
 
     args: dict[str, Any] = {"q": query, "currency": currency}
     if category:
@@ -446,6 +601,16 @@ def build_discovery_search_args(
 
     if _PRICE_SORT_RE.search(query):
         args["sort"] = "price_asc"
+
+    max_price = _extract_max_price(query)
+    if max_price is not None:
+        args["max_price"] = max_price
+        args["sort"] = "price_asc"
+        product_tokens = _product_like_tokens(query)
+        if product_tokens:
+            args["q"] = _product_search_keyword(product_tokens[0])
+        else:
+            args["q"] = _fallback_search_query(category)
 
     if _is_meta_catalog_query(query):
         args["q"] = _fallback_search_query(category)
@@ -480,13 +645,14 @@ def _parse_rewrite_response(response: types.GenerateContentResponse) -> str:
 
 
 def _rewrite_search_query_sync(
-    client: genai.Client,
+    client: genai.Client | None,
     user_message: str,
     occasion: str,
 ) -> str:
     """Blocking Gemini call; run via asyncio.to_thread from rewrite helper."""
     prompt = f"User message: {user_message}\nOccasion context: {occasion}"
-    response = client.models.generate_content(
+    response = generate_content_with_fallback(
+        client=client,
         model=select_rewrite_model(),
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -517,7 +683,7 @@ async def rewrite_search_query_with_occasion(
     if not occasion_rewrite_needed(stripped, occasion_stripped):
         return stripped
 
-    client = genai_client if genai_client is not None else create_genai_client()
+    client = genai_client
     try:
         return await asyncio.to_thread(
             _rewrite_search_query_sync,

@@ -50,6 +50,26 @@ def test_local_flavor_skips_utility_queries() -> None:
     assert score.verdict == "pass"
 
 
+def test_local_flavor_passes_situational_with_sri_lankan_markers() -> None:
+    score = score_local_flavor(
+        "Aiyo machan, hodata gentle flowers for this moment.",
+        query_mode="situational",
+        threshold=0.75,
+    )
+    assert score.score >= 0.75
+    assert score.verdict == "pass"
+
+
+def test_local_flavor_fails_situational_corporate_tone() -> None:
+    score = score_local_flavor(
+        "Dear valued customer, we regret to inform you about our catalog.",
+        query_mode="situational",
+        threshold=0.75,
+    )
+    assert score.score < 0.75
+    assert score.verdict == "fail"
+
+
 def test_intent_preservation_detects_drift() -> None:
     score = score_intent_preservation(
         "<div>Standard milk chocolate box</div>",

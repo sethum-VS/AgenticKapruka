@@ -10,9 +10,12 @@ from lib.embeddings.reranker import CrossEncoderService
 from lib.neo4j.hybrid_context import (
     DEFAULT_RERANKER_THRESHOLD,
     RewrittenSearchQuery,
+    build_discovery_delivery_args,
     build_discovery_search_args,
     build_graph_hybrid_context,
+    discovery_tool_manifest,
     occasion_rewrite_needed,
+    requires_discovery_delivery_check,
     rerank_and_prune_traversal,
     rewrite_search_query_with_occasion,
 )
@@ -141,6 +144,28 @@ def test_reranker_omits_hints_below_threshold() -> None:
     assert context["vector_hits"][0]["id"] == "category:gifts"
 
 
+def test_discovery_tool_manifest_includes_check_delivery_for_city_metadata() -> None:
+    metadata = {
+        "requires_delivery_validation": True,
+        "target_city": "Kandy",
+    }
+    assert requires_discovery_delivery_check(metadata) is True
+    assert discovery_tool_manifest(metadata) == frozenset(
+        {"kapruka_search_products", "kapruka_check_delivery"},
+    )
+    assert build_discovery_delivery_args(metadata) == {"city": "Kandy"}
+
+
+def test_discovery_tool_manifest_search_only_without_delivery_flag() -> None:
+    metadata = {
+        "requires_delivery_validation": False,
+        "target_city": None,
+    }
+    assert requires_discovery_delivery_check(metadata) is False
+    assert discovery_tool_manifest(metadata) == frozenset({"kapruka_search_products"})
+    assert build_discovery_delivery_args(metadata) == {}
+
+
 def test_build_discovery_search_args_preserves_raw_user_query() -> None:
     """kapruka_search_products q must stay the user's message without occasion concatenation."""
     args = build_discovery_search_args(
@@ -158,7 +183,7 @@ def test_build_discovery_search_args_preserves_raw_user_query() -> None:
     assert args["q"] != "cake for mom Birthday"
 
 
-def test_build_discovery_search_args_maps_zep_favorite_category() -> None:
+def test_build_discovery_search_args_ignores_parent_department_favorite_category() -> None:
     args = build_discovery_search_args(
         "something nice",
         {"preferences": {"favorite_category": "Flowers"}},
@@ -166,7 +191,7 @@ def test_build_discovery_search_args_maps_zep_favorite_category() -> None:
     )
 
     assert args["q"] == "something nice"
-    assert args["category"] == "Flowers"
+    assert "category" not in args
     assert args["currency"] == "USD"
 
 
@@ -187,13 +212,83 @@ def test_build_discovery_search_args_price_sort_preserves_product_query() -> Non
     """Explicit product terms stay in q while still applying price_asc sort."""
     args = build_discovery_search_args(
         "cheapest birthday cake",
-        {"hints": {"category": "Birthday"}},
+        {"hints": {"occasion": "Birthday"}},
         currency="LKR",
     )
 
     assert args["q"] == "cheapest birthday cake"
     assert args["sort"] == "price_asc"
     assert args["category"] == "Birthday"
+
+
+def test_build_discovery_search_args_ignores_parent_department_category_hint() -> None:
+    """Graph Category hints like Cakes must not become MCP category filters."""
+    args = build_discovery_search_args(
+        "chocolates",
+        {"hints": {"category": "Cakes"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "chocolates"
+    assert "category" not in args
+
+
+def test_build_discovery_search_args_prefers_occasion_over_parent_category() -> None:
+    args = build_discovery_search_args(
+        "cake for mom",
+        {"hints": {"category": "Cakes", "occasion": "Birthday"}},
+        currency="LKR",
+    )
+
+    assert args["category"] == "Birthday"
+
+
+def test_build_discovery_search_args_meta_browse_drops_parent_category_filter() -> None:
+    args = build_discovery_search_args(
+        "show me any items",
+        {"hints": {"category": "Cakes"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "cake"
+    assert "category" not in args
+
+
+def test_build_discovery_search_args_parses_under_price_budget() -> None:
+    """Kapruka MCP rejects literal 'cakes under 2000rs'; map to q + max_price."""
+    args = build_discovery_search_args(
+        "cakes under 2000rs",
+        {"hints": {"category": "Cakes", "occasion": "Birthday"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "cake"
+    assert args["max_price"] == 2000.0
+    assert args["sort"] == "price_asc"
+    assert args["category"] == "Birthday"
+
+
+def test_build_discovery_search_args_strips_trailing_city_from_query() -> None:
+    """Location in chat must not pollute Kapruka keyword search."""
+    args = build_discovery_search_args(
+        "Birthday cake for mom in Colombo",
+        {"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "Birthday cake for mom"
+    assert args["category"] == "Birthday"
+
+
+def test_build_discovery_search_args_meta_browse_tolerates_itmes_typo() -> None:
+    args = build_discovery_search_args(
+        "show me any itmes",
+        {"hints": {"category": "Cakes"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "cake"
+    assert "category" not in args
 
 
 def test_occasion_rewrite_needed_when_terms_absent() -> None:

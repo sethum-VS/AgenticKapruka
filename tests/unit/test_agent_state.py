@@ -7,7 +7,15 @@ from typing import get_type_hints
 
 from langchain_core.messages import HumanMessage
 
-from graphs.state import AgentState, CheckoutStep, CurrencyCode, Intent, ModelTier
+from graphs.state import (
+    AgentState,
+    CheckoutStep,
+    CurrencyCode,
+    Intent,
+    ModelTier,
+    ToolInvocation,
+)
+from lib.chat.intent_metadata import IntentMetadata
 
 
 def test_agent_state_minimal_dict_passes_type_check() -> None:
@@ -26,10 +34,14 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
     expected_keys = {
         "messages",
         "intent",
+        "intent_metadata",
         "hybrid_context",
         "tool_calls",
         "tool_results",
         "tool_call_count",
+        "tool_trace",
+        "agent_loop_done",
+        "agent_clarifying_question",
         "model_tier",
         "session_id",
         "zep_thread_id",
@@ -48,9 +60,16 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
 
 def test_agent_state_full_optional_fields() -> None:
     """Fully populated AgentState accepts all orchestration field values."""
+    metadata: IntentMetadata = {
+        "is_situational": False,
+        "detected_vernacular": "en",
+        "requires_delivery_validation": False,
+        "target_city": None,
+    }
     state: AgentState = {
         "messages": [],
         "intent": "discovery",
+        "intent_metadata": metadata,
         "hybrid_context": {"categories": ["Birthday"]},
         "tool_calls": [{"name": "kapruka_search_products", "args": {"q": "cake"}}],
         "tool_results": {"kapruka_search_products": {"results": []}},
@@ -70,3 +89,32 @@ def test_agent_state_full_optional_fields() -> None:
     assert tier == "flash"
     assert currency == "LKR"
     assert checkout == "cart"
+
+
+def test_agent_state_agent_loop_fields_optional() -> None:
+    """Agent loop trace fields accept minimal and populated optional values."""
+    minimal: AgentState = {
+        "messages": [HumanMessage(content="cakes for mom")],
+        "session_id": "sess-loop-001",
+    }
+    assert minimal.get("tool_trace") is None
+    assert minimal.get("agent_loop_done") is None
+    assert minimal.get("agent_clarifying_question") is None
+
+    invocation: ToolInvocation = {
+        "name": "kapruka_search_products",
+        "args": {"q": "birthday cake"},
+        "result": {"results": [{"id": "cake001", "name": "Choc Cake"}]},
+    }
+    populated: AgentState = {
+        "messages": [],
+        "session_id": "sess-loop-002",
+        "tool_trace": [invocation],
+        "agent_loop_done": True,
+        "agent_clarifying_question": "Who is the gift for?",
+        "tool_results": {"kapruka_search_products": invocation["result"]},
+        "tool_call_count": 1,
+    }
+    assert populated["tool_trace"] == [invocation]
+    assert populated["agent_loop_done"] is True
+    assert populated["agent_clarifying_question"] == "Who is the gift for?"

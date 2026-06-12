@@ -47,6 +47,16 @@ async def _cart_partial_response(
     return _cart_html_response(html=html, new_cookie=new_cookie)
 
 
+@router.get("/panel", response_class=HTMLResponse)
+async def cart_panel(
+    request: Request,
+    redis_client: RedisDep,
+) -> HTMLResponse:
+    """Return the cart partial — used to refresh the drawer when it opens."""
+    thread_id, new_cookie = resolve_chat_thread_id(request)
+    return await _cart_partial_response(redis_client, thread_id, new_cookie=new_cookie)
+
+
 @router.post("/add", response_class=HTMLResponse)
 async def cart_add(
     request: Request,

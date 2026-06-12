@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from app.config import get_settings
 from lib.analytics.networkx_worker import NetworkXCommunityWorker
+from lib.debug.trace import configure_dev_logging
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.neo4j.client import Neo4jClient
 from lib.redis.client import RedisClient
@@ -47,6 +48,7 @@ async def _connect_optional[T](
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Connect external services on startup; release resources on shutdown."""
+    configure_dev_logging()
     settings = get_settings()
     app.state.redis = await _connect_optional(
         "Redis",

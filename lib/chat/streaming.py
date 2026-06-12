@@ -11,6 +11,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from graphs.state import AgentState
 from lib.chat.sse import chunk_text, format_sse_event
+from lib.debug.trace import trace_error, trace_node_update, trace_turn_complete
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,19 @@ def _render_streaming_assistant(message: str, element_id: str, *, oob: bool) -> 
     )
 
 
+def _normalize_astream_chunk(
+    chunk: object,
+) -> tuple[str, object] | None:
+    """Map LangGraph astream output to (mode, payload) for updates/custom modes."""
+    if isinstance(chunk, tuple) and len(chunk) == 2:
+        mode, payload = chunk
+        if isinstance(mode, str):
+            return mode, payload
+    if isinstance(chunk, dict):
+        return "updates", chunk
+    return None
+
+
 async def iter_chat_sse_events(
     *,
     graph: CompiledStateGraph[AgentState, None, AgentState, AgentState],
@@ -48,11 +62,41 @@ async def iter_chat_sse_events(
     pending_id = f"assistant-stream-{stream_id or secrets.token_hex(4)}"
     stream_started = False
 
+    thinking_html = _render_streaming_assistant("Searching catalog…", pending_id, oob=False)
+    yield format_sse_event(thinking_html)
+    stream_started = True
+
+    thread_id = ""
+    configurable = config.get("configurable") if isinstance(config, dict) else None
+    if isinstance(configurable, dict):
+        thread_id = str(configurable.get("thread_id") or "")
+
     try:
-        async for update in graph.astream(state, config, stream_mode="updates"):
-            if not isinstance(update, dict):
+        async for chunk in graph.astream(state, config, stream_mode=["updates", "custom"]):
+            normalized = _normalize_astream_chunk(chunk)
+            if normalized is None:
                 continue
-            for node_name, node_update in update.items():
+            mode, payload = normalized
+
+            if mode == "custom":
+                if isinstance(payload, dict) and payload.get("type") == "status":
+                    status_message = str(payload.get("message") or "").strip()
+                    if status_message:
+                        status_html = _render_streaming_assistant(
+                            status_message,
+                            pending_id,
+                            oob=True,
+                        )
+                        yield format_sse_event(status_html, event="status")
+                continue
+
+            if mode != "updates" or not isinstance(payload, dict):
+                continue
+
+            for node_name, node_update in payload.items():
+                if not isinstance(node_update, dict):
+                    continue
+                trace_node_update(node_name, node_update)
                 if node_name != "generate_response":
                     continue
                 response_html = node_update.get("response_html")
@@ -77,7 +121,13 @@ async def iter_chat_sse_events(
 
                 cleanup = f'<div id="{pending_id}" hx-swap-oob="delete"></div>'
                 yield format_sse_event(cleanup + response_html)
-    except Exception:
+                trace_turn_complete(
+                    thread_id=thread_id,
+                    assistant_message=assistant_message,
+                    response_html_chars=len(response_html or ""),
+                )
+    except Exception as exc:
+        trace_error("graph.astream failed", exc)
         logger.exception("chat stream failed during graph.astream")
         error_html = (
             '<div class="flex justify-start">'

@@ -15,10 +15,14 @@ from app.templating import get_templates, render_product_carousel, render_tracki
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
-from graphs.state import AgentState
+from graphs.state import AgentState, ToolInvocation
+from lib.chat.intent_metadata import IntentMetadata
+from lib.chat.system_prompts import build_response_system_instruction
 from lib.checkout.tracking import extract_order_number, tracking_output_from_tool_results
-from lib.genai.client import create_genai_client
+from lib.genai.errors import is_resource_exhausted
+from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.utils.text import decode_html_entities
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
@@ -34,22 +38,55 @@ CHECKOUT_REVIEW_SYSTEM_INSTRUCTION = (
     "- Keep the reply under 150 words.\n"
 )
 
-SYSTEM_INSTRUCTION = """You are the Kapruka gift shopping assistant.
-
-Synthesize a helpful, concise reply for the customer using ONLY the tool_results JSON provided.
-
-Rules:
-- Never invent products, prices, stock status, categories, or delivery facts.
-- Quote product names and prices exactly as they appear in tool_results.
-- If tool_results are empty or contain no useful data, say so politely and suggest next steps.
-- Keep the reply conversational and under 200 words unless listing several products.
-"""
-
 
 class AssistantReply(BaseModel):
     """Structured Gemini response for the assistant message body."""
 
     message: str
+
+
+def merge_tool_trace(tool_trace: list[ToolInvocation]) -> dict[str, Any]:
+    """Merge agent-loop invocations into tool_results shape for generate_response.
+
+    Non-search tools use last-wins per tool name. ``kapruka_search_products`` unions
+    product dicts across trace entries with deduplication by product id; other search
+    payload fields come from the last search invocation.
+    """
+    merged: dict[str, Any] = {}
+    search_products_by_id: dict[str, dict[str, Any]] = {}
+    last_search_payload: dict[str, Any] | None = None
+
+    for invocation in tool_trace:
+        name = invocation["name"]
+        result = invocation["result"]
+
+        if name == SEARCH_PRODUCTS_TOOL and isinstance(result, dict):
+            last_search_payload = result
+            raw_results = result.get("results")
+            if isinstance(raw_results, list):
+                for item in raw_results:
+                    if isinstance(item, dict):
+                        product_id = item.get("id")
+                        if product_id:
+                            search_products_by_id[str(product_id)] = item
+            continue
+
+        merged[name] = result
+
+    if last_search_payload is not None:
+        search_merged = dict(last_search_payload)
+        search_merged["results"] = list(search_products_by_id.values())
+        merged[SEARCH_PRODUCTS_TOOL] = search_merged
+
+    return merged
+
+
+def _resolve_effective_tool_results(state: AgentState) -> dict[str, Any] | None:
+    """Prefer merged agent-loop trace; fall back to heuristic tool_results."""
+    tool_trace = state.get("tool_trace")
+    if tool_trace:
+        return merge_tool_trace(tool_trace)
+    return state.get("tool_results")
 
 
 def _format_tool_results_context(tool_results: dict[str, Any] | None) -> str:
@@ -93,32 +130,25 @@ def _parse_reply_response(response: types.GenerateContentResponse) -> str:
         raise ValueError(msg) from exc
 
 
-def _build_response_system_instruction(zep_memory_facts: list[str] | None) -> str:
-    """Combine base response prompt with optional Zep memory context."""
-    instruction = SYSTEM_INSTRUCTION
-    if zep_memory_facts:
-        instruction += format_memory_facts_block(zep_memory_facts)
-        instruction += (
-            "\nDo not treat prior session facts as catalog data; "
-            "tool_results remain the sole source of truth for products and prices."
-        )
-    return instruction
-
-
 def _generate_reply_sync(
-    client: genai.Client,
+    client: genai.Client | None,
     *,
     model: str,
     user_prompt: str,
     zep_memory_facts: list[str] | None = None,
+    intent_metadata: IntentMetadata | None = None,
     system_instruction: str | None = None,
 ) -> str:
     """Blocking Gemini call; run via asyncio.to_thread from generate_response."""
-    instruction = system_instruction or _build_response_system_instruction(zep_memory_facts)
+    instruction = system_instruction or build_response_system_instruction(
+        intent_metadata,
+        zep_memory_facts=zep_memory_facts,
+    )
     if system_instruction is not None and zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
 
-    response = client.models.generate_content(
+    response = generate_content_with_fallback(
+        client=client,
         model=model,
         contents=user_prompt,
         config=types.GenerateContentConfig(
@@ -168,6 +198,37 @@ def _build_tracking_assistant_message(tool_results: dict[str, Any] | None) -> st
         f"Here is the latest status for order {tracking.order_number}: "
         f"{tracking.status_display}. Expected delivery on {tracking.delivery_date}."
     )
+
+
+def _format_product_line(product: dict[str, Any]) -> str:
+    """Single-line catalog summary for template discovery replies."""
+    name = decode_html_entities(str(product.get("name") or "item"))
+    raw_price = product.get("price")
+    price: dict[str, Any] = raw_price if isinstance(raw_price, dict) else {}
+    amount = price.get("amount")
+    currency = price.get("currency") or "LKR"
+    stock_level = product.get("stock_level")
+    if isinstance(stock_level, str) and stock_level.strip():
+        stock_note = f"in stock ({stock_level.strip().lower()})"
+    elif product.get("in_stock"):
+        stock_note = "in stock"
+    else:
+        stock_note = "out of stock"
+    if amount is not None:
+        return f"'{name}' for {currency} {amount}, {stock_note}"
+    return f"'{name}', {stock_note}"
+
+
+def _build_discovery_template_reply(products: list[dict[str, Any]]) -> str:
+    """Deterministic assistant copy from MCP search results (no Gemini)."""
+    if not products:
+        return ""
+    lines = [_format_product_line(product) for product in products[:3]]
+    if len(lines) == 1:
+        return f"We have {lines[0]}."
+    if len(lines) == 2:
+        return f"We have {lines[0]}. Also available is {lines[1]}."
+    return f"We have {lines[0]}. Also available is {lines[1]} and {lines[2]}."
 
 
 def build_products_carousel_html(tool_results: dict[str, Any] | None) -> str | None:
@@ -276,13 +337,21 @@ async def generate_response(
     """LangGraph node: synthesize assistant text and render response_html partial."""
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
-    tool_results = state.get("tool_results")
+    tool_results = _resolve_effective_tool_results(state)
 
     if not user_message.strip():
         fallback = "How can I help you find a gift on Kapruka today?"
         return {
             "response_html": render_assistant_html(fallback),
             "assistant_message": fallback,
+        }
+
+    clarifying_question = state.get("agent_clarifying_question")
+    if isinstance(clarifying_question, str) and clarifying_question.strip():
+        question = clarifying_question.strip()
+        return {
+            "response_html": render_assistant_html(question),
+            "assistant_message": question,
         }
 
     if state.get("intent") == "tracking":
@@ -315,7 +384,7 @@ async def generate_response(
                 review_html if isinstance(review_html, str) and review_html.strip() else None
             )
 
-            client = genai_client or create_genai_client()
+            client = genai_client
             model = select_model(state)
             user_prompt = _build_checkout_review_prompt(user_message, checkout)
             zep_memory_facts = state.get("zep_memory_facts")
@@ -376,23 +445,38 @@ async def generate_response(
                     "assistant_message": empty_reply,
                 }
 
-    client = genai_client or create_genai_client()
+    products = extract_search_products(tool_results)
+    products_html = build_products_carousel_html(tool_results)
+
+    client = genai_client
     model = select_model(state)
     user_prompt = _build_user_prompt(user_message, tool_results)
 
     zep_memory_facts = state.get("zep_memory_facts")
-    reply_text = await asyncio.to_thread(
-        _generate_reply_sync,
-        client,
-        model=model,
-        user_prompt=user_prompt,
-        zep_memory_facts=zep_memory_facts,
-    )
+    intent_metadata = state.get("intent_metadata")
+    try:
+        reply_text = await asyncio.to_thread(
+            _generate_reply_sync,
+            client,
+            model=model,
+            user_prompt=user_prompt,
+            zep_memory_facts=zep_memory_facts,
+            intent_metadata=intent_metadata,
+        )
+    except Exception as exc:
+        if not is_resource_exhausted(exc):
+            raise
+        reply_text = _build_discovery_template_reply(products)
+        logger.warning(
+            "generate_response: Gemini rate limited; template fallback (%d products)",
+            len(products),
+            exc_info=True,
+        )
 
     if not reply_text:
-        reply_text = "I could not generate a response. Please try again."
-
-    products_html = build_products_carousel_html(tool_results)
+        reply_text = _build_discovery_template_reply(products) or (
+            "I could not generate a response. Please try again."
+        )
 
     logger.info(
         "generate_response: rendered assistant reply (%d chars, carousel=%s)",

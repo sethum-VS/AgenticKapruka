@@ -1,0 +1,75 @@
+"""Adaptive system prompts for discovery/general response synthesis."""
+
+from __future__ import annotations
+
+from lib.chat.intent_metadata import IntentMetadata, Vernacular
+from lib.zep.memory import format_memory_facts_block
+
+UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION = """You are the Kapruka gift shopping assistant.
+
+Synthesize a fast, transactional reply using ONLY the tool_results JSON provided.
+
+Rules:
+- Lead with crisp product names, prices, and stock status — no filler empathy.
+- Never invent products, prices, stock status, categories, or delivery facts.
+- Quote product names and prices exactly as they appear in tool_results.
+- If tool_results are empty or contain no useful data, say so briefly and suggest a clearer search.
+- Keep the reply under 150 words unless listing several products.
+"""
+
+LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION = """\
+You are the Kapruka gift concierge — warm, locally grounded, and emotionally aware.
+
+Synthesize a caring reply using ONLY the tool_results JSON provided.
+
+Rules:
+- Acknowledge the customer's situation with genuine empathy before recommending gifts.
+- Never invent products, prices, stock status, categories, or delivery facts.
+- Quote product names and prices exactly as they appear in tool_results.
+- Offer contextual hand-delivery advice for personal occasions
+  (condolence, breakup, apology).
+- Use natural Sri Lankan warmth — phrases like Aiyo, bro, sis, or machan when appropriate.
+- If tool_results are empty, respond kindly and suggest a thoughtful next step.
+- Keep the reply conversational and under 200 words unless listing several products.
+"""
+
+_VERNACULAR_GUIDANCE: dict[Vernacular, str] = {
+    "en": (
+        "\nTone: Standard English with light Sri Lankan warmth (Aiyo, bro, sis) where natural.\n"
+    ),
+    "si": (
+        "\nTone: Match Sinhala script when the customer writes in Sinhala; "
+        "code-switch naturally between Sinhala and English.\n"
+    ),
+    "tanglish": (
+        "\nTone: Mirror Tanglish code-switching — use tokens like mage, machan, malli, "
+        "nangi, ona, denna alongside English product facts.\n"
+    ),
+}
+
+
+def select_response_system_instruction(
+    intent_metadata: IntentMetadata | None,
+) -> str:
+    """Return Utility E-commerce or Localized Concierge base prompt from metadata."""
+    if intent_metadata and intent_metadata.get("is_situational"):
+        vernacular = intent_metadata.get("detected_vernacular", "en")
+        guidance = _VERNACULAR_GUIDANCE.get(vernacular, _VERNACULAR_GUIDANCE["en"])
+        return LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION + guidance
+    return UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION
+
+
+def build_response_system_instruction(
+    intent_metadata: IntentMetadata | None,
+    *,
+    zep_memory_facts: list[str] | None = None,
+) -> str:
+    """Combine routed system prompt with optional Zep memory context."""
+    instruction = select_response_system_instruction(intent_metadata)
+    if zep_memory_facts:
+        instruction += format_memory_facts_block(zep_memory_facts)
+        instruction += (
+            "\nDo not treat prior session facts as catalog data; "
+            "tool_results remain the sole source of truth for products and prices."
+        )
+    return instruction

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Page not found — AgenticKapruka{% endblock %}
+
+{% block header_start %}
+<div class="min-w-0">
+  <h1 class="text-base font-semibold text-commerce-ink">Page not found</h1>
+</div>
+{% endblock %}
+
+{% block content %}
+<main
+  class="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center px-4 py-16 text-center sm:px-6"
+  data-testid="not-found-page"
+>
+  <div class="card-commerce max-w-md p-8">
+    <p class="mb-2 text-sm font-medium uppercase tracking-wide text-kapruka-600">
+      404
+    </p>
+    <h2 class="mb-2 text-xl font-semibold text-commerce-ink">
+      We could not find that page
+    </h2>
+    <p class="mb-6 text-sm leading-relaxed text-commerce-muted">
+      The link may be mistyped or out of date. Head back to chat to keep shopping.
+    </p>
+    <a href="/chat" class="btn-primary inline-block text-sm" data-testid="not-found-back-to-chat">
+      Back to chat
+    </a>
+  </div>
+</main>
+{% endblock %}

@@ -10,6 +10,21 @@
   const CHAT_FORM_ID = "chat-form";
   const CHAT_STREAM_PATH = "/chat/stream";
 
+  function chatDebugEnabled(form) {
+    return form?.dataset?.chatDebug === "true";
+  }
+
+  function chatDebugLog(form, label, detail) {
+    if (!chatDebugEnabled(form)) {
+      return;
+    }
+    if (detail === undefined) {
+      console.info(`[chat] ${label}`);
+      return;
+    }
+    console.info(`[chat] ${label}`, detail);
+  }
+
   const originalCreateEventSource = htmx.createEventSource;
 
   htmx.createEventSource = function createChatSafeEventSource(url) {
@@ -106,6 +121,14 @@
     );
   }
 
+  function swapStatusHtml(html) {
+    // Status events OOB-update the pending assistant bubble without appending.
+    htmx.swap(document.body, html, { swapStyle: "none" });
+    document.body.dispatchEvent(
+      new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
+    );
+  }
+
   function toggleRequestState(form, active) {
     const indicator = document.getElementById("chat-loading");
     if (active) {
@@ -129,6 +152,11 @@
       .filter(Boolean);
     const connectPath = form.dataset.chatStreamPath || CHAT_STREAM_PATH;
     const formData = new FormData(form);
+    const outboundMessage = formData.get("message");
+    chatDebugLog(form, "send", {
+      path: connectPath,
+      message: outboundMessage,
+    });
 
     toggleRequestState(form, true);
 
@@ -141,8 +169,11 @@
       });
 
       if (!response.ok) {
+        chatDebugLog(form, "http error", { status: response.status });
         throw new Error(`Chat stream failed (${response.status})`);
       }
+
+      chatDebugLog(form, "stream open", { status: response.status });
 
       const reader = response.body?.getReader();
       if (!reader) {
@@ -165,19 +196,33 @@
           if (!acceptedEvents.includes(event.eventName)) {
             continue;
           }
-          swapListenerHtml(listener, event.data);
+          chatDebugLog(form, "sse event", {
+            event: event.eventName,
+            htmlChars: event.data?.length ?? 0,
+          });
+          if (event.eventName === "status") {
+            swapStatusHtml(event.data);
+          } else {
+            swapListenerHtml(listener, event.data);
+          }
         }
       }
 
       if (buffer.trim()) {
         const parsed = parseSseChunk(`${buffer}\n\n`);
         for (const event of parsed.events) {
-          if (acceptedEvents.includes(event.eventName)) {
+          if (!acceptedEvents.includes(event.eventName)) {
+            continue;
+          }
+          if (event.eventName === "status") {
+            swapStatusHtml(event.data);
+          } else {
             swapListenerHtml(listener, event.data);
           }
         }
       }
 
+      chatDebugLog(form, "stream complete");
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {
           detail: { elt: form, successful: true },
@@ -185,6 +230,7 @@
       );
       form.reset();
     } catch (error) {
+      chatDebugLog(form, "stream failed", error);
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {
           detail: { elt: form, successful: false },

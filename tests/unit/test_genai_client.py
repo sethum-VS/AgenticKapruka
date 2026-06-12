@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.config import Settings
-from lib.genai.client import create_genai_client
+from lib.genai.client import VERTEX_HTTP_OPTIONS, create_genai_client
 
 
 def _vertex_settings() -> Settings:
@@ -26,14 +26,31 @@ def _vertex_settings() -> Settings:
     )
 
 
-def test_create_genai_client_uses_vertex_by_default() -> None:
+def test_create_genai_client_uses_vertex_global_with_retry_options() -> None:
     settings = _vertex_settings()
     with patch("lib.genai.client.genai.Client") as mock_client:
         create_genai_client(settings=settings)
     mock_client.assert_called_once_with(
         vertexai=True,
         project="test-project",
+        location="global",
+        http_options=VERTEX_HTTP_OPTIONS,
+    )
+    retry = VERTEX_HTTP_OPTIONS.retry_options
+    assert retry is not None
+    assert retry.attempts == 8
+    assert 429 in (retry.http_status_codes or [])
+
+
+def test_create_genai_client_explicit_location_override() -> None:
+    settings = _vertex_settings()
+    with patch("lib.genai.client.genai.Client") as mock_client:
+        create_genai_client(settings=settings, location="us-central1")
+    mock_client.assert_called_once_with(
+        vertexai=True,
+        project="test-project",
         location="us-central1",
+        http_options=VERTEX_HTTP_OPTIONS,
     )
 
 

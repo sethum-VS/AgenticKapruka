@@ -12,6 +12,7 @@ from evals.ragas_eval import (
     DEFAULT_CONTEXT_PRECISION_THRESHOLD,
     GraphEvalRow,
     assert_context_precision_threshold,
+    assert_expected_tool_usage,
     build_eval_genai_client,
     build_eval_graph_for_case,
     contexts_from_tool_results,
@@ -19,12 +20,15 @@ from evals.ragas_eval import (
     run_full_ragas_eval,
     run_graph_for_case,
     run_ragas_eval_async,
+    tool_names_from_state,
 )
 from google.genai import types
 from tests.fixtures.mcp_mock import SEARCH_PRODUCTS_JSON
 
 from graphs.nodes.analyze_intent import IntentClassification
 from graphs.nodes.generate_response import AssistantReply
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
+from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.redis.client import RedisClient
@@ -83,6 +87,100 @@ def test_build_eval_genai_client_returns_intent_and_reply() -> None:
     assert "Chocolate Birthday Cake" in reply_response.parsed.message
 
 
+def test_build_eval_genai_client_adds_situational_flavor_for_concierge() -> None:
+    client = build_eval_genai_client("discovery")
+    tool_block = json.dumps({SEARCH_PRODUCTS_TOOL: SEARCH_PRODUCTS_JSON}, indent=2)
+    user_prompt = (
+        "Customer message:\nI broke up and need gentle flowers\n\n"
+        "tool_results (sole source of truth for catalog facts):\n"
+        f"{tool_block}"
+    )
+    reply_response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction="You are the Kapruka gift concierge — warm, locally grounded.",
+            response_mime_type="application/json",
+            response_schema=AssistantReply,
+        ),
+    )
+    message = reply_response.parsed.message.lower()
+    assert "aiyo" in message
+    assert "machan" in message
+    assert "hodata" in message
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_multi_step_anniversary_kandy(redis_client: RedisClient) -> None:
+    case = GoldenCase(
+        id="agent-001-anniversary-kandy-dinner",
+        scenario="discovery",
+        user_query="Plan a surprise anniversary dinner in Kandy — flowers and a cake",
+        expected_tools=[SEARCH_PRODUCTS_TOOL, CHECK_DELIVERY_TOOL],
+        reference_answer="Search then check Kandy delivery.",
+    )
+    graph = await build_eval_graph_for_case(case, redis_client)
+    row = await run_graph_for_case(case, graph=graph, redis_client=redis_client)
+    assert row.retrieved_contexts
+    assert len(row.retrieved_contexts) >= 2
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_thanks_zero_tools(redis_client: RedisClient) -> None:
+    case = GoldenCase(
+        id="agent-004-thanks-zero-tools",
+        scenario="discovery",
+        user_query="thanks!",
+        expected_tools=[],
+        reference_answer="You're welcome.",
+    )
+    graph = await build_eval_graph_for_case(case, redis_client)
+    row = await run_graph_for_case(case, graph=graph, redis_client=redis_client)
+    assert row.response
+    assert row.retrieved_contexts == []
+
+
+@pytest.mark.asyncio
+async def test_product_id_fast_path_skips_tool_trace(redis_client: RedisClient) -> None:
+    case = GoldenCase(
+        id="agent-005-product-id-fastpath",
+        scenario="discovery",
+        user_query="tell me about cake00ka002034",
+        expected_tools=[GET_PRODUCT_TOOL],
+        reference_answer="Product details.",
+    )
+    graph = await build_eval_graph_for_case(case, redis_client)
+    row = await run_graph_for_case(case, graph=graph, redis_client=redis_client)
+    contexts_blob = str(row.retrieved_contexts)
+    assert "Chocolate Birthday Cake" in row.response or GET_PRODUCT_TOOL in contexts_blob
+
+
+def test_assert_expected_tool_usage_raises_on_mismatch() -> None:
+    case = GoldenCase(
+        id="mismatch",
+        scenario="discovery",
+        user_query="cakes",
+        expected_tools=[SEARCH_PRODUCTS_TOOL],
+        reference_answer="Search.",
+    )
+    state = {
+        "tool_trace": [{"name": LIST_CATEGORIES_TOOL, "args": {}, "result": {}}],
+    }
+    with pytest.raises(AssertionError, match="expected tools"):
+        assert_expected_tool_usage(case, state)  # type: ignore[arg-type]
+
+
+def test_tool_names_from_state_prefers_tool_trace() -> None:
+    state = {
+        "tool_trace": [
+            {"name": SEARCH_PRODUCTS_TOOL, "args": {"q": "cakes"}, "result": {}},
+            {"name": CHECK_DELIVERY_TOOL, "args": {"city": "Kandy"}, "result": {}},
+        ],
+        "tool_results": {GET_PRODUCT_TOOL: {"id": "ignored"}},
+    }
+    assert tool_names_from_state(state) == [SEARCH_PRODUCTS_TOOL, CHECK_DELIVERY_TOOL]  # type: ignore[arg-type]
+
+
 @pytest.mark.asyncio
 async def test_run_graph_for_discovery_case(redis_client: RedisClient) -> None:
     case = GoldenCase(
@@ -121,7 +219,7 @@ async def test_run_ragas_eval_meets_context_precision_threshold() -> None:
 async def test_run_full_ragas_eval_on_golden_dataset(redis_client: RedisClient) -> None:
     _ = redis_client
     scores = await run_full_ragas_eval()
-    assert scores.case_count >= 20
+    assert scores.case_count >= 25
     assert scores.context_precision >= DEFAULT_CONTEXT_PRECISION_THRESHOLD
     assert_context_precision_threshold(scores)
 
