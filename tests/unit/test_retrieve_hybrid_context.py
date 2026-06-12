@@ -14,7 +14,6 @@ from graphs.nodes.retrieve_hybrid_context import (
     route_after_analyze_intent,
 )
 from graphs.state import AgentState, Intent
-from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import VECTOR_CONFIDENCE_THRESHOLD
 from lib.neo4j.traverse import TraversalResult
@@ -297,8 +296,8 @@ async def test_fetch_graph_hybrid_context_skips_low_confidence_occasion_hop() ->
 
 
 @pytest.mark.asyncio
-async def test_retrieve_hybrid_context_pruned_graph_flows_to_call_mcp_tools() -> None:
-    """Cross-encoder-pruned hybrid_context merges into state and selects discovery MCP args."""
+async def test_retrieve_hybrid_context_pruned_graph_hints_only_for_planner() -> None:
+    """Hybrid context merges into state as soft hints — discovery MCP args are not auto-built."""
     pruned_graph_context = {
         "hints": {"category": "Flowers"},
         "vector_hits": [
@@ -333,7 +332,5 @@ async def test_retrieve_hybrid_context_pruned_graph_flows_to_call_mcp_tools() ->
     mcp_state: AgentState = {**base_state, **updates}
     selected = select_tool_calls(mcp_state)
 
-    assert len(selected) == 1
-    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
-    assert "category" not in selected[0]["args"]
-    assert selected[0]["args"]["q"] == "something elegant"
+    assert updates["hybrid_context"]["hints"]["category"] == "Flowers"
+    assert selected == []

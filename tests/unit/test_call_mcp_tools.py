@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -18,7 +18,6 @@ from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import (
-    CheckDeliveryOutput,
     GetProductOutput,
     ListCategoriesOutput,
     Money,
@@ -27,7 +26,6 @@ from lib.kapruka.types import (
     SearchProductsOutput,
     TrackOrderOutput,
 )
-from lib.neo4j.hybrid_context import RewrittenSearchQuery
 
 _CLIENT_IP = "203.0.113.42"
 
@@ -63,10 +61,9 @@ _LIST_CATEGORIES_OUTPUT = ListCategoriesOutput(categories=[])
 
 
 @pytest.mark.asyncio
-async def test_call_mcp_tools_discovery_invokes_search_products() -> None:
-    """Discovery intent without explicit tool_calls triggers kapruka_search_products."""
+async def test_call_mcp_tools_discovery_without_product_id_selects_no_tools() -> None:
+    """Discovery catalog turns route through agent_loop — call_mcp_tools stays idle."""
     mock_service = AsyncMock(spec=KaprukaService)
-    mock_service.search_products.return_value = _SEARCH_OUTPUT
 
     state: AgentState = {
         "messages": [HumanMessage(content="birthday cake for mom")],
@@ -80,14 +77,8 @@ async def test_call_mcp_tools_discovery_invokes_search_products() -> None:
         client_ip=_CLIENT_IP,
     )
 
-    mock_service.search_products.assert_awaited_once_with(
-        _CLIENT_IP,
-        q="birthday cake for mom",
-        currency="LKR",
-    )
-    assert result["tool_call_count"] == 1
-    assert SEARCH_PRODUCTS_TOOL in result["tool_results"]
-    assert result["tool_results"][SEARCH_PRODUCTS_TOOL]["results"] == []
+    mock_service.search_products.assert_not_awaited()
+    assert result == {"tool_results": {}}
 
 
 @pytest.mark.asyncio
@@ -165,9 +156,9 @@ async def test_call_mcp_tools_explicit_tool_calls_override_intent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_call_mcp_tools_increments_existing_tool_call_count() -> None:
+async def test_call_mcp_tools_discovery_does_not_increment_tool_call_count() -> None:
+    """Idle discovery path must not bump tool_call_count."""
     mock_service = AsyncMock(spec=KaprukaService)
-    mock_service.search_products.return_value = _SEARCH_OUTPUT
 
     state: AgentState = {
         "messages": [HumanMessage(content="roses bouquet")],
@@ -178,7 +169,8 @@ async def test_call_mcp_tools_increments_existing_tool_call_count() -> None:
 
     result = await call_mcp_tools(state, kapruka_service=mock_service, client_ip=_CLIENT_IP)
 
-    assert result["tool_call_count"] == 3
+    assert result == {"tool_results": {}}
+    assert "tool_call_count" not in result
 
 
 def test_select_tool_calls_discovery_with_product_id_prefers_get_product() -> None:
@@ -251,8 +243,8 @@ def test_select_tool_calls_tracking_extracts_order_number() -> None:
     assert selected[0]["args"]["order_number"] == "VIMP34456CB2"
 
 
-def test_select_tool_calls_applies_category_preference_from_hybrid_context() -> None:
-    """Discovery search should include category hint from Zep preferences."""
+def test_select_tool_calls_discovery_ignores_hybrid_context_category_hints() -> None:
+    """Hybrid context hints are planner-only on discovery — no MCP arg injection."""
     state: AgentState = {
         "messages": [HumanMessage(content="something nice for her")],
         "intent": "discovery",
@@ -262,37 +254,7 @@ def test_select_tool_calls_applies_category_preference_from_hybrid_context() -> 
         },
     }
 
-    selected = select_tool_calls(state)
-
-    assert len(selected) == 1
-    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
-    assert selected[0]["args"]["q"] == "something nice for her"
-    assert selected[0]["args"]["category"] == "Birthday"
-
-
-@pytest.mark.asyncio
-async def test_call_mcp_tools_applies_category_preference_in_search() -> None:
-    mock_service = AsyncMock(spec=KaprukaService)
-    mock_service.search_products.return_value = _SEARCH_OUTPUT
-
-    state: AgentState = {
-        "messages": [HumanMessage(content="something nice for her")],
-        "intent": "discovery",
-        "session_id": "sess-mcp-pref-001",
-        "hybrid_context": {
-            "preferences": {"favorite_category": "Birthday", "currency": "USD"},
-            "hints": {"category": "Birthday", "currency": "USD"},
-        },
-    }
-
-    await call_mcp_tools(state, kapruka_service=mock_service, client_ip=_CLIENT_IP)
-
-    mock_service.search_products.assert_awaited_once_with(
-        _CLIENT_IP,
-        q="something nice for her",
-        currency="USD",
-        category="Birthday",
-    )
+    assert select_tool_calls(state) == []
 
 
 @pytest.mark.asyncio
@@ -371,8 +333,8 @@ async def test_call_mcp_tools_tracking_without_number_clears_stale_tool_results(
     mock_service.track_order.assert_not_awaited()
 
 
-def test_select_tool_calls_graph_birthday_context_sets_category_filter() -> None:
-    """Graph-informed hybrid_context should map top category to MCP search filter."""
+def test_select_tool_calls_discovery_graph_context_does_not_inject_search() -> None:
+    """PRD-049 graph-informed filter injection no longer applies on discovery loop route."""
     state: AgentState = {
         "messages": [HumanMessage(content="cake for mom")],
         "intent": "discovery",
@@ -389,76 +351,7 @@ def test_select_tool_calls_graph_birthday_context_sets_category_filter() -> None
         },
     }
 
-    selected = select_tool_calls(state)
-
-    assert len(selected) == 1
-    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
-    assert selected[0]["args"]["category"] == "Birthday"
-    assert selected[0]["args"]["q"] == "cake for mom"
-    assert " Birthday" not in selected[0]["args"]["q"]
-
-
-@pytest.mark.asyncio
-async def test_call_mcp_tools_graph_birthday_context_invokes_search_with_category() -> None:
-    """Discovery search uses category filter and Gemini rewrite instead of raw concatenation."""
-    mock_service = AsyncMock(spec=KaprukaService)
-    mock_service.search_products.return_value = _SEARCH_OUTPUT
-    mock_genai = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = RewrittenSearchQuery(q="birthday cake for mom")
-    mock_response.text = '{"q": "birthday cake for mom"}'
-    mock_genai.models.generate_content.return_value = mock_response
-
-    state: AgentState = {
-        "messages": [HumanMessage(content="cake for mom")],
-        "intent": "discovery",
-        "session_id": "sess-mcp-graph-049",
-        "hybrid_context": {
-            "hints": {"category": "Birthday", "occasion": "Birthday"},
-            "vector_hits": [
-                {
-                    "id": "category:cakes",
-                    "score": 0.91,
-                    "display_name": "Cakes",
-                },
-            ],
-        },
-    }
-
-    with patch(
-        "lib.neo4j.hybrid_context.select_rewrite_model",
-        return_value="gemini-2.5-flash",
-    ):
-        await call_mcp_tools(
-            state,
-            kapruka_service=mock_service,
-            client_ip=_CLIENT_IP,
-            genai_client=mock_genai,
-        )
-
-    mock_service.search_products.assert_awaited_once_with(
-        _CLIENT_IP,
-        q="birthday cake for mom",
-        currency="LKR",
-        category="Birthday",
-    )
-    mock_genai.models.generate_content.assert_called_once()
-
-
-def test_select_tool_calls_skips_occasion_augment_when_confidence_low() -> None:
-    state: AgentState = {
-        "messages": [HumanMessage(content="something elegant")],
-        "intent": "discovery",
-        "hybrid_context": {
-            "hints": {"category": "Flowers", "occasion": "Wedding"},
-            "vector_hits": [{"id": "category:flowers", "score": 0.4, "display_name": "Flowers"}],
-        },
-    }
-
-    selected = select_tool_calls(state)
-
-    assert selected[0]["args"]["category"] == "Wedding"
-    assert selected[0]["args"]["q"] == "something elegant"
+    assert select_tool_calls(state) == []
 
 
 @pytest.mark.asyncio
@@ -487,14 +380,30 @@ async def test_call_mcp_tools_does_not_merge_prior_turn_tool_results() -> None:
     assert SEARCH_PRODUCTS_TOOL not in result["tool_results"]
 
 
-def test_select_tool_calls_discovery_kandy_delivery_binds_check_delivery() -> None:
-    """Tanglish Kandy delivery query must bind kapruka_check_delivery alongside search."""
+def test_select_tool_calls_discovery_kandy_delivery_defers_to_agent_loop() -> None:
+    """Delivery validation on discovery turns is planner-driven in agent_loop."""
     state: AgentState = {
         "messages": [HumanMessage(content="Machan, can you deliver to Kandy on Sunday?")],
         "intent": "discovery",
         "intent_metadata": {
             "is_situational": False,
             "detected_vernacular": "tanglish",
+            "requires_delivery_validation": True,
+            "target_city": "Kandy",
+        },
+    }
+
+    assert select_tool_calls(state) == []
+
+
+def test_select_tool_calls_discovery_product_id_with_delivery_still_binds_check() -> None:
+    """Product-ID fast-path retains proactive delivery check when metadata requires it."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="cake00ka002034 deliver to Kandy")],
+        "intent": "discovery",
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "en",
             "requires_delivery_validation": True,
             "target_city": "Kandy",
         },
@@ -503,70 +412,10 @@ def test_select_tool_calls_discovery_kandy_delivery_binds_check_delivery() -> No
     selected = select_tool_calls(state)
 
     assert len(selected) == 2
-    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
-    assert selected[0]["args"]["q"] == "Machan, can you deliver on Sunday?"
+    assert selected[0]["name"] == GET_PRODUCT_TOOL
+    assert selected[0]["args"]["product_id"] == "cake00ka002034"
     assert selected[1]["name"] == CHECK_DELIVERY_TOOL
     assert selected[1]["args"] == {"city": "Kandy"}
-
-
-@pytest.mark.asyncio
-async def test_call_mcp_tools_kandy_tanglish_invokes_check_delivery_before_results() -> None:
-    """Discovery with delivery metadata runs search then check_delivery in one MCP turn."""
-    mock_service = AsyncMock(spec=KaprukaService)
-    mock_service.search_products.return_value = _SEARCH_OUTPUT
-    mock_service.check_delivery.return_value = CheckDeliveryOutput(
-        city="Kandy",
-        now="2026-06-10T12:00:00+05:30",
-        checked_date="2026-06-10",
-        available=True,
-        rate=450.0,
-        currency="LKR",
-    )
-
-    state: AgentState = {
-        "messages": [HumanMessage(content="Machan, can you deliver to Kandy on Sunday?")],
-        "intent": "discovery",
-        "session_id": "sess-mcp-kandy-delivery",
-        "intent_metadata": {
-            "is_situational": False,
-            "detected_vernacular": "tanglish",
-            "requires_delivery_validation": True,
-            "target_city": "Kandy",
-        },
-    }
-
-    result = await call_mcp_tools(
-        state,
-        kapruka_service=mock_service,
-        client_ip=_CLIENT_IP,
-    )
-
-    assert mock_service.search_products.await_count == 1
-    assert mock_service.check_delivery.await_count == 1
-    assert mock_service.search_products.await_args_list[0].kwargs["q"].startswith("Machan")
-    mock_service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy")
-    assert result["tool_call_count"] == 2
-    assert SEARCH_PRODUCTS_TOOL in result["tool_results"]
-    assert CHECK_DELIVERY_TOOL in result["tool_results"]
-    assert result["tool_results"][CHECK_DELIVERY_TOOL]["available"] is True
-
-
-def test_select_tool_calls_discovery_without_delivery_metadata_is_search_only() -> None:
-    state: AgentState = {
-        "messages": [HumanMessage(content="birthday cake for mom")],
-        "intent": "discovery",
-        "intent_metadata": {
-            "is_situational": False,
-            "detected_vernacular": "en",
-            "requires_delivery_validation": False,
-            "target_city": None,
-        },
-    }
-
-    selected = select_tool_calls(state)
-
-    assert len(selected) == 1
-    assert selected[0]["name"] == SEARCH_PRODUCTS_TOOL
 
 
 @pytest.mark.asyncio

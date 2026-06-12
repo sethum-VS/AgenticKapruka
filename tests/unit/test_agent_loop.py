@@ -14,6 +14,7 @@ from graphs.nodes.agent_loop import (
     PLANNER_CATEGORY_NODE_LIMIT,
     PLANNER_SEARCH_RESULT_LIMIT,
     AgentPlannerStep,
+    _build_planner_system_instruction,
     agent_loop,
     build_planner_prior_iterations,
     format_planner_prior_iterations,
@@ -399,3 +400,21 @@ async def test_agent_loop_planner_uses_flash_model_only() -> None:
 async def test_agent_loop_requires_kapruka_service() -> None:
     with pytest.raises(ValueError, match="kapruka_service is required"):
         await agent_loop(_base_state())
+
+
+def test_planner_system_instruction_includes_hybrid_soft_hints_only() -> None:
+    """Hybrid context hints and preferences appear as narrative soft hints for the planner."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="cake for mom")],
+        "hybrid_context": {
+            "hints": {"category": "Birthday", "occasion": "Birthday"},
+            "preferences": {"favorite_category": "Birthday", "currency": "USD"},
+        },
+    }
+
+    instruction = _build_planner_system_instruction(state, tool_trace=[])
+
+    assert "Hybrid context (soft hints only" in instruction
+    assert '"category": "Birthday"' in instruction
+    assert '"favorite_category": "Birthday"' in instruction
+    assert "build_discovery_search_args" not in instruction

@@ -74,7 +74,6 @@ def build_shopping_graph(
             state,
             kapruka_service=kapruka_service,
             client_ip=client_ip,
-            genai_client=genai_client,
         )
 
     async def _agent_loop(state: AgentState) -> dict[str, Any]:

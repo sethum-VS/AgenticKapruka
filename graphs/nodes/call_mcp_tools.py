@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from google import genai
-
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.checkout.tracking import extract_order_number
@@ -16,15 +14,8 @@ from lib.kapruka.tool_executor import SUPPORTED_TOOL_NAMES, inject_currency, inv
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
-from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
-from lib.neo4j.hybrid_context import (
-    build_discovery_delivery_args,
-    build_discovery_search_args,
-    get_discovery_occasion_hint,
-    occasion_rewrite_needed,
-    rewrite_search_query_with_occasion,
-)
+from lib.neo4j.hybrid_context import build_discovery_delivery_args
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +48,11 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
 
     intent = state.get("intent")
     user_message = _extract_latest_user_message(state.get("messages") or []).strip()
-    hybrid_context = state.get("hybrid_context") or {}
     currency = _resolve_currency(state)
 
     if intent == "discovery":
+        # Discovery catalog turns route through agent_loop (PRD-107/108). Only the
+        # product-ID fast-path and explicit tool_calls reach this node.
         intent_metadata = state.get("intent_metadata")
         product_id = extract_product_id(user_message)
         if product_id:
@@ -68,23 +60,6 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
                 {
                     "name": GET_PRODUCT_TOOL,
                     "args": {"product_id": product_id, "currency": currency},
-                },
-            ]
-            delivery_args = build_discovery_delivery_args(intent_metadata)
-            if delivery_args:
-                calls.append({"name": CHECK_DELIVERY_TOOL, "args": delivery_args})
-            return calls
-        if len(user_message) >= 3:
-            search_args = build_discovery_search_args(
-                user_message,
-                hybrid_context,
-                currency=currency,
-                intent_metadata=state.get("intent_metadata"),
-            )
-            calls = [
-                {
-                    "name": SEARCH_PRODUCTS_TOOL,
-                    "args": search_args,
                 },
             ]
             delivery_args = build_discovery_delivery_args(intent_metadata)
@@ -113,35 +88,11 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
     return []
 
 
-async def _maybe_rewrite_discovery_query(
-    state: AgentState,
-    args: dict[str, Any],
-    *,
-    genai_client: genai.Client | None = None,
-) -> dict[str, Any]:
-    """Apply Gemini occasion rewrite to discovery search q when graph hints require it."""
-    user_query = str(args.get("q") or "").strip()
-    if not user_query:
-        return args
-
-    occasion = get_discovery_occasion_hint(state.get("hybrid_context"))
-    if not occasion or not occasion_rewrite_needed(user_query, occasion):
-        return args
-
-    rewritten = await rewrite_search_query_with_occasion(
-        user_query,
-        occasion,
-        genai_client=genai_client,
-    )
-    return {**args, "q": rewritten}
-
-
 async def call_mcp_tools(
     state: AgentState,
     *,
     kapruka_service: KaprukaService | None = None,
     client_ip: str | None = None,
-    genai_client: genai.Client | None = None,
 ) -> dict[str, Any]:
     """LangGraph node: invoke Kapruka MCP tools and accumulate tool_results."""
     if kapruka_service is None:
@@ -162,12 +113,6 @@ async def call_mcp_tools(
     for call in selected:
         name = call["name"]
         args = inject_currency(name, dict(call.get("args") or {}), currency)
-        if name == SEARCH_PRODUCTS_TOOL:
-            args = await _maybe_rewrite_discovery_query(
-                state,
-                args,
-                genai_client=genai_client,
-            )
         logger.info("call_mcp_tools: invoking %s", name)
         tool_results[name] = await invoke_tool(
             name,
