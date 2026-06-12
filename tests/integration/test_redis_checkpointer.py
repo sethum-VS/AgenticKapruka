@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import fakeredis.aioredis
 import pytest
+from google.genai import types
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from langgraph.checkpoint.redis.key_registry import AsyncCheckpointKeyRegistry
 from tests.helpers.mock_genai import build_mock_genai_client
 
+from graphs.nodes.agent_loop import AgentPlannerStep
+from graphs.nodes.analyze_intent import IntentClassification
+from graphs.nodes.generate_response import AssistantReply
 from graphs.shopping_graph import (
     ShoppingGraphDeps,
     append_message_state,
@@ -20,7 +25,13 @@ from graphs.shopping_graph import (
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
-from lib.kapruka.types import SearchProductsOutput, TrackOrderOutput
+from lib.kapruka.types import (
+    CategoryRef,
+    Money,
+    ProductResult,
+    SearchProductsOutput,
+    TrackOrderOutput,
+)
 from lib.redis.checkpointer import get_checkpointer
 from lib.redis.client import RedisClient
 
@@ -116,11 +127,10 @@ async def test_state_persists_across_two_invocations_same_thread_id(
     assert SEARCH_PRODUCTS_TOOL in (first.get("tool_results") or {})
 
     second = await graph.ainvoke(append_message_state("something with chocolate"), config)
-    assert second["tool_call_count"] == 2
     assert len(second["messages"]) == 2
+    assert second.get("agent_clarifying_question") is None
 
     snapshot = await graph.aget_state(config)
-    assert snapshot.values["tool_call_count"] == 2
     assert len(snapshot.values["messages"]) == 2
 
 
@@ -165,7 +175,7 @@ async def test_tracking_turn_clears_stale_tool_results_from_prior_discovery(
     second_results = second.get("tool_results") or {}
     assert TRACK_ORDER_TOOL in second_results
     assert SEARCH_PRODUCTS_TOOL not in second_results
-    assert mock_client.models.generate_content.call_count == 5
+    mock_service.track_order.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -183,4 +193,132 @@ async def test_different_thread_ids_have_isolated_state(
         initial_shopping_state(message="second thread", session_id=_SESSION_ID),
         {"configurable": {"thread_id": "thread-b"}},
     )
-    assert result_b["tool_call_count"] == 1
+    snap_a = await graph.aget_state({"configurable": {"thread_id": "thread-a"}})
+    snap_b = await graph.aget_state({"configurable": {"thread_id": "thread-b"}})
+    assert snap_a.values["messages"][0].content == "first thread"
+    assert snap_b.values["messages"][0].content == "second thread"
+    assert result_b["messages"][0].content == "second thread"
+
+
+_CAKE_PRODUCT = ProductResult(
+    id="cake00ka002034",
+    name="Chocolate Birthday Cake",
+    summary="Rich chocolate layers.",
+    price=Money(amount=4500.0, currency="LKR"),
+    compare_at_price=None,
+    in_stock=True,
+    stock_level="high",
+    image_url="https://example.com/cake.jpg",
+    category=CategoryRef(id="cat_cakes", name="Birthday", slug="birthday"),
+    rating=None,
+    ships_internationally=False,
+    url="https://www.kapruka.com/cake",
+)
+
+
+def _ask_then_cakes_mock_genai() -> MagicMock:
+    """Planner: turn 1 ask_user after empty gifts search; turn 2 search cakes + finish."""
+    mock_client = MagicMock()
+    planner_calls = 0
+
+    def generate_content(
+        *,
+        model: str,
+        contents: str,
+        config: types.GenerateContentConfig | None = None,
+        **kwargs: Any,
+    ) -> MagicMock:
+        nonlocal planner_calls
+        _ = model, kwargs
+        response = MagicMock()
+        if config is not None and config.response_schema is IntentClassification:
+            response.parsed = IntentClassification(intent="discovery")
+            response.text = json.dumps({"intent": "discovery"})
+            return response
+
+        if config is not None and config.response_schema is AgentPlannerStep:
+            planner_calls += 1
+            if planner_calls == 1:
+                step = AgentPlannerStep(
+                    action="call_tool",
+                    tool_name=SEARCH_PRODUCTS_TOOL,
+                    tool_args={"q": "gifts"},
+                    refined_intent="discovery",
+                    rationale="search gifts",
+                )
+            elif planner_calls == 2:
+                step = AgentPlannerStep(
+                    action="ask_user",
+                    rationale="The previous search for 'gifts' returned no products.",
+                    refined_intent="discovery",
+                )
+            elif planner_calls == 3:
+                step = AgentPlannerStep(
+                    action="call_tool",
+                    tool_name=SEARCH_PRODUCTS_TOOL,
+                    tool_args={"q": "cakes"},
+                    refined_intent="discovery",
+                    rationale="search cakes",
+                )
+            else:
+                step = AgentPlannerStep(action="finish", rationale="done")
+            response.parsed = step
+            response.text = step.model_dump_json()
+            return response
+
+        if config is not None and config.response_schema is AssistantReply:
+            response.parsed = AssistantReply(message="Here are some cakes from Kapruka.")
+            response.text = json.dumps({"message": "Here are some cakes from Kapruka."})
+            return response
+
+        response.parsed = IntentClassification(intent="discovery")
+        response.text = json.dumps({"intent": "discovery"})
+        return response
+
+    mock_client.models.generate_content.side_effect = generate_content
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_cakes_after_ask_user_renders_carousel_not_stale_clarifying(
+    checkpointer: AsyncRedisSaver,
+) -> None:
+    """Regression: stale agent_clarifying_question must not mask cakes search results."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.side_effect = [
+        SearchProductsOutput(
+            results=[],
+            next_cursor=None,
+            applied_filters={"q": "gifts", "limit": 10, "in_stock_only": False},
+        ),
+        SearchProductsOutput(
+            results=[_CAKE_PRODUCT],
+            next_cursor=None,
+            applied_filters={"q": "cakes", "limit": 10, "in_stock_only": False},
+        ),
+    ]
+
+    deps = ShoppingGraphDeps(
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        genai_client=_ask_then_cakes_mock_genai(),
+    )
+    graph = build_shopping_graph(checkpointer=checkpointer, deps=deps)
+    config: dict[str, Any] = {"configurable": {"thread_id": "thread-cakes-regression"}}
+
+    first = await graph.ainvoke(
+        initial_shopping_state(
+            message="show me gifts",
+            session_id=_SESSION_ID,
+            thread_id="thread-cakes-regression",
+        ),
+        config,
+    )
+    assert first.get("agent_loop_exit_reason") == "ask_user"
+    assert first.get("agent_clarifying_question")
+
+    second = await graph.ainvoke(append_message_state("cakes"), config)
+    html = second.get("response_html") or ""
+    assert 'data-testid="product-carousel"' in html
+    assert 'data-product-id="cake00ka002034"' in html
+    assert "previous search for 'gifts'" not in (second.get("assistant_message") or "").lower()

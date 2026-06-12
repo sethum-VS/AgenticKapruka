@@ -41,6 +41,8 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
         "tool_call_count",
         "tool_trace",
         "agent_loop_done",
+        "agent_loop_exit_reason",
+        "agent_loop_iterations",
         "agent_clarifying_question",
         "model_tier",
         "session_id",

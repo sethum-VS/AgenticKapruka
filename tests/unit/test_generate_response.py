@@ -511,6 +511,7 @@ async def test_generate_response_clarifying_question_skips_gemini() -> None:
         "messages": [HumanMessage(content="send flowers to my aunt")],
         "intent": "discovery",
         "agent_clarifying_question": "Which city should we deliver to?",
+        "agent_loop_exit_reason": "ask_user",
         "tool_trace": [
             {
                 "name": SEARCH_PRODUCTS_TOOL,
@@ -527,6 +528,52 @@ async def test_generate_response_clarifying_question_skips_gemini() -> None:
     assert "Which city should we deliver to?" in result["response_html"]
     assert 'data-testid="product-carousel"' not in result["response_html"]
     mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_ignores_stale_clarifying_question_on_finish() -> None:
+    """Stale ask_user clarifying text must not mask fresh search products on finish."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(message="Here are some cakes from Kapruka.")
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": SEARCH_PRODUCTS_TOOL,
+            "args": {"q": "cakes"},
+            "result": {
+                "results": [_product("cake00ka002034", "Chocolate Birthday Cake")],
+            },
+        },
+        {
+            "name": SEARCH_PRODUCTS_TOOL,
+            "args": {"q": "edible cakes"},
+            "result": {
+                "results": [_product("cake00ka002099", "Vanilla Celebration Cake")],
+            },
+        },
+    ]
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="cakes")],
+        "intent": "discovery",
+        "agent_clarifying_question": "The previous search for 'gifts' returned no products.",
+        "agent_loop_exit_reason": "finish",
+        "agent_loop_done": True,
+        "tool_trace": tool_trace,
+        "session_id": "sess-gen-stale-clarify",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    html = result["response_html"]
+    assert "The previous search for 'gifts'" not in result["assistant_message"]
+    assert 'data-testid="product-carousel"' in html
+    assert 'data-product-id="cake00ka002034"' in html
+    assert 'data-product-id="cake00ka002099"' in html
+    mock_client.models.generate_content.assert_called_once()
 
 
 @pytest.mark.asyncio

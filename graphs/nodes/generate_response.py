@@ -353,7 +353,11 @@ async def generate_response(
         }
 
     clarifying_question = state.get("agent_clarifying_question")
-    if isinstance(clarifying_question, str) and clarifying_question.strip():
+    if (
+        state.get("agent_loop_exit_reason") == "ask_user"
+        and isinstance(clarifying_question, str)
+        and clarifying_question.strip()
+    ):
         question = clarifying_question.strip()
         return {
             "response_html": render_assistant_html(question),

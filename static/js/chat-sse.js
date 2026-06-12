@@ -131,12 +131,26 @@
 
   function toggleRequestState(form, active) {
     const indicator = document.getElementById("chat-loading");
+    const submitButton = form.querySelector('button[type="submit"]');
+    const messageInput = form.querySelector("#chat-message");
     if (active) {
       form.classList.add("htmx-request");
       indicator?.classList.add("htmx-request");
+      if (submitButton) {
+        submitButton.disabled = true;
+      }
+      if (messageInput) {
+        messageInput.readOnly = true;
+      }
     } else {
       form.classList.remove("htmx-request");
       indicator?.classList.remove("htmx-request");
+      if (submitButton) {
+        submitButton.disabled = false;
+      }
+      if (messageInput) {
+        messageInput.readOnly = false;
+      }
     }
   }
 
@@ -157,8 +171,6 @@
       path: connectPath,
       message: outboundMessage,
     });
-
-    toggleRequestState(form, true);
 
     try {
       const response = await fetch(connectPath, {
@@ -253,6 +265,10 @@
       }
 
       event.preventDefault();
+      if (form.classList.contains("htmx-request")) {
+        return;
+      }
+      toggleRequestState(form, true);
       void streamChatPost(form).catch((error) => {
         console.error("chat SSE stream failed", error);
       });

@@ -22,3 +22,5 @@ def test_chat_sse_js_wires_post_stream_bridge() -> None:
     assert 'HX-Request": "true"' in source
     assert "htmx:afterSwap" in source
     assert "htmx:afterRequest" in source
+    assert 'form.classList.contains("htmx-request")' in source
+    assert "submitButton.disabled = true" in source

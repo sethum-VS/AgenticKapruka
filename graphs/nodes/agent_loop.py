@@ -19,7 +19,7 @@ from graphs.state import AgentState, Intent, ToolInvocation
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
-from lib.kapruka.tool_executor import inject_currency, invoke_tool
+from lib.kapruka.tool_executor import canonical_tool_args_for_dedup, inject_currency, invoke_tool
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -67,7 +67,7 @@ Return structured JSON with:
 - rationale: brief trace note for debugging (not shown to the customer)
 
 Allowed tools only:
-- kapruka_search_products
+- kapruka_search_products (tool_args must include string field q, not query)
 - kapruka_get_product
 - kapruka_list_categories
 - kapruka_check_delivery
@@ -384,8 +384,10 @@ def _is_duplicate_invocation(
     tool_args: dict[str, Any],
 ) -> bool:
     """Return True when the same tool+args already appear in the trace."""
+    candidate = canonical_tool_args_for_dedup(tool_name, tool_args)
     for invocation in tool_trace:
-        if invocation["name"] == tool_name and _args_equal(invocation["args"], tool_args):
+        prior = canonical_tool_args_for_dedup(invocation["name"], invocation["args"])
+        if invocation["name"] == tool_name and _args_equal(prior, candidate):
             return True
     return False
 
@@ -405,8 +407,8 @@ async def agent_loop(
     rate_limit_key = client_ip or state.get("session_id") or "127.0.0.1"
     currency = _resolve_currency(state)
 
-    tool_trace: list[ToolInvocation] = list(state.get("tool_trace") or [])
-    tool_call_count = state.get("tool_call_count") or 0
+    tool_trace: list[ToolInvocation] = []
+    tool_call_count = 0
     agent_clarifying_question: str | None = None
     agent_loop_done = False
     force_finish = False
