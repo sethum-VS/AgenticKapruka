@@ -236,8 +236,41 @@ async def test_agent_loop_finish_sets_done() -> None:
 
     assert result["agent_loop_done"] is True
     assert result.get("agent_clarifying_question") is None
+    assert result["agent_loop_exit_reason"] == "finish"
     assert result["tool_trace"] == []
     mock_service.search_products.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_finish_after_successful_tool_call() -> None:
+    """Finish directive after a successful search stores trace and exits with finish reason."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "birthday cake"},
+            rationale="search catalog",
+        ),
+        AgentPlannerStep(action="finish", rationale="products found"),
+    ]
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert len(result["tool_trace"]) == 1
+    assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
+    assert result["tool_call_count"] == 1
+    mock_service.search_products.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -260,6 +293,7 @@ async def test_agent_loop_ask_user_sets_clarifying_question_and_exits() -> None:
         )
 
     assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "ask_user"
     assert result["agent_clarifying_question"] == "Which city should we deliver to?"
     assert result["tool_trace"] == []
     mock_service.search_products.assert_not_called()
@@ -290,6 +324,7 @@ async def test_agent_loop_iteration_cap_limits_tool_calls() -> None:
         )
 
     assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "max_iterations"
     assert len(result["tool_trace"]) == MAX_ITERATIONS
     assert result["tool_call_count"] == MAX_ITERATIONS
     assert mock_service.search_products.call_count == MAX_ITERATIONS
@@ -332,6 +367,7 @@ async def test_agent_loop_duplicate_tool_guard_forces_finish() -> None:
         )
 
     assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "duplicate_guard"
     assert len(result["tool_trace"]) == 1
     assert result["tool_trace"][0]["args"] == search_args
     assert mock_service.search_products.call_count == 1
