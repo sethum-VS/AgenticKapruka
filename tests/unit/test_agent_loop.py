@@ -29,7 +29,7 @@ from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
-from lib.kapruka.types import SearchProductsOutput
+from lib.kapruka.types import CategoryRef, Money, ProductResult, SearchProductsOutput
 
 _CLIENT_IP = "203.0.113.99"
 
@@ -403,6 +403,71 @@ async def test_agent_loop_duplicate_tool_guard_forces_finish() -> None:
     assert len(result["tool_trace"]) == 1
     assert result["tool_trace"][0]["args"] == search_args
     assert mock_service.search_products.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_search_success_guard_forces_finish() -> None:
+    """Successful search with products forces finish without another planner tool call."""
+    mock_service = _mock_kapruka_service()
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[
+            ProductResult(
+                id="cake001",
+                name="Chocolate Cake",
+                summary="Rich chocolate layers.",
+                price=Money(amount=4500.0, currency="LKR"),
+                compare_at_price=None,
+                in_stock=True,
+                stock_level="high",
+                image_url="https://example.com/cake.jpg",
+                category=CategoryRef(id="cat_cakes", name="Birthday", slug="birthday"),
+                rating=None,
+                ships_internationally=False,
+                url="https://www.kapruka.com/cake",
+            )
+        ],
+        next_cursor=None,
+        applied_filters={"q": "birthday cake", "limit": 10, "in_stock_only": False},
+    )
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "birthday cake"},
+            rationale="search catalog",
+        ),
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=LIST_CATEGORIES_TOOL,
+            tool_args={"depth": 1},
+            rationale="should not run — search already succeeded",
+        ),
+    ]
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ) as mock_plan:
+        result = await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert len(result["tool_trace"]) == 1
+    assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
+    assert mock_plan.call_count == 1
+    mock_service.list_categories.assert_not_called()
+
+
+def test_planner_user_prompt_includes_broad_gifts_ask_user_hint() -> None:
+    """Vague gifts-only queries include ask_user bias in planner user prompt."""
+    state: AgentState = {"messages": [HumanMessage(content="show me some gifts")]}
+    prompt = _build_planner_user_prompt(state)
+    assert "ask_user" in prompt.lower()
+    assert "gifts" in prompt.lower()
 
 
 @pytest.mark.asyncio

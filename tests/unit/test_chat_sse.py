@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -144,6 +144,40 @@ async def test_iter_chat_sse_events_yields_user_then_assistant_chunks() -> None:
     assert "Hello from Kapruka assistant." in events[-1]
     assert 'aria-label="Assistant message"' in events[-1]
     assert 'hx-swap-oob="delete"' in events[-1]
+
+
+@pytest.mark.asyncio
+async def test_iter_chat_sse_events_yields_timeout_partial_on_wall_clock_exceed() -> None:
+    """Per-turn wall-clock guard yields graceful timeout copy when astream stalls."""
+    mock_graph = MagicMock()
+
+    async def slow_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        import asyncio
+
+        await asyncio.sleep(0.05)
+        if False:
+            yield ("updates", {})
+
+    mock_graph.astream = slow_astream
+
+    collected: list[str] = []
+    with patch("lib.chat.streaming.CHAT_TURN_TIMEOUT_SECONDS", 0.01):
+        async for event in iter_chat_sse_events(
+            graph=mock_graph,
+            state={},
+            config={"configurable": {"thread_id": "t-timeout"}},
+            user_html="<p>user</p>",
+            stream_id="timeout1",
+        ):
+            collected.append(event)
+
+    assert collected
+    assert any("longer than expected" in event for event in collected)
+    assert sum("longer than expected" in event for event in collected) == 1
 
 
 @pytest.mark.asyncio

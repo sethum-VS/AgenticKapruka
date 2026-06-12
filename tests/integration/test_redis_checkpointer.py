@@ -257,7 +257,7 @@ _CAKE_PRODUCT = ProductResult(
 
 
 def _ask_then_cakes_mock_genai() -> MagicMock:
-    """Planner: turn 1 ask_user after empty gifts search; turn 2 search cakes + finish."""
+    """Planner: turn 1 ask_user on vague gifts; turn 2 search cakes + finish."""
     mock_client = MagicMock()
     planner_calls = 0
 
@@ -280,19 +280,11 @@ def _ask_then_cakes_mock_genai() -> MagicMock:
             planner_calls += 1
             if planner_calls == 1:
                 step = AgentPlannerStep(
-                    action="call_tool",
-                    tool_name=SEARCH_PRODUCTS_TOOL,
-                    tool_args={"q": "gifts"},
+                    action="ask_user",
+                    rationale="Who is the gift for or what occasion?",
                     refined_intent="discovery",
-                    rationale="search gifts",
                 )
             elif planner_calls == 2:
-                step = AgentPlannerStep(
-                    action="ask_user",
-                    rationale="The previous search for 'gifts' returned no products.",
-                    refined_intent="discovery",
-                )
-            elif planner_calls == 3:
                 step = AgentPlannerStep(
                     action="call_tool",
                     tool_name=SEARCH_PRODUCTS_TOOL,
@@ -325,18 +317,11 @@ async def test_cakes_after_ask_user_renders_carousel_not_stale_clarifying(
 ) -> None:
     """Regression: stale agent_clarifying_question must not mask cakes search results."""
     mock_service = AsyncMock(spec=KaprukaService)
-    mock_service.search_products.side_effect = [
-        SearchProductsOutput(
-            results=[],
-            next_cursor=None,
-            applied_filters={"q": "gifts", "limit": 10, "in_stock_only": False},
-        ),
-        SearchProductsOutput(
-            results=[_CAKE_PRODUCT],
-            next_cursor=None,
-            applied_filters={"q": "cakes", "limit": 10, "in_stock_only": False},
-        ),
-    ]
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[_CAKE_PRODUCT],
+        next_cursor=None,
+        applied_filters={"q": "cakes", "limit": 10, "in_stock_only": False},
+    )
 
     deps = ShoppingGraphDeps(
         kapruka_service=mock_service,

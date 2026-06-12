@@ -7,6 +7,15 @@ Usage:
   python scripts/verify_chat_loop.py [--base-url http://localhost:8080]
 
 Sends diverse prompts in one session and reports pass/fail per scenario.
+
+Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
+  greeting            ~2–5s   static welcome, no carousel
+  broad_gifts         ~3–8s   clarifying question (ask_user), no carousel
+  cakes_after_clarify ~8–20s  product carousel after prior clarify turn
+  category_flowers    ~8–20s  product carousel
+  specific_product    ~8–20s  product carousel
+  tracking_order      ~5–15s  order-tracking-status card, no carousel
+  delivery_colombo    ~8–25s  delivery confirmation or clarifying date, no carousel
 """
 
 from __future__ import annotations
@@ -30,6 +39,8 @@ class TurnScenario:
     message: str
     expect_carousel: bool
     expect_clarifying: bool = False
+    expect_tracking: bool = False
+    expect_delivery: bool = False
     forbidden_substrings: tuple[str, ...] = ()
 
 
@@ -44,6 +55,7 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         message="show me some gifts",
         expect_carousel=False,
         expect_clarifying=True,
+        forbidden_substrings=("couldn't find products",),
     ),
     TurnScenario(
         name="cakes_after_clarify",
@@ -57,19 +69,21 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         expect_carousel=True,
     ),
     TurnScenario(
-        name="planning_task",
-        message="help me plan a surprise anniversary dinner gift under 10000 LKR",
-        expect_carousel=False,
-    ),
-    TurnScenario(
         name="specific_product",
         message="chocolate birthday cake",
         expect_carousel=True,
     ),
     TurnScenario(
-        name="assistance_request",
-        message="what delivery cities do you support?",
+        name="tracking_order",
+        message="Track order VIMP34456CB2",
         expect_carousel=False,
+        expect_tracking=True,
+    ),
+    TurnScenario(
+        name="delivery_colombo",
+        message="can you deliver flowers to Colombo next Saturday?",
+        expect_carousel=False,
+        expect_delivery=True,
     ),
 )
 
@@ -89,7 +103,7 @@ def _post_chat(
     base_url: str,
     message: str,
     cookie_header: str | None,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, float]:
     url = f"{base_url.rstrip('/')}/chat/stream"
     data = parse.urlencode({"message": message}).encode()
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -97,11 +111,12 @@ def _post_chat(
         headers["Cookie"] = cookie_header
 
     req = request.Request(url, data=data, headers=headers, method="POST")
+    started = time.monotonic()
     try:
         with request.urlopen(req, timeout=SSE_TIMEOUT_S) as resp:
             body = resp.read().decode("utf-8", errors="replace")
             set_cookie = resp.headers.get("Set-Cookie")
-            return body, set_cookie
+            return body, set_cookie, time.monotonic() - started
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         msg = f"HTTP {exc.code} for {message!r}: {detail[:500]}"
@@ -124,6 +139,7 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
     failures: list[str] = []
     lower = html.lower()
     has_carousel = 'data-testid="product-carousel"' in html
+    has_tracking = 'data-testid="order-tracking-status"' in html
 
     if scenario.expect_carousel and not has_carousel:
         failures.append("expected product carousel, none found")
@@ -131,9 +147,33 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
         failures.append("unexpected product carousel")
 
     if scenario.expect_clarifying:
-        clarifying_markers = ("?", "more detail", "narrow", "which", "what kind")
+        clarifying_markers = (
+            "?",
+            "more detail",
+            "narrow",
+            "which",
+            "what kind",
+            "who",
+            "occasion",
+            "recipient",
+        )
         if not any(marker in lower for marker in clarifying_markers):
             failures.append("expected clarifying follow-up text")
+
+    if scenario.expect_tracking and not has_tracking:
+        failures.append("expected order tracking status card")
+
+    if scenario.expect_delivery:
+        delivery_markers = (
+            "deliver",
+            "delivery",
+            "colombo",
+            "saturday",
+            "when would you like",
+            "delivery date",
+        )
+        if not any(marker in lower for marker in delivery_markers):
+            failures.append("expected delivery-related response text")
 
     for forbidden in scenario.forbidden_substrings:
         if forbidden.lower() in lower:
@@ -157,7 +197,7 @@ def run_loop(base_url: str) -> int:
     for index, scenario in enumerate(SCENARIOS, start=1):
         print(f"[{index}/{len(SCENARIOS)}] {scenario.name}: {scenario.message!r}")
         try:
-            body, set_cookie = _post_chat(base_url, scenario.message, cookie_header)
+            body, set_cookie, elapsed_s = _post_chat(base_url, scenario.message, cookie_header)
         except RuntimeError as exc:
             print(f"  FAIL — {exc}")
             failed += 1
@@ -178,7 +218,11 @@ def run_loop(base_url: str) -> int:
         else:
             passed += 1
             carousel = 'data-testid="product-carousel"' in html
-            print(f"  PASS — carousel={'yes' if carousel else 'no'}")
+            tracking = 'data-testid="order-tracking-status"' in html
+            print(
+                f"  PASS — {elapsed_s:.1f}s carousel={'yes' if carousel else 'no'}"
+                f" tracking={'yes' if tracking else 'no'}"
+            )
 
         time.sleep(TURN_PAUSE_S)
 

@@ -39,7 +39,7 @@ from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 4
+MAX_ITERATIONS = 3
 PLANNER_MODEL = FLASH_MODEL
 
 ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
@@ -89,6 +89,10 @@ Never call kapruka_track_order.
 Finish rule: If products matching the user's core request have been retrieved,
 action MUST be finish. Do not run auxiliary category browsing or extra searches
 unless the user explicitly requested them.
+
+Broad gifts example: Customer says "show me gifts" or "some gifts" with no
+occasion or recipient named → action MUST be ask_user to learn who the gift is
+for or what occasion before running kapruka_search_products.
 
 Prior session facts (Zep) are conversational context only — not catalog truth.
 Hybrid context hints and preferences are soft hints; the explicit user message
@@ -288,6 +292,38 @@ _MOM_BIRTHDAY = re.compile(
     r"\b(?:mom|mother|mum|amma)\b.*\bbirthday\b|\bbirthday\b.*\b(?:mom|mother|mum|amma)\b",
     re.I,
 )
+_BROAD_GIFTS = re.compile(
+    r"^(?:show me )?(?:some )?gifts?\s*[!.?]*$",
+    re.I,
+)
+
+
+def _search_has_products(result: Any) -> bool:
+    """Return True when a search_products MCP payload includes at least one hit."""
+    if not isinstance(result, dict) or "error" in result:
+        return False
+    raw_results = result.get("results")
+    if not isinstance(raw_results, list):
+        return False
+    return bool(raw_results)
+
+
+def _should_force_finish_after_search(
+    state: AgentState,
+    tool_trace: list[ToolInvocation],
+) -> bool:
+    """Return True when a successful search should end the loop on the next iteration."""
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    pending_delivery = intent_metadata.get("requires_delivery_validation") or bool(
+        intent_metadata.get("target_city")
+    )
+    if pending_delivery:
+        already_checked = any(
+            invocation["name"] == CHECK_DELIVERY_TOOL for invocation in tool_trace
+        )
+        if not already_checked:
+            return False
+    return True
 
 
 def _format_planner_query_rewrite_hints(user_message: str) -> str:
@@ -302,6 +338,11 @@ def _format_planner_query_rewrite_hints(user_message: str) -> str:
         hints.append(
             "Mom/mother + birthday occasion: bias search q toward birthday cakes, flowers, "
             "or combopack/combo gifts unless the customer specified another product type."
+        )
+    if _BROAD_GIFTS.match(user_message.strip()):
+        hints.append(
+            'Vague "gifts" query with no occasion or recipient: prefer action ask_user '
+            "before kapruka_search_products."
         )
     if not hints:
         return ""
@@ -459,6 +500,7 @@ async def agent_loop(
     agent_tool_error: dict[str, str] | None = None
     agent_loop_done = False
     force_finish = False
+    force_finish_reason: str | None = None
     exit_reason: str | None = None
     planner_iterations = 0
     refined_intent: Intent | None = None
@@ -468,10 +510,11 @@ async def agent_loop(
     for iteration in range(MAX_ITERATIONS):
         if force_finish:
             logger.debug(
-                "agent_loop: duplicate-tool guard forcing finish at iteration %s",
+                "agent_loop: %s forcing finish at iteration %s",
+                force_finish_reason or "duplicate_guard",
                 iteration,
             )
-            exit_reason = "duplicate_guard"
+            exit_reason = force_finish_reason or "duplicate_guard"
             agent_loop_done = True
             break
 
@@ -538,6 +581,7 @@ async def agent_loop(
                 tool_name,
             )
             force_finish = True
+            force_finish_reason = "duplicate_guard"
             continue
 
         if tool_name == CHECK_DELIVERY_TOOL:
@@ -587,6 +631,17 @@ async def agent_loop(
                 result.get("error"),
             )
             break
+
+        if (
+            tool_name == SEARCH_PRODUCTS_TOOL
+            and _search_has_products(result)
+            and _should_force_finish_after_search(state, tool_trace)
+        ):
+            logger.debug(
+                "agent_loop: search returned products; forcing finish next iteration",
+            )
+            force_finish = True
+            force_finish_reason = "finish"
 
     if not agent_loop_done:
         logger.debug("agent_loop: reached max iterations (%s); finishing", MAX_ITERATIONS)
