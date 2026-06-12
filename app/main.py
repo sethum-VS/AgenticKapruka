@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.lifespan import lifespan
 from app.middleware.errors import register_exception_handlers
-from app.routes import cart, chat, checkout, dev, health, partials, session
+from app.routes import cart, chat, checkout, health, partials, session
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -30,7 +31,10 @@ def create_app() -> FastAPI:
     app.include_router(checkout.router, prefix="/checkout", tags=["checkout"])
     app.include_router(partials.router, prefix="/partials", tags=["partials"])
     app.include_router(session.router, prefix="/session", tags=["session"])
-    app.include_router(dev.router, prefix="/dev", tags=["dev"])
+    if os.getenv("APP_ENV", "development").lower() != "production":
+        from app.routes import dev
+
+        app.include_router(dev.router, prefix="/dev", tags=["dev"])
 
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
