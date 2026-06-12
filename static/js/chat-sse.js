@@ -154,6 +154,22 @@
     }
   }
 
+  function removePendingAssistantBubbles() {
+    for (const el of document.querySelectorAll('[id^="assistant-stream-"]')) {
+      el.remove();
+    }
+  }
+
+  function registerAfterRequestBackup() {
+    document.addEventListener("htmx:afterRequest", (event) => {
+      const elt = event.detail?.elt;
+      if (!elt || elt.id !== CHAT_FORM_ID) {
+        return;
+      }
+      toggleRequestState(elt, false);
+    });
+  }
+
   async function streamChatPost(form) {
     const listener = findSseListener(form);
     if (!listener) {
@@ -242,6 +258,7 @@
       );
       form.reset();
     } catch (error) {
+      removePendingAssistantBubbles();
       chatDebugLog(form, "stream failed", error);
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {
@@ -255,6 +272,7 @@
   }
 
   initChatForm();
+  registerAfterRequestBackup();
 
   document.addEventListener(
     "submit",
