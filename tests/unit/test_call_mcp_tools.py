@@ -565,3 +565,10 @@ def test_canonical_tool_args_for_dedup_ignores_currency() -> None:
     left = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"q": "cakes", "currency": "LKR"})
     right = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"q": "cakes"})
     assert left == right
+
+
+def test_canonical_tool_args_for_dedup_normalizes_query_alias() -> None:
+    """Planner query alias must dedupe identically to canonical q."""
+    left = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"q": "cakes"})
+    right = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"query": "cakes"})
+    assert left == right

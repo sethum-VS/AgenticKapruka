@@ -19,7 +19,12 @@ from graphs.state import AgentState, Intent, ToolInvocation
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
-from lib.kapruka.tool_executor import canonical_tool_args_for_dedup, inject_currency, invoke_tool
+from lib.kapruka.tool_executor import (
+    canonical_tool_args_for_dedup,
+    inject_currency,
+    invoke_tool,
+    normalize_planner_tool_args,
+)
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -482,7 +487,7 @@ async def agent_loop(
             agent_loop_done = True
             break
 
-        raw_args = dict(step.tool_args or {})
+        raw_args = normalize_planner_tool_args(tool_name, dict(step.tool_args or {}))
         enriched_args = inject_currency(tool_name, raw_args, currency)
 
         if _is_duplicate_invocation(tool_trace, tool_name, enriched_args):
