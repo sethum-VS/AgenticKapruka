@@ -169,9 +169,26 @@ def initial_shopping_state(
     return cast(AgentState, state)
 
 
+def _per_turn_agent_reset_fields() -> dict[str, Any]:
+    """Fields cleared on each follow-up turn so prior agent-loop state cannot leak."""
+    return {
+        "tool_trace": [],
+        "tool_results": {},
+        "tool_call_count": 0,
+        "agent_clarifying_question": None,
+        "agent_tool_error": None,
+        "agent_loop_done": None,
+        "agent_loop_exit_reason": None,
+        "agent_loop_iterations": None,
+    }
+
+
 def append_message_state(message: str, *, currency: str | None = None) -> AgentState:
-    """Delta state for a follow-up turn; checkpoint carries prior fields."""
-    delta: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
+    """Delta state for a follow-up turn; checkpoint carries conversation context only."""
+    delta: dict[str, Any] = {
+        "messages": [HumanMessage(content=message)],
+        **_per_turn_agent_reset_fields(),
+    }
     if currency is not None:
         delta["currency"] = currency
     return cast(AgentState, delta)

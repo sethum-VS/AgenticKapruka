@@ -37,7 +37,7 @@ def _make_request() -> Request:
 @pytest.mark.parametrize(
     ("scenario_id", "is_situational", "vernacular", "requires_delivery", "city"),
     [
-        ("keeri_samba", False, "en", False, None),
+        ("keeri_samba", False, "en", False, "Colombo"),
         ("tanglish_kandy", False, "tanglish", True, "Kandy"),
         ("breakup_flowers", True, "en", False, None),
     ],

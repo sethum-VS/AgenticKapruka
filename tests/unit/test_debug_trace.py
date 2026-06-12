@@ -153,6 +153,16 @@ def test_summarize_node_update_agent_loop_exit_reasons() -> None:
     )
     assert max_iter["exit_reason"] == "max_iterations"
 
+    tool_error = summarize_node_update(
+        "agent_loop",
+        {
+            "agent_tool_error": {"tool": "kapruka_check_delivery", "message": "failed"},
+            "agent_loop_iterations": 1,
+            "tool_trace": [],
+        },
+    )
+    assert tool_error["exit_reason"] == "tool_error"
+
 
 def test_trace_agent_iteration_emits_when_enabled(
     monkeypatch: pytest.MonkeyPatch,

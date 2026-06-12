@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse
 
@@ -16,19 +17,29 @@ from pydantic import BaseModel, ValidationError
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, Intent, ToolInvocation
+from lib.chat.delivery_dates import (
+    delivery_date_clarifying_question,
+    normalize_delivery_date,
+)
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
-from lib.kapruka.tool_executor import inject_currency, invoke_tool
+from lib.kapruka.tool_executor import (
+    canonical_tool_args_for_dedup,
+    inject_currency,
+    invoke_tool,
+    normalize_planner_tool_args,
+)
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.utils.timezone import colombo_today_iso
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 4
+MAX_ITERATIONS = 3
 PLANNER_MODEL = FLASH_MODEL
 
 ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
@@ -64,10 +75,10 @@ Return structured JSON with:
 - action: call_tool | finish | ask_user
 - tool_name: MCP tool name when action is call_tool (otherwise null)
 - tool_args: tool arguments object when action is call_tool (otherwise null)
-- rationale: brief trace note for debugging (not shown to the customer)
+- rationale: for ask_user, a short customer-facing clarifying question; otherwise a brief trace note
 
 Allowed tools only:
-- kapruka_search_products
+- kapruka_search_products (tool_args must include string field q, not query)
 - kapruka_get_product
 - kapruka_list_categories
 - kapruka_check_delivery
@@ -78,6 +89,10 @@ Never call kapruka_track_order.
 Finish rule: If products matching the user's core request have been retrieved,
 action MUST be finish. Do not run auxiliary category browsing or extra searches
 unless the user explicitly requested them.
+
+Broad gifts example: Customer says "show me gifts" or "some gifts" with no
+occasion or recipient named → action MUST be ask_user to learn who the gift is
+for or what occasion before running kapruka_search_products.
 
 Prior session facts (Zep) are conversational context only — not catalog truth.
 Hybrid context hints and preferences are soft hints; the explicit user message
@@ -271,6 +286,70 @@ def _resolve_currency(state: AgentState) -> str:
     return state.get("currency") or hints.get("currency") or preferences.get("currency") or "LKR"
 
 
+_CAKES_BROAD = re.compile(r"\bcakes?\b", re.I)
+_BIRTHDAY_CAKE = re.compile(r"\bbirthday\s+cake", re.I)
+_MOM_BIRTHDAY = re.compile(
+    r"\b(?:mom|mother|mum|amma)\b.*\bbirthday\b|\bbirthday\b.*\b(?:mom|mother|mum|amma)\b",
+    re.I,
+)
+_BROAD_GIFTS = re.compile(
+    r"^(?:show me )?(?:some )?gifts?\s*[!.?]*$",
+    re.I,
+)
+
+
+def _search_has_products(result: Any) -> bool:
+    """Return True when a search_products MCP payload includes at least one hit."""
+    if not isinstance(result, dict) or "error" in result:
+        return False
+    raw_results = result.get("results")
+    if not isinstance(raw_results, list):
+        return False
+    return bool(raw_results)
+
+
+def _should_force_finish_after_search(
+    state: AgentState,
+    tool_trace: list[ToolInvocation],
+) -> bool:
+    """Return True when a successful search should end the loop on the next iteration."""
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    pending_delivery = intent_metadata.get("requires_delivery_validation") or bool(
+        intent_metadata.get("target_city")
+    )
+    if pending_delivery:
+        already_checked = any(
+            invocation["name"] == CHECK_DELIVERY_TOOL for invocation in tool_trace
+        )
+        if not already_checked:
+            return False
+    return True
+
+
+def _format_planner_query_rewrite_hints(user_message: str) -> str:
+    """Soft search-query rewrite suggestions for broad cake and mom/birthday turns."""
+    hints: list[str] = []
+    if _CAKES_BROAD.search(user_message) and not _BIRTHDAY_CAKE.search(user_message):
+        hints.append(
+            'Broad "cakes" query: prefer kapruka_search_products with q="birthday cake" '
+            "unless the customer named a specific cake type."
+        )
+    if _MOM_BIRTHDAY.search(user_message):
+        hints.append(
+            "Mom/mother + birthday occasion: bias search q toward birthday cakes, flowers, "
+            "or combopack/combo gifts unless the customer specified another product type."
+        )
+    if _BROAD_GIFTS.match(user_message.strip()):
+        hints.append(
+            'Vague "gifts" query with no occasion or recipient: prefer action ask_user '
+            "before kapruka_search_products."
+        )
+    if not hints:
+        return ""
+    bullet_lines = "\n".join(f"- {hint}" for hint in hints)
+    return f"Query rewrite hints (soft — explicit customer wording wins):\n{bullet_lines}"
+
+
 def _format_hybrid_soft_hints(state: AgentState) -> str:
     """Serialize hybrid_context hints and preferences as soft narrative context."""
     hybrid_context = state.get("hybrid_context") or {}
@@ -288,7 +367,11 @@ def _build_planner_system_instruction(
     tool_trace: list[ToolInvocation],
 ) -> str:
     """Compose planner system instruction with memory and hybrid soft hints."""
-    instruction = PLANNER_SYSTEM_INSTRUCTION
+    instruction = (
+        f"{PLANNER_SYSTEM_INSTRUCTION}\n\n"
+        f"Today in Sri Lanka: {colombo_today_iso()}\n"
+        "For kapruka_check_delivery, delivery_date must be YYYY-MM-DD on or after today."
+    )
     zep_memory_facts = state.get("zep_memory_facts")
     if zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
@@ -307,7 +390,11 @@ def _build_planner_system_instruction(
 def _build_planner_user_prompt(state: AgentState) -> str:
     """User turn content for the planner — latest message only."""
     user_message = _extract_latest_user_message(state.get("messages") or [])
-    return f"Customer message:\n{user_message}"
+    prompt = f"Customer message:\n{user_message}"
+    rewrite_hints = _format_planner_query_rewrite_hints(user_message)
+    if rewrite_hints:
+        prompt += f"\n\n{rewrite_hints}"
+    return prompt
 
 
 def _parse_planner_step(response: types.GenerateContentResponse) -> AgentPlannerStep:
@@ -384,8 +471,10 @@ def _is_duplicate_invocation(
     tool_args: dict[str, Any],
 ) -> bool:
     """Return True when the same tool+args already appear in the trace."""
+    candidate = canonical_tool_args_for_dedup(tool_name, tool_args)
     for invocation in tool_trace:
-        if invocation["name"] == tool_name and _args_equal(invocation["args"], tool_args):
+        prior = canonical_tool_args_for_dedup(invocation["name"], invocation["args"])
+        if invocation["name"] == tool_name and _args_equal(prior, candidate):
             return True
     return False
 
@@ -405,11 +494,13 @@ async def agent_loop(
     rate_limit_key = client_ip or state.get("session_id") or "127.0.0.1"
     currency = _resolve_currency(state)
 
-    tool_trace: list[ToolInvocation] = list(state.get("tool_trace") or [])
-    tool_call_count = state.get("tool_call_count") or 0
+    tool_trace: list[ToolInvocation] = []
+    tool_call_count = 0
     agent_clarifying_question: str | None = None
+    agent_tool_error: dict[str, str] | None = None
     agent_loop_done = False
     force_finish = False
+    force_finish_reason: str | None = None
     exit_reason: str | None = None
     planner_iterations = 0
     refined_intent: Intent | None = None
@@ -419,10 +510,11 @@ async def agent_loop(
     for iteration in range(MAX_ITERATIONS):
         if force_finish:
             logger.debug(
-                "agent_loop: duplicate-tool guard forcing finish at iteration %s",
+                "agent_loop: %s forcing finish at iteration %s",
+                force_finish_reason or "duplicate_guard",
                 iteration,
             )
-            exit_reason = "duplicate_guard"
+            exit_reason = force_finish_reason or "duplicate_guard"
             agent_loop_done = True
             break
 
@@ -480,7 +572,7 @@ async def agent_loop(
             agent_loop_done = True
             break
 
-        raw_args = dict(step.tool_args or {})
+        raw_args = normalize_planner_tool_args(tool_name, dict(step.tool_args or {}))
         enriched_args = inject_currency(tool_name, raw_args, currency)
 
         if _is_duplicate_invocation(tool_trace, tool_name, enriched_args):
@@ -489,7 +581,19 @@ async def agent_loop(
                 tool_name,
             )
             force_finish = True
+            force_finish_reason = "duplicate_guard"
             continue
+
+        if tool_name == CHECK_DELIVERY_TOOL:
+            user_message = _extract_latest_user_message(state.get("messages") or [])
+            resolved_date = normalize_delivery_date(enriched_args, user_message)
+            if resolved_date is None:
+                agent_clarifying_question = delivery_date_clarifying_question()
+                exit_reason = "ask_user"
+                agent_loop_done = True
+                break
+            enriched_args = {**enriched_args, "delivery_date": resolved_date}
+            enriched_args.pop("date", None)
 
         _emit_status(_status_message_for_tool(tool_name))
 
@@ -508,6 +612,36 @@ async def agent_loop(
             },
         )
         tool_call_count += 1
+
+        if isinstance(result, dict) and result.get("error"):
+            error_message = result.get("message")
+            agent_tool_error = {
+                "tool": tool_name,
+                "message": (
+                    str(error_message).strip()
+                    if isinstance(error_message, str) and error_message.strip()
+                    else str(result.get("error"))
+                ),
+            }
+            exit_reason = "tool_error"
+            agent_loop_done = True
+            logger.debug(
+                "agent_loop: tool %s returned error %r; stopping loop",
+                tool_name,
+                result.get("error"),
+            )
+            break
+
+        if (
+            tool_name == SEARCH_PRODUCTS_TOOL
+            and _search_has_products(result)
+            and _should_force_finish_after_search(state, tool_trace)
+        ):
+            logger.debug(
+                "agent_loop: search returned products; forcing finish next iteration",
+            )
+            force_finish = True
+            force_finish_reason = "finish"
 
     if not agent_loop_done:
         logger.debug("agent_loop: reached max iterations (%s); finishing", MAX_ITERATIONS)
@@ -528,6 +662,8 @@ async def agent_loop(
         }
     if agent_clarifying_question is not None:
         updates["agent_clarifying_question"] = agent_clarifying_question
+    if agent_tool_error is not None:
+        updates["agent_tool_error"] = agent_tool_error
     if refined_intent is not None:
         updates["intent"] = refined_intent
     return updates

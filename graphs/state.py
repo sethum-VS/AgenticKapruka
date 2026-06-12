@@ -11,6 +11,13 @@ from lib.chat.intent_metadata import IntentMetadata
 
 Intent = Literal["discovery", "checkout", "tracking", "general"]
 ModelTier = Literal["flash", "pro"]
+AgentLoopExitReason = Literal[
+    "finish",
+    "ask_user",
+    "max_iterations",
+    "duplicate_guard",
+    "tool_error",
+]
 CheckoutStep = Literal[
     "cart",
     "delivery_city",
@@ -43,7 +50,10 @@ class AgentState(TypedDict):
     tool_call_count: int | None
     tool_trace: list[ToolInvocation] | None
     agent_loop_done: bool | None
+    agent_loop_exit_reason: AgentLoopExitReason | None
+    agent_loop_iterations: int | None
     agent_clarifying_question: str | None
+    agent_tool_error: dict[str, str] | None
     model_tier: ModelTier | None
     session_id: str | None
     zep_thread_id: str | None

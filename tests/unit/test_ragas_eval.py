@@ -84,7 +84,9 @@ def test_build_eval_genai_client_returns_intent_and_reply() -> None:
             response_schema=AssistantReply,
         ),
     )
-    assert "Chocolate Birthday Cake" in reply_response.parsed.message
+    message = reply_response.parsed.message
+    assert "Chocolate Birthday Cake" in message
+    assert "curated" in message.lower() or "thoughtful" in message.lower()
 
 
 def test_build_eval_genai_client_adds_situational_flavor_for_concierge() -> None:
@@ -115,7 +117,7 @@ async def test_agent_loop_multi_step_anniversary_kandy(redis_client: RedisClient
     case = GoldenCase(
         id="agent-001-anniversary-kandy-dinner",
         scenario="discovery",
-        user_query="Plan a surprise anniversary dinner in Kandy — flowers and a cake",
+        user_query="Plan a surprise anniversary dinner in Kandy next Saturday — flowers and a cake",
         expected_tools=[SEARCH_PRODUCTS_TOOL, CHECK_DELIVERY_TOOL],
         reference_answer="Search then check Kandy delivery.",
     )

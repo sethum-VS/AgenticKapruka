@@ -131,13 +131,43 @@
 
   function toggleRequestState(form, active) {
     const indicator = document.getElementById("chat-loading");
+    const submitButton = form.querySelector('button[type="submit"]');
+    const messageInput = form.querySelector("#chat-message");
     if (active) {
       form.classList.add("htmx-request");
       indicator?.classList.add("htmx-request");
+      if (submitButton) {
+        submitButton.disabled = true;
+      }
+      if (messageInput) {
+        messageInput.readOnly = true;
+      }
     } else {
       form.classList.remove("htmx-request");
       indicator?.classList.remove("htmx-request");
+      if (submitButton) {
+        submitButton.disabled = false;
+      }
+      if (messageInput) {
+        messageInput.readOnly = false;
+      }
     }
+  }
+
+  function removePendingAssistantBubbles() {
+    for (const el of document.querySelectorAll('[id^="assistant-stream-"]')) {
+      el.remove();
+    }
+  }
+
+  function registerAfterRequestBackup() {
+    document.addEventListener("htmx:afterRequest", (event) => {
+      const elt = event.detail?.elt;
+      if (!elt || elt.id !== CHAT_FORM_ID) {
+        return;
+      }
+      toggleRequestState(elt, false);
+    });
   }
 
   async function streamChatPost(form) {
@@ -157,8 +187,6 @@
       path: connectPath,
       message: outboundMessage,
     });
-
-    toggleRequestState(form, true);
 
     try {
       const response = await fetch(connectPath, {
@@ -230,6 +258,7 @@
       );
       form.reset();
     } catch (error) {
+      removePendingAssistantBubbles();
       chatDebugLog(form, "stream failed", error);
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {
@@ -243,6 +272,7 @@
   }
 
   initChatForm();
+  registerAfterRequestBackup();
 
   document.addEventListener(
     "submit",
@@ -253,6 +283,10 @@
       }
 
       event.preventDefault();
+      if (form.classList.contains("htmx-request")) {
+        return;
+      }
+      toggleRequestState(form, true);
       void streamChatPost(form).catch((error) => {
         console.error("chat SSE stream failed", error);
       });

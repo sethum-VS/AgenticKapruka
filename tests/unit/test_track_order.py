@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from lib.kapruka.errors import KaprukaNotFoundError
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.tools.track_order import TOOL_NAME, track_order
+from lib.kapruka.types import TrackOrderOutput
 
 _TRACK_ORDER_JSON: dict[str, Any] = {
     "order_number": "VIMP34456CB2",
@@ -114,3 +115,35 @@ async def test_track_order_raises_order_not_found_mcp_error(
         await track_order(mcp_client, order_number="VIMP99999ZZ9")
 
     assert exc_info.value.code == "order_not_found"
+
+
+def test_track_order_output_coerces_mcp_value_currency_shape() -> None:
+    """MCP Money payloads with value/currency coerce to a formatted display string."""
+    payload = {**_TRACK_ORDER_JSON, "amount": {"value": "4970", "currency": "LKR"}}
+    result = TrackOrderOutput.model_validate(payload)
+    assert result.amount == "LKR 4,970"
+
+
+def test_track_order_output_coerces_amount_currency_shape() -> None:
+    """MCP Money payloads with amount/currency coerce to a formatted display string."""
+    payload = {**_TRACK_ORDER_JSON, "amount": {"amount": 15500.0, "currency": "LKR"}}
+    result = TrackOrderOutput.model_validate(payload)
+    assert result.amount == "LKR 15,500"
+
+
+def test_track_order_output_amount_string_passthrough() -> None:
+    """Legacy string amounts from MCP pass through unchanged."""
+    result = TrackOrderOutput.model_validate(_TRACK_ORDER_JSON)
+    assert result.amount == "15500.00"
+
+
+async def test_track_order_parses_money_shaped_amount_from_mcp(
+    mcp_client: MCPHttpClient,
+) -> None:
+    """Live MCP JSON with value/currency amount maps without validation crash."""
+    money_json = {**_TRACK_ORDER_JSON, "amount": {"value": "4970", "currency": "LKR"}}
+    mcp_client.call_tool = AsyncMock(return_value=json.dumps(money_json))  # type: ignore[method-assign]
+
+    result = await track_order(mcp_client, order_number="VIMP34456CB2")
+
+    assert result.amount == "LKR 4,970"

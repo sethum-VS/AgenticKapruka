@@ -53,6 +53,39 @@ _SERVICE_KWARG_EXCLUDE: dict[str, frozenset[str]] = {
 }
 
 
+def normalize_planner_tool_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Coerce common planner aliases into Kapruka tool input field names."""
+    normalized = dict(args)
+    if name == SEARCH_PRODUCTS_TOOL:
+        query = normalized.get("query")
+        if "q" not in normalized and isinstance(query, str) and query.strip():
+            normalized["q"] = query.strip()
+            normalized.pop("query", None)
+        category_id = normalized.get("category_id")
+        if "category" not in normalized and isinstance(category_id, str) and category_id.strip():
+            normalized["category"] = category_id.strip()
+            normalized.pop("category_id", None)
+    if name == CHECK_DELIVERY_TOOL:
+        delivery_date = normalized.get("delivery_date")
+        date_alias = normalized.get("date")
+        if (
+            (not isinstance(delivery_date, str) or not delivery_date.strip())
+            and isinstance(date_alias, str)
+            and date_alias.strip()
+        ):
+            normalized["delivery_date"] = date_alias.strip()
+            normalized.pop("date", None)
+    return normalized
+
+
+def canonical_tool_args_for_dedup(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Normalize args for duplicate-tool detection (ignore session currency injection)."""
+    canonical = normalize_planner_tool_args(name, dict(args))
+    if name in _CURRENCY_TOOLS:
+        canonical.pop("currency", None)
+    return canonical
+
+
 def inject_currency(name: str, args: dict[str, Any], currency: str) -> dict[str, Any]:
     """Ensure price-bearing MCP tools receive the session currency."""
     if name in _CURRENCY_TOOLS and "currency" not in args:
@@ -129,7 +162,7 @@ async def invoke_tool(
 
     On Kapruka MCP or local validation failure, returns ``{"error": code, "message": ...}``.
     """
-    enriched = inject_currency(name, dict(args), currency)
+    enriched = inject_currency(name, normalize_planner_tool_args(name, dict(args)), currency)
 
     try:
         validated = _validate_tool_args(name, enriched)

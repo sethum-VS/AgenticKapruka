@@ -11,7 +11,7 @@ from graphs.nodes.call_mcp_tools import call_mcp_tools, select_tool_calls
 from graphs.state import AgentState
 from lib.kapruka.errors import KaprukaNotFoundError
 from lib.kapruka.service import KaprukaService
-from lib.kapruka.tool_executor import invoke_tool
+from lib.kapruka.tool_executor import canonical_tool_args_for_dedup, invoke_tool
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -521,3 +521,54 @@ async def test_call_mcp_tools_delegates_invocation_to_shared_executor() -> None:
     assert call_kwargs["kapruka_service"] is mock_service
     assert call_kwargs["client_ip"] == _CLIENT_IP
     assert result["tool_results"][TRACK_ORDER_TOOL]["status"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_normalizes_search_query_alias() -> None:
+    """Planner tool_args using query are coerced to q before validation."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = _SEARCH_OUTPUT
+
+    result = await invoke_tool(
+        SEARCH_PRODUCTS_TOOL,
+        {"query": "cakes"},
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        currency="LKR",
+    )
+
+    assert "error" not in result
+    mock_service.search_products.assert_awaited_once()
+    assert mock_service.search_products.await_args.kwargs["q"] == "cakes"
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_normalizes_search_category_id_alias() -> None:
+    """Planner tool_args using category_id are coerced to category before validation."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = _SEARCH_OUTPUT
+
+    result = await invoke_tool(
+        SEARCH_PRODUCTS_TOOL,
+        {"q": "cakes", "category_id": "Birthday"},
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        currency="LKR",
+    )
+
+    assert "error" not in result
+    assert mock_service.search_products.await_args.kwargs["category"] == "Birthday"
+
+
+def test_canonical_tool_args_for_dedup_ignores_currency() -> None:
+    """Duplicate detection treats currency injection as the same search invocation."""
+    left = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"q": "cakes", "currency": "LKR"})
+    right = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"q": "cakes"})
+    assert left == right
+
+
+def test_canonical_tool_args_for_dedup_normalizes_query_alias() -> None:
+    """Planner query alias must dedupe identically to canonical q."""
+    left = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"q": "cakes"})
+    right = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"query": "cakes"})
+    assert left == right

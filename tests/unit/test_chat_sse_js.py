@@ -22,3 +22,29 @@ def test_chat_sse_js_wires_post_stream_bridge() -> None:
     assert 'HX-Request": "true"' in source
     assert "htmx:afterSwap" in source
     assert "htmx:afterRequest" in source
+    assert 'form.classList.contains("htmx-request")' in source
+    assert "submitButton.disabled = true" in source
+
+
+def test_chat_sse_js_clears_loading_on_success_and_error() -> None:
+    """Loading state clears via finally and htmx:afterRequest backup on both paths."""
+    source = CHAT_SSE_JS.read_text()
+
+    assert "toggleRequestState(form, false)" in source
+    assert "finally" in source
+    assert "registerAfterRequestBackup" in source
+    assert 'document.addEventListener("htmx:afterRequest"' in source
+    assert "elt.id !== CHAT_FORM_ID" in source
+    assert "submitButton.disabled = false" in source
+    assert "messageInput.readOnly = false" in source
+    assert 'indicator?.classList.remove("htmx-request")' in source
+
+
+def test_chat_sse_js_removes_pending_bubble_on_stream_error() -> None:
+    """Stream errors remove assistant-stream-* bubbles (mirrors server error path)."""
+    source = CHAT_SSE_JS.read_text()
+
+    assert "removePendingAssistantBubbles" in source
+    assert '[id^="assistant-stream-"]' in source
+    assert "removePendingAssistantBubbles();" in source
+    assert "successful: false" in source

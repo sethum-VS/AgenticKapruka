@@ -18,7 +18,17 @@ CHAT_HELPERS_JS = (
 ).read_text()
 
 
-def _chat_sse_harness_html() -> str:
+def _chat_sse_harness_html(*, include_loading_indicator: bool = False) -> str:
+    loading_block = ""
+    if include_loading_indicator:
+        loading_block = """
+        <div
+          id="chat-loading"
+          class="htmx-indicator"
+          aria-label="Sending message"
+        >
+          <span>Sending…</span>
+        </div>"""
     return f"""<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -48,7 +58,7 @@ def _chat_sse_harness_html() -> str:
           hidden
         ></div>
         <textarea id="chat-message" x-ref="input" name="message">Hello</textarea>
-        <button type="submit">Send</button>
+        <button type="submit">Send</button>{loading_block}
       </form>
     </div>
   </body>
@@ -100,5 +110,100 @@ def test_chat_sse_streams_incremental_assistant_tokens() -> None:
         assert "You said hello" in text
         assert "birthday cakes" in text
         assert "Here are" in text
+
+        browser.close()
+
+
+@pytest.mark.browser
+def test_chat_sse_clears_sending_indicator_after_stream() -> None:
+    """Sending… indicator and disabled controls clear within 1s after stream completes."""
+    sse_body = (
+        "event: message\n"
+        'data: <div id="user-msg">You said hello</div>\n\n'
+        "event: message\n"
+        'data: <div id="assistant-final">Done</div>\n\n'
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def handle_stream(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+                body=sse_body,
+            )
+
+        page.route("http://localhost/chat/stream", handle_stream)
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const form = document.getElementById('chat-form');
+              const indicator = document.getElementById('chat-loading');
+              const input = document.getElementById('chat-message');
+              const button = document.querySelector('#chat-form button[type="submit"]');
+              return form
+                && !form.classList.contains('htmx-request')
+                && indicator
+                && !indicator.classList.contains('htmx-request')
+                && input
+                && !input.readOnly
+                && button
+                && !button.disabled;
+            }""",
+            timeout=1000,
+        )
+
+        browser.close()
+
+
+@pytest.mark.browser
+def test_chat_sse_clears_sending_and_pending_bubble_on_error() -> None:
+    """HTTP stream failure clears Sending… and removes assistant-stream-* bubbles."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        page.route(
+            "http://localhost/chat/stream",
+            lambda route: route.fulfill(status=500, body="error"),
+        )
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+
+        page.evaluate(
+            """() => {
+              const messages = document.getElementById('chat-messages');
+              const pending = document.createElement('div');
+              pending.id = 'assistant-stream-deadbeef';
+              pending.textContent = 'Searching catalog…';
+              messages.appendChild(pending);
+            }"""
+        )
+
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const form = document.getElementById('chat-form');
+              const indicator = document.getElementById('chat-loading');
+              const input = document.getElementById('chat-message');
+              const button = document.querySelector('#chat-form button[type="submit"]');
+              const pending = document.getElementById('assistant-stream-deadbeef');
+              return form
+                && !form.classList.contains('htmx-request')
+                && indicator
+                && !indicator.classList.contains('htmx-request')
+                && input
+                && !input.readOnly
+                && button
+                && !button.disabled
+                && !pending;
+            }""",
+            timeout=1000,
+        )
 
         browser.close()

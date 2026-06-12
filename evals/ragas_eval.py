@@ -50,6 +50,7 @@ from graphs.nodes.analyze_intent import PROCEED_CHECKOUT_MESSAGE, IntentClassifi
 from graphs.nodes.generate_response import AssistantReply
 from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initial_shopping_state
 from graphs.state import AgentState, Intent, ToolInvocation
+from lib.chat.delivery_dates import normalize_delivery_date
 from lib.chat.query_preprocessor import QueryPreprocessor
 from lib.kapruka.product_id import extract_product_id
 from lib.kapruka.service import KaprukaService
@@ -59,6 +60,7 @@ from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.redis.cart import add_item
 from lib.redis.client import RedisClient
+from lib.utils.timezone import colombo_today_iso
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +177,10 @@ def _synthesize_assistant_reply(user_prompt: str) -> str:
                 elif isinstance(name, str):
                     lines.append(name)
             if lines:
-                return "I found these Kapruka options: " + ", ".join(lines) + "."
+                curated = lines[:3]
+                if len(curated) == 1:
+                    return f"Here is a thoughtful pick: {curated[0]}."
+                return "Here are a few curated options: " + "; ".join(curated) + "."
 
     product_payload = tool_results.get(GET_PRODUCT_TOOL)
     if isinstance(product_payload, dict) and product_payload.get("name"):
@@ -221,7 +226,10 @@ def _tool_args_for_eval_case(tool_name: str, case: GoldenCase) -> dict[str, Any]
         product_id = extract_product_id(case.user_query) or "cake00ka002034"
         return {"product_id": product_id}
     if tool_name == CHECK_DELIVERY_TOOL:
-        return {"city": "Kandy"}
+        metadata = QueryPreprocessor().process(case.user_query)
+        city = metadata.get("target_city") or "Colombo 03"
+        delivery_date = normalize_delivery_date({}, case.user_query) or colombo_today_iso()
+        return {"city": str(city), "delivery_date": delivery_date}
     if tool_name == LIST_CITIES_TOOL:
         return {"query": "Galle", "limit": 25}
     return {}
@@ -248,7 +256,8 @@ def _e2e_check_delivery_args(message: str) -> dict[str, str]:
     """Build delivery-check args from preprocessor city hints."""
     metadata = QueryPreprocessor().process(message)
     city = metadata.get("target_city") or "Colombo 03"
-    return {"city": str(city)}
+    delivery_date = normalize_delivery_date({}, message) or colombo_today_iso()
+    return {"city": str(city), "delivery_date": delivery_date}
 
 
 def _e2e_list_cities_args(message: str) -> dict[str, Any]:

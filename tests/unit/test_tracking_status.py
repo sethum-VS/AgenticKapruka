@@ -83,6 +83,15 @@ def test_build_tracking_status_html_from_tool_results() -> None:
     assert 'data-testid="tracking-timeline-step"' in html
 
 
+def test_build_tracking_status_html_coerces_money_shaped_amount() -> None:
+    """Tracking partial renders when MCP returns value/currency amount object."""
+    payload = {**_TRACK_ORDER_JSON, "amount": {"value": "4970", "currency": "LKR"}}
+    html = build_tracking_status_html({TRACK_ORDER_TOOL: payload})
+    assert html is not None
+    assert "LKR 4,970" in html
+    assert 'data-testid="tracking-amount"' in html
+
+
 def test_select_tool_calls_tracking_with_order_number() -> None:
     state: AgentState = {
         "messages": [HumanMessage(content="track order VIMP34456CB2")],

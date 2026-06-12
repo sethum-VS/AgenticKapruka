@@ -93,3 +93,18 @@ def test_multi_turn_shadow_preserves_intent(
         assert local_flavor_score.score >= 0.75, (
             f"Response failed local flavor alignment gate. Score: {local_flavor_score.score}"
         )
+        lowered = final_text.lower()
+        warm_curation = any(
+            marker in lowered
+            for marker in (
+                "curated",
+                "thoughtful",
+                "gentle",
+                "aiyo",
+                "machan",
+                "hodata",
+            )
+        )
+        assert warm_curation, (
+            f"{multi_turn_case.id}: situational reply should show warm curation tone"
+        )

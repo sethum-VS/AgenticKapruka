@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from collections.abc import AsyncIterator
@@ -14,6 +15,11 @@ from lib.chat.sse import chunk_text, format_sse_event
 from lib.debug.trace import trace_error, trace_node_update, trace_turn_complete
 
 logger = logging.getLogger(__name__)
+
+CHAT_TURN_TIMEOUT_SECONDS = 90.0
+_TIMEOUT_MESSAGE = (
+    "This is taking longer than expected. Please try again with a more specific question."
+)
 
 
 def _render_streaming_assistant(message: str, element_id: str, *, oob: bool) -> str:
@@ -72,60 +78,72 @@ async def iter_chat_sse_events(
         thread_id = str(configurable.get("thread_id") or "")
 
     try:
-        async for chunk in graph.astream(state, config, stream_mode=["updates", "custom"]):
-            normalized = _normalize_astream_chunk(chunk)
-            if normalized is None:
-                continue
-            mode, payload = normalized
+        async with asyncio.timeout(CHAT_TURN_TIMEOUT_SECONDS):
+            async for chunk in graph.astream(state, config, stream_mode=["updates", "custom"]):
+                normalized = _normalize_astream_chunk(chunk)
+                if normalized is None:
+                    continue
+                mode, payload = normalized
 
-            if mode == "custom":
-                if isinstance(payload, dict) and payload.get("type") == "status":
-                    status_message = str(payload.get("message") or "").strip()
-                    if status_message:
-                        status_html = _render_streaming_assistant(
-                            status_message,
+                if mode == "custom":
+                    if isinstance(payload, dict) and payload.get("type") == "status":
+                        status_message = str(payload.get("message") or "").strip()
+                        if status_message:
+                            status_html = _render_streaming_assistant(
+                                status_message,
+                                pending_id,
+                                oob=True,
+                            )
+                            yield format_sse_event(status_html, event="status")
+                    continue
+
+                if mode != "updates" or not isinstance(payload, dict):
+                    continue
+
+                for node_name, node_update in payload.items():
+                    if not isinstance(node_update, dict):
+                        continue
+                    trace_node_update(node_name, node_update)
+                    if node_name != "generate_response":
+                        continue
+                    response_html = node_update.get("response_html")
+                    assistant_message = (node_update.get("assistant_message") or "").strip()
+                    if not response_html:
+                        continue
+
+                    text_chunks = chunk_text(assistant_message)
+                    if not text_chunks:
+                        text_chunks = [assistant_message]
+
+                    accumulated = ""
+                    for piece in text_chunks:
+                        accumulated = f"{accumulated} {piece}".strip() if accumulated else piece
+                        html = _render_streaming_assistant(
+                            accumulated,
                             pending_id,
-                            oob=True,
+                            oob=stream_started,
                         )
-                        yield format_sse_event(status_html, event="status")
-                continue
+                        stream_started = True
+                        yield format_sse_event(html)
 
-            if mode != "updates" or not isinstance(payload, dict):
-                continue
-
-            for node_name, node_update in payload.items():
-                if not isinstance(node_update, dict):
-                    continue
-                trace_node_update(node_name, node_update)
-                if node_name != "generate_response":
-                    continue
-                response_html = node_update.get("response_html")
-                assistant_message = (node_update.get("assistant_message") or "").strip()
-                if not response_html:
-                    continue
-
-                text_chunks = chunk_text(assistant_message)
-                if not text_chunks:
-                    text_chunks = [assistant_message]
-
-                accumulated = ""
-                for piece in text_chunks:
-                    accumulated = f"{accumulated} {piece}".strip() if accumulated else piece
-                    html = _render_streaming_assistant(
-                        accumulated,
-                        pending_id,
-                        oob=stream_started,
+                    cleanup = f'<div id="{pending_id}" hx-swap-oob="delete"></div>'
+                    yield format_sse_event(cleanup + response_html)
+                    trace_turn_complete(
+                        thread_id=thread_id,
+                        assistant_message=assistant_message,
+                        response_html_chars=len(response_html or ""),
                     )
-                    stream_started = True
-                    yield format_sse_event(html)
-
-                cleanup = f'<div id="{pending_id}" hx-swap-oob="delete"></div>'
-                yield format_sse_event(cleanup + response_html)
-                trace_turn_complete(
-                    thread_id=thread_id,
-                    assistant_message=assistant_message,
-                    response_html_chars=len(response_html or ""),
-                )
+    except TimeoutError:
+        trace_error("graph.astream exceeded wall-clock timeout", TimeoutError())
+        logger.warning(
+            "chat stream timed out after %.0fs for thread %s",
+            CHAT_TURN_TIMEOUT_SECONDS,
+            thread_id or "(unknown)",
+        )
+        timeout_html = _render_streaming_assistant(_TIMEOUT_MESSAGE, pending_id, oob=stream_started)
+        if stream_started:
+            timeout_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{timeout_html}'
+        yield format_sse_event(timeout_html)
     except Exception as exc:
         trace_error("graph.astream failed", exc)
         logger.exception("chat stream failed during graph.astream")
