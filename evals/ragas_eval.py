@@ -1,4 +1,19 @@
-"""Ragas evaluation runner for the shopping graph against the golden dataset."""
+"""Ragas evaluation runner for the shopping graph against the golden dataset.
+
+Runs the compiled shopping graph with deterministic MockMCPHttpClient fixtures and a
+planner-aware Gemini mock for multi-step agent_loop scenarios. CI gate (``--ci``):
+
+- ``context_precision`` mean >= ``DEFAULT_CONTEXT_PRECISION_THRESHOLD`` (0.7)
+- Per-case ``expected_tools`` must match the tool sequence from ``tool_trace``
+  (agent_loop) or ``tool_results`` (product-ID fast-path / checkout / tracking)
+
+Run locally::
+
+    python -m evals.ragas_eval
+    python -m evals.ragas_eval --ci --threshold 0.7
+
+GitHub Actions job ``ragas-eval`` runs ``python -m evals.ragas_eval --ci`` after unit tests.
+"""
 
 from __future__ import annotations
 
@@ -37,6 +52,7 @@ from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initi
 from graphs.state import AgentState, Intent, ToolInvocation
 from lib.kapruka.product_id import extract_product_id
 from lib.kapruka.service import KaprukaService
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
@@ -184,6 +200,30 @@ def _synthesize_assistant_reply(user_prompt: str) -> str:
     return "Here is what I found on Kapruka based on our catalog data."
 
 
+def _search_args_for_eval_case(case: GoldenCase) -> dict[str, str]:
+    """Build deterministic search args for agent-loop golden cases."""
+    if case.id == "agent-002-cakes-single-search":
+        return {"q": "cakes"}
+    query = case.user_query.strip()
+    if len(query) < 3:
+        return {"q": "gifts"}
+    return {"q": query}
+
+
+def _tool_args_for_eval_case(tool_name: str, case: GoldenCase) -> dict[str, Any]:
+    """Map expected MCP tool names to deterministic mock planner args."""
+    if tool_name == SEARCH_PRODUCTS_TOOL:
+        return _search_args_for_eval_case(case)
+    if tool_name == LIST_CATEGORIES_TOOL:
+        return {"depth": 1}
+    if tool_name == GET_PRODUCT_TOOL:
+        product_id = extract_product_id(case.user_query) or "cake00ka002034"
+        return {"product_id": product_id}
+    if tool_name == CHECK_DELIVERY_TOOL:
+        return {"city": "Kandy"}
+    return {}
+
+
 def _planner_step_for_eval_case(
     case: GoldenCase | None,
     *,
@@ -191,46 +231,91 @@ def _planner_step_for_eval_case(
     user_contents: str,
 ) -> AgentPlannerStep:
     """Return the next agent-loop planner step for Ragas eval graph runs."""
-    if planner_call_index > 0:
+    _ = user_contents
+    if case is None:
+        if planner_call_index == 0:
+            return AgentPlannerStep(
+                action="call_tool",
+                tool_name=SEARCH_PRODUCTS_TOOL,
+                tool_args={"q": "gifts"},
+                rationale="default search",
+            )
         return AgentPlannerStep(action="finish", rationale="catalog facts collected")
 
-    if case is None:
+    expected = case.expected_tools
+    if not expected:
         return AgentPlannerStep(
-            action="call_tool",
-            tool_name=SEARCH_PRODUCTS_TOOL,
-            tool_args={"q": "gifts"},
-            rationale="default search",
+            action="finish",
+            refined_intent="general",
+            rationale="no Kapruka tools needed",
         )
 
-    primary_tool = case.expected_tools[0] if case.expected_tools else SEARCH_PRODUCTS_TOOL
-    if primary_tool == SEARCH_PRODUCTS_TOOL:
-        query = case.user_query.strip()
-        if len(query) < 3:
-            query = "gifts"
+    if planner_call_index < len(expected):
+        tool_name = expected[planner_call_index]
         return AgentPlannerStep(
             action="call_tool",
-            tool_name=SEARCH_PRODUCTS_TOOL,
-            tool_args={"q": query},
-            rationale="search catalog",
-        )
-    if primary_tool == LIST_CATEGORIES_TOOL:
-        return AgentPlannerStep(
-            action="call_tool",
-            tool_name=LIST_CATEGORIES_TOOL,
-            tool_args={"depth": 1},
-            rationale="browse categories",
-        )
-    if primary_tool == GET_PRODUCT_TOOL:
-        product_id = extract_product_id(case.user_query) or "cake00ka002034"
-        return AgentPlannerStep(
-            action="call_tool",
-            tool_name=GET_PRODUCT_TOOL,
-            tool_args={"product_id": product_id},
-            rationale="fetch product details",
+            tool_name=tool_name,
+            tool_args=_tool_args_for_eval_case(tool_name, case),
+            rationale=f"eval planner step {planner_call_index + 1}",
         )
 
-    _ = user_contents
-    return AgentPlannerStep(action="finish", rationale="no planner tools for case")
+    return AgentPlannerStep(action="finish", rationale="expected tools collected")
+
+
+def tool_names_from_state(result: AgentState) -> list[str]:
+    """Ordered MCP tool names from agent_loop tool_trace or heuristic tool_results."""
+    tool_trace = result.get("tool_trace")
+    if isinstance(tool_trace, list) and tool_trace:
+        names: list[str] = []
+        for invocation in tool_trace:
+            if not isinstance(invocation, dict):
+                continue
+            name = invocation.get("name")
+            if isinstance(name, str) and name:
+                names.append(name)
+        return names
+
+    tool_results = result.get("tool_results")
+    if not isinstance(tool_results, dict):
+        return []
+
+    names = [key for key, value in tool_results.items() if value is not None]
+    return names
+
+
+def _should_assert_agent_loop_tools(case: GoldenCase) -> bool:
+    """Phase 3 tool-trace gate applies to agent_loop discovery cases only."""
+    if case.scenario != "discovery":
+        return False
+    if case.id.startswith("agent-"):
+        return True
+    return extract_product_id(case.user_query) is None
+
+
+def assert_expected_tool_usage(case: GoldenCase, result: AgentState) -> None:
+    """Raise when graph tool usage diverges from the golden case expected_tools sequence."""
+    if not _should_assert_agent_loop_tools(case):
+        return
+
+    actual = tool_names_from_state(result)
+    expected = case.expected_tools
+    if actual == expected:
+        product_id = extract_product_id(case.user_query)
+        if product_id and expected == [GET_PRODUCT_TOOL]:
+            tool_trace = result.get("tool_trace")
+            if isinstance(tool_trace, list) and tool_trace:
+                msg = (
+                    f"golden case {case.id}: product-ID fast-path must not use "
+                    f"agent_loop tool_trace (got {len(tool_trace)} entries)"
+                )
+                raise AssertionError(msg)
+        return
+
+    msg = (
+        f"golden case {case.id}: expected tools {expected!r}, got {actual!r} "
+        f"(tool_trace entries={len(result.get('tool_trace') or [])})"
+    )
+    raise AssertionError(msg)
 
 
 def build_eval_genai_client(
@@ -380,6 +465,8 @@ async def run_graph_for_case(
 
     with _patch_eval_settings():
         result = await graph.ainvoke(state)
+
+    assert_expected_tool_usage(case, result)
 
     return GraphEvalRow(
         user_input=case.user_query,

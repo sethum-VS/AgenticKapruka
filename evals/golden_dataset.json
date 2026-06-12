@@ -168,6 +168,41 @@
       "user_query": "When will order VIMP11223XY9 arrive?",
       "expected_tools": ["kapruka_track_order"],
       "reference_answer": "I'll fetch tracking for order VIMP11223XY9 and share the scheduled delivery date and the latest status from Kapruka's progress timeline."
+    },
+    {
+      "id": "agent-001-anniversary-kandy-dinner",
+      "scenario": "discovery",
+      "user_query": "Plan a surprise anniversary dinner in Kandy — flowers and a cake",
+      "expected_tools": ["kapruka_search_products", "kapruka_check_delivery"],
+      "reference_answer": "I'll search Kapruka for anniversary dinner gifts such as flowers and cakes, then verify delivery availability to Kandy before suggesting options with prices."
+    },
+    {
+      "id": "agent-002-cakes-single-search",
+      "scenario": "discovery",
+      "user_query": "cakes",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll search Kapruka's cake catalog and show in-stock options with prices — no occasion filter unless you specify one."
+    },
+    {
+      "id": "agent-003-gifts-for-mom",
+      "scenario": "discovery",
+      "user_query": "gifts for my mom",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "I'll run a broad Kapruka search for gift ideas for your mom and share popular in-stock options with prices."
+    },
+    {
+      "id": "agent-004-thanks-zero-tools",
+      "scenario": "discovery",
+      "user_query": "thanks!",
+      "expected_tools": [],
+      "reference_answer": "You're welcome! Let me know anytime you'd like help finding gifts or checking delivery on Kapruka."
+    },
+    {
+      "id": "agent-005-product-id-fastpath",
+      "scenario": "discovery",
+      "user_query": "tell me about cake00ka002034",
+      "expected_tools": ["kapruka_get_product"],
+      "reference_answer": "I'll fetch Kapruka product cake00ka002034 directly — name, price, stock, and description — without running a catalog search."
     }
   ]
 }
