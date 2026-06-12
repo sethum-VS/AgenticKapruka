@@ -12,6 +12,8 @@ from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import PRO_MODEL
 from graphs.nodes.generate_response import (
     AssistantReply,
+    _build_discovery_template_reply,
+    _cap_search_products_for_llm_context,
     _resolve_effective_tool_results,
     build_agent_tool_error_message,
     build_products_carousel_html,
@@ -144,6 +146,7 @@ async def test_generate_response_template_fallback_on_gemini_429() -> None:
 
     result = await generate_response(state, genai_client=mock_client)
 
+    assert "thoughtful Kapruka picks" in result["assistant_message"]
     assert "Chocolate Birthday Cake" in result["assistant_message"]
     assert "Vanilla Celebration Cake" in result["assistant_message"]
     assert 'data-testid="product-carousel"' in result["response_html"]
@@ -336,8 +339,8 @@ def test_select_response_system_instruction_utility_mode() -> None:
     }
     prompt = select_response_system_instruction(metadata)
     assert prompt == UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION
-    assert "transactional" in prompt.lower()
-    assert "concierge" not in prompt.lower()
+    assert "top 2–3 picks" in prompt.lower() or "top 2-3 picks" in prompt.lower()
+    assert "no filler empathy" not in prompt.lower()
 
 
 def test_select_response_system_instruction_situational_tanglish() -> None:
@@ -381,7 +384,9 @@ async def test_generate_response_utility_metadata_uses_ecommerce_prompt() -> Non
     await generate_response(state, genai_client=mock_client)
 
     config = mock_client.models.generate_content.call_args.kwargs["config"]
-    assert "transactional" in config.system_instruction.lower()
+    instruction = config.system_instruction.lower()
+    assert "curate" in instruction or "top 2" in instruction
+    assert "no filler empathy" not in instruction
 
 
 @pytest.mark.asyncio
@@ -451,6 +456,61 @@ def _product(
         "ships_internationally": False,
         "url": f"https://www.kapruka.com/{product_id}",
     }
+
+
+def test_build_discovery_template_reply_warm_top_three_opener() -> None:
+    products = [
+        _product("cake00ka002034", "Chocolate Birthday Cake", amount=4500.0),
+        _product("cake00ka002099", "Vanilla Celebration Cake", amount=3800.0),
+        _product("cake00ka002100", "Strawberry Delight Cake", amount=4200.0),
+    ]
+    reply = _build_discovery_template_reply(products)
+    assert reply.startswith("Here are a few thoughtful Kapruka picks:")
+    assert "Chocolate Birthday Cake" in reply
+    assert "Vanilla Celebration Cake" in reply
+    assert "Strawberry Delight Cake" in reply
+
+
+def test_cap_search_products_for_llm_context_limits_to_five() -> None:
+    many_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [_product(f"cake{i:03d}", f"Cake {i}", amount=1000.0 + i) for i in range(8)],
+        },
+    }
+    capped = _cap_search_products_for_llm_context(many_results, limit=5)
+    assert capped is not None
+    results = capped[SEARCH_PRODUCTS_TOOL]["results"]
+    assert len(results) == 5
+    assert results[0]["id"] == "cake000"
+    assert results[4]["id"] == "cake004"
+    assert len(many_results[SEARCH_PRODUCTS_TOOL]["results"]) == 8
+
+
+@pytest.mark.asyncio
+async def test_generate_response_caps_products_in_gemini_context() -> None:
+    """Gemini prompt receives at most five search products; carousel keeps full list."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(message="Here are curated cakes from Kapruka.")
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    many_products = [_product(f"cake{i:03d}", f"Cake {i}", amount=1000.0 + i) for i in range(8)]
+    tool_results = {SEARCH_PRODUCTS_TOOL: {"results": many_products}}
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cakes")],
+        "tool_results": tool_results,
+        "session_id": "sess-gen-cap-llm",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    context = call_kwargs["contents"]
+    assert "Cake 5" not in context
+    assert "Cake 4" in context
+    assert 'data-product-id="cake007"' in result["response_html"]
 
 
 def test_resolve_effective_tool_results_prefers_checkout_over_stale_trace() -> None:

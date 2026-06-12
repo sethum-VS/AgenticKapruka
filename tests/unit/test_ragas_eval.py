@@ -84,7 +84,9 @@ def test_build_eval_genai_client_returns_intent_and_reply() -> None:
             response_schema=AssistantReply,
         ),
     )
-    assert "Chocolate Birthday Cake" in reply_response.parsed.message
+    message = reply_response.parsed.message
+    assert "Chocolate Birthday Cake" in message
+    assert "curated" in message.lower() or "thoughtful" in message.lower()
 
 
 def test_build_eval_genai_client_adds_situational_flavor_for_concierge() -> None:

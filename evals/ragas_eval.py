@@ -177,7 +177,10 @@ def _synthesize_assistant_reply(user_prompt: str) -> str:
                 elif isinstance(name, str):
                     lines.append(name)
             if lines:
-                return "I found these Kapruka options: " + ", ".join(lines) + "."
+                curated = lines[:3]
+                if len(curated) == 1:
+                    return f"Here is a thoughtful pick: {curated[0]}."
+                return "Here are a few curated options: " + "; ".join(curated) + "."
 
     product_payload = tool_results.get(GET_PRODUCT_TOOL)
     if isinstance(product_payload, dict) and product_payload.get("name"):
