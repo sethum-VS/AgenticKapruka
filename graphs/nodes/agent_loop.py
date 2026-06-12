@@ -16,6 +16,7 @@ from pydantic import BaseModel, ValidationError
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
+from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tool_executor import inject_currency, invoke_tool
@@ -377,15 +378,18 @@ async def agent_loop(
     agent_clarifying_question: str | None = None
     agent_loop_done = False
     force_finish = False
+    exit_reason: str | None = None
+    planner_iterations = 0
 
     _emit_status(_DEFAULT_STATUS_MESSAGE)
 
     for iteration in range(MAX_ITERATIONS):
         if force_finish:
-            logger.info(
+            logger.debug(
                 "agent_loop: duplicate-tool guard forcing finish at iteration %s",
                 iteration,
             )
+            exit_reason = "duplicate_guard"
             agent_loop_done = True
             break
 
@@ -397,7 +401,17 @@ async def agent_loop(
             state=state,
             tool_trace=tool_trace,
         )
-        logger.info(
+        planner_iterations = iteration + 1
+
+        iteration_args: dict[str, Any] = (
+            dict(step.tool_args or {}) if step.action == "call_tool" else {"action": step.action}
+        )
+        trace_agent_iteration(
+            iteration,
+            step.tool_name if step.action == "call_tool" else None,
+            iteration_args,
+        )
+        logger.debug(
             "agent_loop: iteration %s action=%s tool=%s",
             iteration,
             step.action,
@@ -408,21 +422,25 @@ async def agent_loop(
             agent_clarifying_question = (
                 step.rationale.strip() or "Could you share a few more details?"
             )
+            exit_reason = "ask_user"
             agent_loop_done = True
             break
 
         if step.action == "finish":
+            exit_reason = "finish"
             agent_loop_done = True
             break
 
         if step.action != "call_tool":
             logger.warning("agent_loop: unknown action %r; finishing", step.action)
+            exit_reason = "finish"
             agent_loop_done = True
             break
 
         tool_name = (step.tool_name or "").strip()
         if tool_name not in ALLOWED_PLANNER_TOOLS:
             logger.warning("agent_loop: disallowed tool %r; finishing", tool_name)
+            exit_reason = "finish"
             agent_loop_done = True
             break
 
@@ -430,7 +448,7 @@ async def agent_loop(
         enriched_args = inject_currency(tool_name, raw_args, currency)
 
         if _is_duplicate_invocation(tool_trace, tool_name, enriched_args):
-            logger.info(
+            logger.debug(
                 "agent_loop: duplicate %s with identical args; forcing finish next iteration",
                 tool_name,
             )
@@ -456,13 +474,16 @@ async def agent_loop(
         tool_call_count += 1
 
     if not agent_loop_done:
-        logger.info("agent_loop: reached max iterations (%s); finishing", MAX_ITERATIONS)
+        logger.debug("agent_loop: reached max iterations (%s); finishing", MAX_ITERATIONS)
+        exit_reason = "max_iterations"
         agent_loop_done = True
 
     updates: dict[str, Any] = {
         "tool_trace": tool_trace,
         "tool_call_count": tool_call_count,
         "agent_loop_done": agent_loop_done,
+        "agent_loop_exit_reason": exit_reason,
+        "agent_loop_iterations": planner_iterations,
     }
     if tool_trace:
         # Mirror trace into tool_results; generate_response merges via merge_tool_trace.

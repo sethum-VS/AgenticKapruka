@@ -105,8 +105,57 @@ def summarize_value(value: Any, *, depth: int = 0) -> Any:
     return _truncate(repr(value))
 
 
+def _summarize_tool_trace_sizes(tool_trace: list[Any]) -> list[dict[str, Any]]:
+    """Compact per-invocation result sizes — never full MCP payloads."""
+    sizes: list[dict[str, Any]] = []
+    for invocation in tool_trace:
+        if not isinstance(invocation, dict):
+            continue
+        name = invocation.get("name", "?")
+        result = invocation.get("result")
+        entry: dict[str, Any] = {"tool": name}
+        if isinstance(result, dict):
+            if "error" in result:
+                entry["error"] = result.get("error")
+            elif isinstance(result.get("results"), list):
+                entry["products"] = len(result["results"])
+            elif isinstance(result.get("categories"), list):
+                entry["categories"] = len(result["categories"])
+            elif "available" in result or "city" in result:
+                entry["delivery"] = True
+            else:
+                entry["keys"] = len(result)
+        elif result is not None:
+            entry["type"] = type(result).__name__
+        sizes.append(entry)
+    return sizes
+
+
+def _resolve_agent_loop_exit_reason(update: dict[str, Any]) -> str:
+    """Resolve agent_loop exit reason from explicit field or state hints."""
+    explicit = update.get("agent_loop_exit_reason")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    if update.get("agent_clarifying_question"):
+        return "ask_user"
+    return "finish"
+
+
 def summarize_node_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
     """Shape a LangGraph node delta for readable console output."""
+    if node_name == "agent_loop":
+        tool_trace = update.get("tool_trace") or []
+        tool_names = [
+            str(inv["name"]) for inv in tool_trace if isinstance(inv, dict) and inv.get("name")
+        ]
+        return {
+            "iterations": update.get("agent_loop_iterations"),
+            "tool_call_count": update.get("tool_call_count"),
+            "tool_names": tool_names,
+            "exit_reason": _resolve_agent_loop_exit_reason(update),
+            "trace_sizes": _summarize_tool_trace_sizes(tool_trace),
+            "agent_loop_done": update.get("agent_loop_done"),
+        }
     if node_name == "generate_response":
         assistant = (update.get("assistant_message") or "").strip()
         html_len = len(update.get("response_html") or "")
@@ -212,6 +261,23 @@ def trace_node_update(node_name: str, update: dict[str, Any]) -> None:
     summary = summarize_node_update(node_name, update)
     body = json.dumps(summary, ensure_ascii=False, indent=2)
     _emit_block(f"NODE ▶ {node_name}", body)
+
+
+def trace_agent_iteration(
+    iteration: int,
+    tool_name: str | None,
+    args_summary: dict[str, Any],
+) -> None:
+    """Log one agent-loop planner iteration without full MCP payloads."""
+    if not is_debug_trace_enabled():
+        return
+    payload = {
+        "iteration": iteration,
+        "tool_name": tool_name,
+        "args": summarize_value(args_summary),
+    }
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    _emit_block(f"AGENT LOOP ▶ iteration {iteration}", body)
 
 
 def trace_route_decision(
