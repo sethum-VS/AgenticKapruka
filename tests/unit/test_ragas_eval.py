@@ -115,7 +115,7 @@ async def test_agent_loop_multi_step_anniversary_kandy(redis_client: RedisClient
     case = GoldenCase(
         id="agent-001-anniversary-kandy-dinner",
         scenario="discovery",
-        user_query="Plan a surprise anniversary dinner in Kandy — flowers and a cake",
+        user_query="Plan a surprise anniversary dinner in Kandy next Saturday — flowers and a cake",
         expected_tools=[SEARCH_PRODUCTS_TOOL, CHECK_DELIVERY_TOOL],
         reference_answer="Search then check Kandy delivery.",
     )

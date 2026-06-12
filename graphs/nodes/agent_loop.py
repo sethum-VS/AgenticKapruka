@@ -16,6 +16,10 @@ from pydantic import BaseModel, ValidationError
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, Intent, ToolInvocation
+from lib.chat.delivery_dates import (
+    delivery_date_clarifying_question,
+    normalize_delivery_date,
+)
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
@@ -29,6 +33,7 @@ from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.utils.timezone import colombo_today_iso
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
@@ -293,7 +298,11 @@ def _build_planner_system_instruction(
     tool_trace: list[ToolInvocation],
 ) -> str:
     """Compose planner system instruction with memory and hybrid soft hints."""
-    instruction = PLANNER_SYSTEM_INSTRUCTION
+    instruction = (
+        f"{PLANNER_SYSTEM_INSTRUCTION}\n\n"
+        f"Today in Sri Lanka: {colombo_today_iso()}\n"
+        "For kapruka_check_delivery, delivery_date must be YYYY-MM-DD on or after today."
+    )
     zep_memory_facts = state.get("zep_memory_facts")
     if zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
@@ -497,6 +506,17 @@ async def agent_loop(
             )
             force_finish = True
             continue
+
+        if tool_name == CHECK_DELIVERY_TOOL:
+            user_message = _extract_latest_user_message(state.get("messages") or [])
+            resolved_date = normalize_delivery_date(enriched_args, user_message)
+            if resolved_date is None:
+                agent_clarifying_question = delivery_date_clarifying_question()
+                exit_reason = "ask_user"
+                agent_loop_done = True
+                break
+            enriched_args = {**enriched_args, "delivery_date": resolved_date}
+            enriched_args.pop("date", None)
 
         _emit_status(_status_message_for_tool(tool_name))
 

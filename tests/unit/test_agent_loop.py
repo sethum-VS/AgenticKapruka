@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -20,6 +22,7 @@ from graphs.nodes.agent_loop import (
     format_planner_prior_iterations,
 )
 from graphs.state import AgentState, ToolInvocation
+from lib.chat.delivery_dates import delivery_date_clarifying_question
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
@@ -482,3 +485,126 @@ def test_planner_system_instruction_includes_hybrid_soft_hints_only() -> None:
     assert '"category": "Birthday"' in instruction
     assert '"favorite_category": "Birthday"' in instruction
     assert "build_discovery_search_args" not in instruction
+
+
+def test_planner_system_instruction_includes_colombo_today_anchor() -> None:
+    """Planner prompt anchors delivery_date grounding to Sri Lanka today."""
+    state: AgentState = {"messages": [HumanMessage(content="cakes for mom")]}
+
+    with patch("graphs.nodes.agent_loop.colombo_today_iso", return_value="2026-06-12"):
+        instruction = _build_planner_system_instruction(state, tool_trace=[])
+
+    assert "Today in Sri Lanka: 2026-06-12" in instruction
+    assert "delivery_date must be YYYY-MM-DD on or after today" in instruction
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_check_delivery_missing_date_asks_user_skips_mcp() -> None:
+    """Missing delivery_date skips kapruka_check_delivery and asks for a valid date."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Colombo 03"},
+            rationale="check delivery",
+        ),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="can you deliver to Colombo?")],
+    }
+    fixed = datetime(2026, 6, 12, 12, 0, tzinfo=ZoneInfo("Asia/Colombo"))
+
+    with (
+        patch("lib.utils.timezone.colombo_now", return_value=fixed),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_exit_reason"] == "ask_user"
+    assert result["agent_clarifying_question"] == delivery_date_clarifying_question()
+    assert result["tool_trace"] == []
+    mock_service.check_delivery.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_check_delivery_past_planner_date_resolves_from_message() -> None:
+    """Past planner delivery_date is replaced when the user names a relative date."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Colombo 03", "delivery_date": "2024-06-29"},
+            rationale="check delivery",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="deliver to Colombo next Saturday")],
+    }
+    fixed = datetime(2026, 6, 12, 12, 0, tzinfo=ZoneInfo("Asia/Colombo"))
+
+    with (
+        patch("lib.utils.timezone.colombo_now", return_value=fixed),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert len(result["tool_trace"]) == 1
+    assert result["tool_trace"][0]["args"]["delivery_date"] == "2026-06-13"
+    mock_service.check_delivery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_check_delivery_past_date_without_message_asks_user() -> None:
+    """Past delivery_date with no resolvable user phrase skips MCP and asks for a date."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Colombo 03", "delivery_date": "2024-06-29"},
+            rationale="check delivery",
+        ),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="deliver to Colombo")],
+    }
+    fixed = datetime(2026, 6, 12, 12, 0, tzinfo=ZoneInfo("Asia/Colombo"))
+
+    with (
+        patch("lib.utils.timezone.colombo_now", return_value=fixed),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_exit_reason"] == "ask_user"
+    assert result["agent_clarifying_question"] == delivery_date_clarifying_question()
+    assert result["tool_trace"] == []
+    mock_service.check_delivery.assert_not_called()

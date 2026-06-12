@@ -65,6 +65,16 @@ def normalize_planner_tool_args(name: str, args: dict[str, Any]) -> dict[str, An
         if "category" not in normalized and isinstance(category_id, str) and category_id.strip():
             normalized["category"] = category_id.strip()
             normalized.pop("category_id", None)
+    if name == CHECK_DELIVERY_TOOL:
+        delivery_date = normalized.get("delivery_date")
+        date_alias = normalized.get("date")
+        if (
+            (not isinstance(delivery_date, str) or not delivery_date.strip())
+            and isinstance(date_alias, str)
+            and date_alias.strip()
+        ):
+            normalized["delivery_date"] = date_alias.strip()
+            normalized.pop("date", None)
     return normalized
 
 

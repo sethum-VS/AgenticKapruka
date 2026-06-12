@@ -172,7 +172,7 @@
     {
       "id": "agent-001-anniversary-kandy-dinner",
       "scenario": "discovery",
-      "user_query": "Plan a surprise anniversary dinner in Kandy — flowers and a cake",
+      "user_query": "Plan a surprise anniversary dinner in Kandy next Saturday — flowers and a cake",
       "expected_tools": ["kapruka_search_products", "kapruka_check_delivery"],
       "reference_answer": "I'll search Kapruka for anniversary dinner gifts such as flowers and cakes, then verify delivery availability to Kandy before suggesting options with prices."
     },
