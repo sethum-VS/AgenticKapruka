@@ -129,6 +129,28 @@ async def test_generate_response_html_contains_product_names_from_tool_results()
 
 
 @pytest.mark.asyncio
+async def test_generate_response_decodes_html_entities_in_reply() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="Try the Cadbury 135g &#8211; 30 Minis hamper for mom.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="chocolates for mom")],
+        "tool_results": _SEARCH_TOOL_RESULTS,
+        "session_id": "sess-gen-decode-001",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "Cadbury 135g – 30 Minis" in result["assistant_message"]
+    assert "&#8211;" not in result["response_html"]
+
+
+@pytest.mark.asyncio
 async def test_generate_response_template_fallback_on_gemini_429() -> None:
     mock_client = MagicMock()
     mock_client.models.generate_content.side_effect = genai_errors.ClientError(
@@ -266,6 +288,53 @@ def test_extract_search_products_from_tool_results() -> None:
     assert products[0]["id"] == "cake00ka002034"
     assert extract_search_products({}) == []
     assert extract_search_products(None) == []
+
+
+def test_extract_search_products_filters_cake_accessories() -> None:
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                {
+                    "id": "cake00ka002034",
+                    "name": "Chocolate Birthday Cake",
+                    "category": {"name": "Cakes", "slug": "cakes"},
+                },
+                {
+                    "id": "acc001",
+                    "name": "Gold Cake Topper",
+                    "category": {"name": "Accessories", "slug": "accessories"},
+                },
+                {
+                    "id": "acc002",
+                    "name": "Silicone Cake Mould Set",
+                    "category": {"name": "Baking", "slug": "baking"},
+                },
+                {
+                    "id": "acc003",
+                    "name": "Revolving Cake Turning Table",
+                    "category": {"name": "Baking", "slug": "baking"},
+                },
+            ],
+            "applied_filters": {"q": "cakes", "limit": 10},
+        },
+    }
+    products = extract_search_products(tool_results)
+    assert len(products) == 1
+    assert products[0]["id"] == "cake00ka002034"
+
+
+def test_extract_search_products_keeps_non_cake_queries_unfiltered() -> None:
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                {"id": "flower001", "name": "Rose Bouquet", "category": {"name": "Flowers"}},
+                {"id": "flower002", "name": "Lily Stand Display", "category": {"name": "Flowers"}},
+            ],
+            "applied_filters": {"q": "flowers", "limit": 10},
+        },
+    }
+    products = extract_search_products(tool_results)
+    assert len(products) == 2
 
 
 def test_build_products_carousel_html_renders_carousel() -> None:

@@ -17,6 +17,7 @@ from graphs.nodes.agent_loop import (
     PLANNER_SEARCH_RESULT_LIMIT,
     AgentPlannerStep,
     _build_planner_system_instruction,
+    _build_planner_user_prompt,
     agent_loop,
     build_planner_prior_iterations,
     format_planner_prior_iterations,
@@ -516,6 +517,27 @@ async def test_agent_loop_planner_uses_flash_model_only() -> None:
 async def test_agent_loop_requires_kapruka_service() -> None:
     with pytest.raises(ValueError, match="kapruka_service is required"):
         await agent_loop(_base_state())
+
+
+def test_planner_user_prompt_includes_cakes_rewrite_hint() -> None:
+    state: AgentState = {"messages": [HumanMessage(content="show me cakes")]}
+    prompt = _build_planner_user_prompt(state)
+    assert 'q="birthday cake"' in prompt
+
+
+def test_planner_user_prompt_mom_birthday_bias_hint() -> None:
+    state: AgentState = {"messages": [HumanMessage(content="birthday gift for my mom")]}
+    prompt = _build_planner_user_prompt(state)
+    assert "flowers" in prompt.lower()
+    assert "combopack" in prompt.lower()
+
+
+def test_planner_user_prompt_skips_cakes_hint_when_birthday_cake_named() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="I need a birthday cake for Saturday")],
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert 'q="birthday cake"' not in prompt
 
 
 def test_planner_system_instruction_includes_hybrid_soft_hints_only() -> None:

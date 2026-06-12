@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 from google import genai
@@ -35,6 +36,14 @@ from lib.zep.memory import format_memory_facts_block
 logger = logging.getLogger(__name__)
 
 _LLM_CONTEXT_PRODUCT_LIMIT = 5
+
+_CAKE_QUERY_PATTERN = re.compile(r"\bcakes?\b", re.I)
+_CAKE_CATEGORY_PATTERN = re.compile(r"\bcake", re.I)
+_CAKE_ID_PREFIX = re.compile(r"^cake", re.I)
+_ACCESSORY_BLACKLIST = re.compile(
+    r"\b(topper|mould|mold|turning\s+table|cake\s+stand|stand)\b",
+    re.I,
+)
 
 _TOOL_ERROR_ACTION_LABELS: dict[str, str] = {
     SEARCH_PRODUCTS_TOOL: "search the Kapruka catalog",
@@ -173,12 +182,75 @@ def _format_tool_results_context(tool_results: dict[str, Any] | None) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
+def _search_query_from_payload(search_payload: dict[str, Any]) -> str | None:
+    filters = search_payload.get("applied_filters")
+    if isinstance(filters, dict):
+        query = filters.get("q")
+        if isinstance(query, str) and query.strip():
+            return query.strip()
+    return None
+
+
+def _product_category_text(product: dict[str, Any]) -> str:
+    category = product.get("category")
+    if isinstance(category, dict):
+        parts = [str(category.get(key) or "") for key in ("name", "slug", "id")]
+        return " ".join(parts)
+    return ""
+
+
+def _is_cake_search_query(query: str | None) -> bool:
+    return bool(query and _CAKE_QUERY_PATTERN.search(query))
+
+
+def _is_likely_cake_product(product: dict[str, Any]) -> bool:
+    product_id = str(product.get("id") or "")
+    if _CAKE_ID_PREFIX.match(product_id):
+        return True
+    name = str(product.get("name") or "")
+    if _CAKE_QUERY_PATTERN.search(name):
+        return True
+    return bool(_CAKE_CATEGORY_PATTERN.search(_product_category_text(product)))
+
+
+def _is_cake_accessory(product: dict[str, Any]) -> bool:
+    name = str(product.get("name") or "")
+    summary = str(product.get("summary") or "")
+    return bool(_ACCESSORY_BLACKLIST.search(f"{name} {summary}"))
+
+
+def _filter_cake_search_products(
+    products: list[dict[str, Any]],
+    query: str | None,
+) -> list[dict[str, Any]]:
+    """Drop non-cake items and baking accessories when the search q targets cakes."""
+    if not _is_cake_search_query(query):
+        return products
+    return [
+        product
+        for product in products
+        if _is_likely_cake_product(product) and not _is_cake_accessory(product)
+    ]
+
+
+def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_results = search_payload.get("results")
+    if not isinstance(raw_results, list):
+        return []
+    products = [
+        item
+        for item in raw_results
+        if isinstance(item, dict) and item.get("id") and item.get("name")
+    ]
+    return _filter_cake_search_products(products, _search_query_from_payload(search_payload))
+
+
 def _cap_search_products_for_llm_context(
     tool_results: dict[str, Any] | None,
     *,
     limit: int = _LLM_CONTEXT_PRODUCT_LIMIT,
 ) -> dict[str, Any] | None:
-    """Slice kapruka_search_products results before Gemini synthesis (carousel unchanged)."""
+    """Slice curated kapruka_search_products results before Gemini synthesis."""
     if not tool_results:
         return tool_results
 
@@ -187,12 +259,17 @@ def _cap_search_products_for_llm_context(
         return tool_results
 
     raw_results = search_payload.get("results")
-    if not isinstance(raw_results, list) or len(raw_results) <= limit:
+    if not isinstance(raw_results, list):
+        return tool_results
+
+    curated = _curated_search_results(search_payload)
+    capped_results = curated[:limit]
+    if capped_results == raw_results:
         return tool_results
 
     capped = dict(tool_results)
     capped_search = dict(search_payload)
-    capped_search["results"] = raw_results[:limit]
+    capped_search["results"] = capped_results
     capped[SEARCH_PRODUCTS_TOOL] = capped_search
     return capped
 
@@ -266,7 +343,7 @@ def _generate_reply_sync(
 
 
 def extract_search_products(tool_results: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Return product dicts from kapruka_search_products tool_results, if any."""
+    """Return curated product dicts from kapruka_search_products tool_results, if any."""
     if not tool_results:
         return []
 
@@ -274,15 +351,7 @@ def extract_search_products(tool_results: dict[str, Any] | None) -> list[dict[st
     if not isinstance(search_payload, dict):
         return []
 
-    raw_results = search_payload.get("results")
-    if not isinstance(raw_results, list):
-        return []
-
-    products: list[dict[str, Any]] = []
-    for item in raw_results:
-        if isinstance(item, dict) and item.get("id") and item.get("name"):
-            products.append(item)
-    return products
+    return _curated_search_results(search_payload)
 
 
 def build_tracking_status_html(tool_results: dict[str, Any] | None) -> str | None:
@@ -619,6 +688,8 @@ async def generate_response(
         reply_text = _build_discovery_template_reply(products) or (
             "I could not generate a response. Please try again."
         )
+
+    reply_text = decode_html_entities(reply_text)
 
     logger.info(
         "generate_response: rendered assistant reply (%d chars, carousel=%s)",

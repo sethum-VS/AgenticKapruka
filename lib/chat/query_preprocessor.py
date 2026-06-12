@@ -67,6 +67,11 @@ _CITY_DELIVERY = re.compile(
     re.I,
 )
 
+_IN_OR_FOR_CITY = re.compile(
+    r"\b(?:in|to|for)\s+(Colombo(?:\s+\d{2})?|Kandy|Galle|Negombo|Jaffna|Matara)\b",
+    re.I,
+)
+
 
 def classify_query_mode(text: str) -> QueryMode:
     """Classify input as utility (transactional) or situational (emotional)."""
@@ -131,13 +136,15 @@ def _normalize_city(raw: str) -> str:
 
 
 def extract_target_city(text: str) -> str | None:
-    """Extract a delivery destination city when delivery intent is present."""
-    if not _has_delivery_intent(text):
-        return None
-    for pattern in (_DELIVER_TO_CITY, _CITY_DELIVERY):
-        match = pattern.search(text)
-        if match:
-            return _normalize_city(match.group(1))
+    """Extract a delivery destination city from delivery verbs or in/to/for city phrases."""
+    if _has_delivery_intent(text):
+        for pattern in (_DELIVER_TO_CITY, _CITY_DELIVERY):
+            match = pattern.search(text)
+            if match:
+                return _normalize_city(match.group(1))
+    match = _IN_OR_FOR_CITY.search(text)
+    if match:
+        return _normalize_city(match.group(1))
     return None
 
 

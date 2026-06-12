@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse
 
@@ -281,6 +282,33 @@ def _resolve_currency(state: AgentState) -> str:
     return state.get("currency") or hints.get("currency") or preferences.get("currency") or "LKR"
 
 
+_CAKES_BROAD = re.compile(r"\bcakes?\b", re.I)
+_BIRTHDAY_CAKE = re.compile(r"\bbirthday\s+cake", re.I)
+_MOM_BIRTHDAY = re.compile(
+    r"\b(?:mom|mother|mum|amma)\b.*\bbirthday\b|\bbirthday\b.*\b(?:mom|mother|mum|amma)\b",
+    re.I,
+)
+
+
+def _format_planner_query_rewrite_hints(user_message: str) -> str:
+    """Soft search-query rewrite suggestions for broad cake and mom/birthday turns."""
+    hints: list[str] = []
+    if _CAKES_BROAD.search(user_message) and not _BIRTHDAY_CAKE.search(user_message):
+        hints.append(
+            'Broad "cakes" query: prefer kapruka_search_products with q="birthday cake" '
+            "unless the customer named a specific cake type."
+        )
+    if _MOM_BIRTHDAY.search(user_message):
+        hints.append(
+            "Mom/mother + birthday occasion: bias search q toward birthday cakes, flowers, "
+            "or combopack/combo gifts unless the customer specified another product type."
+        )
+    if not hints:
+        return ""
+    bullet_lines = "\n".join(f"- {hint}" for hint in hints)
+    return f"Query rewrite hints (soft — explicit customer wording wins):\n{bullet_lines}"
+
+
 def _format_hybrid_soft_hints(state: AgentState) -> str:
     """Serialize hybrid_context hints and preferences as soft narrative context."""
     hybrid_context = state.get("hybrid_context") or {}
@@ -321,7 +349,11 @@ def _build_planner_system_instruction(
 def _build_planner_user_prompt(state: AgentState) -> str:
     """User turn content for the planner — latest message only."""
     user_message = _extract_latest_user_message(state.get("messages") or [])
-    return f"Customer message:\n{user_message}"
+    prompt = f"Customer message:\n{user_message}"
+    rewrite_hints = _format_planner_query_rewrite_hints(user_message)
+    if rewrite_hints:
+        prompt += f"\n\n{rewrite_hints}"
+    return prompt
 
 
 def _parse_planner_step(response: types.GenerateContentResponse) -> AgentPlannerStep:

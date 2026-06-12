@@ -49,8 +49,15 @@ def test_extract_target_city_for_deliver_to_kandy() -> None:
     assert extract_target_city("Can you deliver to Kandy on Sunday?") == "Kandy"
 
 
-def test_extract_target_city_none_without_delivery_intent() -> None:
-    assert extract_target_city("Birthday cake for my mom in Colombo") is None
+def test_extract_target_city_colombo_zone_without_delivery_verb() -> None:
+    assert extract_target_city("Birthday cake for my mom in Colombo 05") == "Colombo 05"
+    assert extract_target_city("Birthday cake for my mom in Colombo") == "Colombo"
+
+
+def test_query_preprocessor_extracts_colombo_zone_on_first_turn() -> None:
+    metadata = _preprocessor.process("Birthday cake for my mom in Colombo 05")
+    assert metadata["target_city"] == "Colombo 05"
+    assert metadata["requires_delivery_validation"] is False
 
 
 def test_query_preprocessor_utility_transactional() -> None:
