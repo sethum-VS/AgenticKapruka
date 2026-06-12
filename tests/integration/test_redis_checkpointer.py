@@ -179,6 +179,46 @@ async def test_tracking_turn_clears_stale_tool_results_from_prior_discovery(
 
 
 @pytest.mark.asyncio
+async def test_tracking_turn_with_money_shaped_amount_renders_without_crash(
+    checkpointer: AsyncRedisSaver,
+) -> None:
+    """MCP value/currency amount objects must not crash tracking card rendering."""
+    money_track = TrackOrderOutput.model_validate(
+        {
+            **_TRACK_OUTPUT.model_dump(),
+            "amount": {"value": "4970", "currency": "LKR"},
+        }
+    )
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.track_order.return_value = money_track
+
+    deps = ShoppingGraphDeps(
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        genai_client=build_mock_genai_client(
+            intent=["tracking"],
+            assistant_message="Here is your order status.",
+        ),
+    )
+    graph = build_shopping_graph(checkpointer=checkpointer, deps=deps)
+    config: dict[str, Any] = {"configurable": {"thread_id": "thread-money-amount"}}
+
+    result = await graph.ainvoke(
+        initial_shopping_state(
+            message="Track order VIMP34456CB2",
+            session_id=_SESSION_ID,
+            thread_id="thread-money-amount",
+        ),
+        config,
+    )
+
+    assert result["intent"] == "tracking"
+    assert 'data-testid="order-tracking-status"' in (result.get("response_html") or "")
+    assert "LKR 4,970" in (result.get("response_html") or "")
+    mock_service.track_order.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_different_thread_ids_have_isolated_state(
     checkpointer: AsyncRedisSaver,
 ) -> None:

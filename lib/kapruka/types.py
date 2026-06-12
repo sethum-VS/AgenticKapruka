@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -401,6 +401,36 @@ class TrackOrderItem(BaseModel):
     selling_price: float
 
 
+def _format_track_amount_currency_code(raw_amount: float | int | str, currency: str) -> str:
+    """Format MCP money as a display string (e.g. ``LKR 4,970``)."""
+    code = currency.upper()
+    num = float(str(raw_amount).replace(",", ""))
+    formatted = f"{round(num):,}" if code == "LKR" else f"{num:,.2f}"
+    return f"{code} {formatted}"
+
+
+def coerce_track_order_amount(value: Any) -> str:
+    """Normalize track-order amount from MCP string or Money-shaped payload."""
+    if isinstance(value, str):
+        return value
+
+    if isinstance(value, Money):
+        raw_amount = value.amount
+        currency = value.currency
+    elif isinstance(value, dict):
+        currency = str(value.get("currency") or "LKR")
+        raw_amount = value.get("value", value.get("amount"))
+    else:
+        msg = f"amount must be a string or money object, got {type(value).__name__}"
+        raise ValueError(msg)
+
+    if raw_amount is None:
+        msg = "amount money object missing value/amount"
+        raise ValueError(msg)
+
+    return _format_track_amount_currency_code(raw_amount, currency)
+
+
 class TrackOrderOutput(BaseModel):
     """Output from kapruka_track_order."""
 
@@ -422,6 +452,11 @@ class TrackOrderOutput(BaseModel):
     has_delivery_video: bool
     has_delivery_photo: bool
     items: list[TrackOrderItem] = Field(default_factory=list)
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def coerce_amount(cls, value: Any) -> str:
+        return coerce_track_order_amount(value)
 
 
 CategoryNode.model_rebuild()
