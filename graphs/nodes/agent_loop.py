@@ -464,6 +464,11 @@ async def agent_loop(
         "tool_call_count": tool_call_count,
         "agent_loop_done": agent_loop_done,
     }
+    if tool_trace:
+        # Mirror trace into tool_results until generate_response merge_tool_trace (PRD-109).
+        updates["tool_results"] = {
+            invocation["name"]: invocation["result"] for invocation in tool_trace
+        }
     if agent_clarifying_question is not None:
         updates["agent_clarifying_question"] = agent_clarifying_question
     return updates

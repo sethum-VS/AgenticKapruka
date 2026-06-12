@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import fakeredis.aioredis
 import pytest
 from httpx import ASGITransport, AsyncClient
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from langgraph.checkpoint.redis.key_registry import AsyncCheckpointKeyRegistry
+from tests.helpers.mock_genai import build_mock_genai_client
 from tests.unit.test_settings import _VALID_ENV, _apply_env
 
 from app.config import get_settings
 from app.main import create_app
-from graphs.nodes.analyze_intent import IntentClassification
-from graphs.nodes.generate_response import AssistantReply
 from graphs.shopping_graph import ShoppingGraphDeps
 from lib.chat.session import SESSION_COOKIE_NAME, verify_signed_session_cookie
 from lib.kapruka.service import KaprukaService
@@ -50,24 +49,6 @@ async def _fakeredis_asetup(self: AsyncRedisSaver) -> None:
     self._key_registry = AsyncCheckpointKeyRegistry(self._redis)
 
 
-def _mock_genai_client() -> MagicMock:
-    """Gemini client returning discovery intent then assistant reply."""
-    mock_client = MagicMock()
-
-    intent_response = MagicMock()
-    intent_response.parsed = IntentClassification(intent="discovery")
-    intent_response.text = '{"intent": "discovery"}'
-
-    reply_response = MagicMock()
-    reply_response.parsed = AssistantReply(
-        message="Here are some birthday cake options from Kapruka.",
-    )
-    reply_response.text = reply_response.parsed.model_dump_json()
-
-    mock_client.models.generate_content.side_effect = [intent_response, reply_response]
-    return mock_client
-
-
 def _mock_kapruka_service() -> AsyncMock:
     mock_service = AsyncMock(spec=KaprukaService)
     mock_service.search_products.return_value = _SEARCH_OUTPUT
@@ -85,7 +66,10 @@ def chat_flow_env(monkeypatch: pytest.MonkeyPatch) -> RedisClient:
     deps = ShoppingGraphDeps(
         kapruka_service=_mock_kapruka_service(),
         client_ip="127.0.0.1",
-        genai_client=_mock_genai_client(),
+        genai_client=build_mock_genai_client(
+            search_query=_MESSAGE,
+            assistant_message="Here are some birthday cake options from Kapruka.",
+        ),
         zep_client=None,
     )
 
@@ -135,7 +119,10 @@ async def test_chat_stream_search_uses_session_currency_after_update(
     deps = ShoppingGraphDeps(
         kapruka_service=mock_service,
         client_ip="127.0.0.1",
-        genai_client=_mock_genai_client(),
+        genai_client=build_mock_genai_client(
+            search_query=_MESSAGE,
+            assistant_message="Here are some birthday cake options from Kapruka.",
+        ),
         zep_client=None,
     )
 

@@ -30,10 +30,12 @@ from app.config import Settings
 from evals.golden_dataset import GoldenCase, GoldenDataset, load_golden_dataset
 from evals.intent_heuristics import infer_intent_from_message
 from evals.ragas_ci_llm import CiRagasChatModel
+from graphs.nodes.agent_loop import AgentPlannerStep
 from graphs.nodes.analyze_intent import PROCEED_CHECKOUT_MESSAGE, IntentClassification
 from graphs.nodes.generate_response import AssistantReply
 from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initial_shopping_state
-from graphs.state import AgentState, Intent
+from graphs.state import AgentState, Intent, ToolInvocation
+from lib.kapruka.product_id import extract_product_id
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -182,7 +184,60 @@ def _synthesize_assistant_reply(user_prompt: str) -> str:
     return "Here is what I found on Kapruka based on our catalog data."
 
 
-def build_eval_genai_client(intent: Intent | None = None) -> MagicMock:
+def _planner_step_for_eval_case(
+    case: GoldenCase | None,
+    *,
+    planner_call_index: int,
+    user_contents: str,
+) -> AgentPlannerStep:
+    """Return the next agent-loop planner step for Ragas eval graph runs."""
+    if planner_call_index > 0:
+        return AgentPlannerStep(action="finish", rationale="catalog facts collected")
+
+    if case is None:
+        return AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "gifts"},
+            rationale="default search",
+        )
+
+    primary_tool = case.expected_tools[0] if case.expected_tools else SEARCH_PRODUCTS_TOOL
+    if primary_tool == SEARCH_PRODUCTS_TOOL:
+        query = case.user_query.strip()
+        if len(query) < 3:
+            query = "gifts"
+        return AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": query},
+            rationale="search catalog",
+        )
+    if primary_tool == LIST_CATEGORIES_TOOL:
+        return AgentPlannerStep(
+            action="call_tool",
+            tool_name=LIST_CATEGORIES_TOOL,
+            tool_args={"depth": 1},
+            rationale="browse categories",
+        )
+    if primary_tool == GET_PRODUCT_TOOL:
+        product_id = extract_product_id(case.user_query) or "cake00ka002034"
+        return AgentPlannerStep(
+            action="call_tool",
+            tool_name=GET_PRODUCT_TOOL,
+            tool_args={"product_id": product_id},
+            rationale="fetch product details",
+        )
+
+    _ = user_contents
+    return AgentPlannerStep(action="finish", rationale="no planner tools for case")
+
+
+def build_eval_genai_client(
+    intent: Intent | None = None,
+    *,
+    case: GoldenCase | None = None,
+) -> MagicMock:
     """Gemini client mock: structured intent then faithful catalog reply.
 
     When ``intent`` is None, infer routing from the user message (E2E / shadow tests).
@@ -192,6 +247,7 @@ def build_eval_genai_client(intent: Intent | None = None) -> MagicMock:
     intent_response = MagicMock()
     intent_response.parsed = IntentClassification(intent=default_intent)
     intent_response.text = json.dumps({"intent": default_intent})
+    planner_calls = 0
 
     def generate_content(
         *,
@@ -200,12 +256,24 @@ def build_eval_genai_client(intent: Intent | None = None) -> MagicMock:
         config: types.GenerateContentConfig | None = None,
         **kwargs: Any,
     ) -> MagicMock:
+        nonlocal planner_calls
         _ = model, kwargs
         response = MagicMock()
         if config is not None and config.response_schema is IntentClassification:
             resolved: Intent = intent if intent is not None else infer_intent_from_message(contents)
             response.parsed = IntentClassification(intent=resolved)
             response.text = json.dumps({"intent": resolved})
+            return response
+
+        if config is not None and config.response_schema is AgentPlannerStep:
+            step = _planner_step_for_eval_case(
+                case,
+                planner_call_index=planner_calls,
+                user_contents=contents,
+            )
+            planner_calls += 1
+            response.parsed = step
+            response.text = step.model_dump_json()
             return response
 
         if config is not None and config.response_schema is AssistantReply:
@@ -237,6 +305,34 @@ def contexts_from_tool_results(tool_results: dict[str, Any] | None) -> list[str]
         else:
             contexts.append(str(value))
     return contexts
+
+
+def contexts_from_tool_trace(tool_trace: list[ToolInvocation] | None) -> list[str]:
+    """Serialize agent-loop tool_trace payloads as Ragas retrieved_contexts strings."""
+    if not tool_trace:
+        return []
+    contexts: list[str] = []
+    for invocation in tool_trace:
+        result = invocation.get("result")
+        if result is None:
+            continue
+        if isinstance(result, (dict, list)):
+            contexts.append(json.dumps(result, ensure_ascii=False))
+        else:
+            contexts.append(str(result))
+    return contexts
+
+
+def contexts_from_eval_state(result: AgentState) -> list[str]:
+    """Collect Ragas contexts from heuristic tool_results or agent-loop tool_trace."""
+    tool_results = result.get("tool_results")
+    contexts = contexts_from_tool_results(tool_results if isinstance(tool_results, dict) else {})
+    if contexts:
+        return contexts
+    tool_trace = result.get("tool_trace")
+    if isinstance(tool_trace, list):
+        return contexts_from_tool_trace(tool_trace)
+    return []
 
 
 def _plain_response_from_state(result: AgentState) -> str:
@@ -284,13 +380,11 @@ async def run_graph_for_case(
 
     with _patch_eval_settings():
         result = await graph.ainvoke(state)
-    tool_results = result.get("tool_results")
-    tool_dict = tool_results if isinstance(tool_results, dict) else {}
 
     return GraphEvalRow(
         user_input=case.user_query,
         response=_plain_response_from_state(result),
-        retrieved_contexts=contexts_from_tool_results(tool_dict),
+        retrieved_contexts=contexts_from_eval_state(result),
         reference=case.reference_answer,
     )
 
@@ -350,7 +444,7 @@ async def build_eval_graph_for_case(
     deps = ShoppingGraphDeps(
         kapruka_service=kapruka_service,
         client_ip=_EVAL_CLIENT_IP,
-        genai_client=build_eval_genai_client(intent_for_case(case)),
+        genai_client=build_eval_genai_client(intent_for_case(case), case=case),
         redis_client=redis_client,
     )
     return build_shopping_graph(checkpointer=None, deps=deps)

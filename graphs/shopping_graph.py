@@ -1,4 +1,4 @@
-"""Main shopping LangGraph — analyze → hybrid context → MCP tools → response."""
+"""Main shopping LangGraph — analyze → hybrid context → agent loop → response."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from graphs.nodes.agent_loop import agent_loop
 from graphs.nodes.analyze_intent import analyze_intent
 from graphs.nodes.call_mcp_tools import call_mcp_tools
 from graphs.nodes.generate_response import generate_response
@@ -76,6 +77,14 @@ def build_shopping_graph(
             genai_client=genai_client,
         )
 
+    async def _agent_loop(state: AgentState) -> dict[str, Any]:
+        return await agent_loop(
+            state,
+            kapruka_service=kapruka_service,
+            client_ip=client_ip,
+            genai_client=genai_client,
+        )
+
     async def _generate_response(state: AgentState) -> dict[str, Any]:
         return await generate_response(state, genai_client=genai_client)
 
@@ -95,6 +104,7 @@ def build_shopping_graph(
     graph.add_node("analyze_intent", _analyze_intent)
     graph.add_node("retrieve_hybrid_context", _retrieve_hybrid_context)
     graph.add_node("call_mcp_tools", _call_mcp_tools)
+    graph.add_node("agent_loop", _agent_loop)
     graph.add_node("generate_response", _generate_response)
     graph.add_node("run_checkout_graph", _run_checkout_graph)
     graph.add_node("zep_memory_write", _zep_memory_write)
@@ -110,7 +120,8 @@ def build_shopping_graph(
             "run_checkout_graph": "run_checkout_graph",
         },
     )
-    graph.add_edge("retrieve_hybrid_context", "call_mcp_tools")
+    graph.add_edge("retrieve_hybrid_context", "agent_loop")
+    graph.add_edge("agent_loop", "generate_response")
     graph.add_edge("call_mcp_tools", "generate_response")
     graph.add_edge("run_checkout_graph", "generate_response")
     graph.add_edge("generate_response", "zep_memory_write")
