@@ -12,6 +12,7 @@ from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import PRO_MODEL
 from graphs.nodes.generate_response import (
     AssistantReply,
+    _resolve_effective_tool_results,
     build_products_carousel_html,
     extract_search_products,
     generate_response,
@@ -381,6 +382,30 @@ def _product(
         "ships_internationally": False,
         "url": f"https://www.kapruka.com/{product_id}",
     }
+
+
+def test_resolve_effective_tool_results_prefers_checkout_over_stale_trace() -> None:
+    """Follow-up checkout turns must not reuse discovery tool_trace from checkpoint."""
+    state: AgentState = {
+        "intent": "checkout",
+        "tool_trace": [
+            {
+                "name": "kapruka_search_products",
+                "args": {"q": "birthday cake"},
+                "result": {"results": []},
+            },
+        ],
+        "tool_results": {
+            CHECKOUT_TOOL_KEY: {
+                "current_step": "delivery_city",
+                "cart_items": [{"product_id": "cake00ka002034", "quantity": 1}],
+            },
+        },
+    }
+    resolved = _resolve_effective_tool_results(state)
+    assert resolved is not None
+    assert CHECKOUT_TOOL_KEY in resolved
+    assert "kapruka_search_products" not in resolved
 
 
 def test_merge_tool_trace_last_wins_non_search_tools() -> None:

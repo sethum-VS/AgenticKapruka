@@ -20,7 +20,7 @@ from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tool_executor import inject_currency, invoke_tool
-from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
@@ -36,6 +36,7 @@ ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
         SEARCH_PRODUCTS_TOOL,
         GET_PRODUCT_TOOL,
         LIST_CATEGORIES_TOOL,
+        LIST_CITIES_TOOL,
         CHECK_DELIVERY_TOOL,
     },
 )
@@ -43,6 +44,7 @@ ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
 _TOOL_STATUS_MESSAGES: dict[str, str] = {
     SEARCH_PRODUCTS_TOOL: "Searching catalog…",
     CHECK_DELIVERY_TOOL: "Checking delivery…",
+    LIST_CITIES_TOOL: "Listing delivery cities…",
     LIST_CATEGORIES_TOOL: "Browsing categories…",
     GET_PRODUCT_TOOL: "Fetching product details…",
 }
@@ -69,6 +71,7 @@ Allowed tools only:
 - kapruka_get_product
 - kapruka_list_categories
 - kapruka_check_delivery
+- kapruka_list_delivery_cities
 
 Never call kapruka_track_order.
 
@@ -195,6 +198,25 @@ def _summarize_check_delivery(result: Any) -> Any:
     }
 
 
+def _summarize_list_delivery_cities(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+    if "error" in result:
+        return _summarize_error(result)
+    cities = result.get("cities")
+    if not isinstance(cities, list):
+        return {"cities": [], "total_matched": 0}
+    names = [
+        str(entry["name"])
+        for entry in cities[:PLANNER_CATEGORY_NODE_LIMIT]
+        if isinstance(entry, dict) and entry.get("name")
+    ]
+    return {
+        "cities": names,
+        "total_matched": result.get("total_matched"),
+    }
+
+
 def _summarize_for_planner(name: str, result: Any) -> Any:
     """Return a compact tool payload safe for planner prompt context.
 
@@ -210,6 +232,8 @@ def _summarize_for_planner(name: str, result: Any) -> Any:
         return _summarize_list_categories(result)
     if name == CHECK_DELIVERY_TOOL:
         return _summarize_check_delivery(result)
+    if name == LIST_CITIES_TOOL:
+        return _summarize_list_delivery_cities(result)
     if isinstance(result, dict):
         return _summarize_error(result) if "error" in result else {"status": "ok"}
     return result

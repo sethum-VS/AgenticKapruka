@@ -26,8 +26,6 @@ _CHECKOUT_TRIGGER_TOKENS: frozenset[str] = frozenset(
         "proceed to payment",
         "recipient details",
         "sender details",
-        "cities near",
-        "delivery cities",
     ),
 )
 
@@ -84,8 +82,6 @@ def infer_intent_from_message(message: str) -> Intent:
             "recipient",
             "sender",
             "place my order",
-            "cities near",
-            "delivery cities",
         )
     ):
         return "checkout"

@@ -50,9 +50,10 @@ from graphs.nodes.analyze_intent import PROCEED_CHECKOUT_MESSAGE, IntentClassifi
 from graphs.nodes.generate_response import AssistantReply
 from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initial_shopping_state
 from graphs.state import AgentState, Intent, ToolInvocation
+from lib.chat.query_preprocessor import QueryPreprocessor
 from lib.kapruka.product_id import extract_product_id
 from lib.kapruka.service import KaprukaService
-from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
@@ -221,6 +222,80 @@ def _tool_args_for_eval_case(tool_name: str, case: GoldenCase) -> dict[str, Any]
         return {"product_id": product_id}
     if tool_name == CHECK_DELIVERY_TOOL:
         return {"city": "Kandy"}
+    if tool_name == LIST_CITIES_TOOL:
+        return {"query": "Galle", "limit": 25}
+    return {}
+
+
+def _extract_customer_message(user_contents: str) -> str:
+    """Parse the latest customer utterance from a planner or response prompt."""
+    marker = "Customer message:\n"
+    if marker not in user_contents:
+        return user_contents.strip()
+    body = user_contents.split(marker, 1)[1]
+    return body.split("\n\n", 1)[0].strip()
+
+
+def _e2e_search_args_for_message(message: str) -> dict[str, str]:
+    """Build deterministic search args for shadow/E2E planner mocks."""
+    stripped = message.strip()
+    if len(stripped) < 3:
+        return {"q": "gifts"}
+    return {"q": stripped[:120]}
+
+
+def _e2e_check_delivery_args(message: str) -> dict[str, str]:
+    """Build delivery-check args from preprocessor city hints."""
+    metadata = QueryPreprocessor().process(message)
+    city = metadata.get("target_city") or "Colombo 03"
+    return {"city": str(city)}
+
+
+def _e2e_list_cities_args(message: str) -> dict[str, Any]:
+    """Build list-cities args for shadow transcripts mentioning nearby cities."""
+    lowered = message.lower()
+    for token in ("galle", "kandy", "colombo", "jaffna"):
+        if token in lowered:
+            return {"query": token.capitalize(), "limit": 25}
+    return {"limit": 25}
+
+
+def _infer_e2e_planner_tools(message: str) -> list[str]:
+    """Infer ordered MCP tools for one E2E/shadow user turn."""
+    lowered = message.lower()
+    tools: list[str] = []
+
+    if any(
+        phrase in lowered for phrase in ("kinds of gifts", "what can i buy", "what do you sell")
+    ):
+        tools.append(LIST_CATEGORIES_TOOL)
+
+    if "cities near" in lowered or "delivery cities" in lowered:
+        tools.append(LIST_CITIES_TOOL)
+
+    metadata = QueryPreprocessor().process(message)
+    if metadata.get("requires_delivery_validation"):
+        tools.append(CHECK_DELIVERY_TOOL)
+
+    category_only = tools == [LIST_CATEGORIES_TOOL]
+    if not category_only:
+        tools.insert(0, SEARCH_PRODUCTS_TOOL)
+    elif SEARCH_PRODUCTS_TOOL not in tools:
+        tools.append(SEARCH_PRODUCTS_TOOL)
+
+    return tools
+
+
+def _tool_args_for_e2e_message(tool_name: str, message: str) -> dict[str, Any]:
+    """Map inferred E2E planner tools to deterministic mock args."""
+    if tool_name == SEARCH_PRODUCTS_TOOL:
+        return _e2e_search_args_for_message(message)
+    if tool_name == LIST_CATEGORIES_TOOL:
+        return {"depth": 1}
+    if tool_name == CHECK_DELIVERY_TOOL:
+        return _e2e_check_delivery_args(message)
+    if tool_name == LIST_CITIES_TOOL:
+        return _e2e_list_cities_args(message)
     return {}
 
 
@@ -231,14 +306,16 @@ def _planner_step_for_eval_case(
     user_contents: str,
 ) -> AgentPlannerStep:
     """Return the next agent-loop planner step for Ragas eval graph runs."""
-    _ = user_contents
     if case is None:
-        if planner_call_index == 0:
+        message = _extract_customer_message(user_contents)
+        expected_tools = _infer_e2e_planner_tools(message)
+        if planner_call_index < len(expected_tools):
+            tool_name = expected_tools[planner_call_index]
             return AgentPlannerStep(
                 action="call_tool",
-                tool_name=SEARCH_PRODUCTS_TOOL,
-                tool_args={"q": "gifts"},
-                rationale="default search",
+                tool_name=tool_name,
+                tool_args=_tool_args_for_e2e_message(tool_name, message),
+                rationale=f"e2e planner step {planner_call_index + 1}",
             )
         return AgentPlannerStep(action="finish", rationale="catalog facts collected")
 
@@ -332,7 +409,8 @@ def build_eval_genai_client(
     intent_response = MagicMock()
     intent_response.parsed = IntentClassification(intent=default_intent)
     intent_response.text = json.dumps({"intent": default_intent})
-    planner_calls = 0
+    planner_turn_contents: str | None = None
+    planner_turn_index = 0
 
     def generate_content(
         *,
@@ -341,7 +419,7 @@ def build_eval_genai_client(
         config: types.GenerateContentConfig | None = None,
         **kwargs: Any,
     ) -> MagicMock:
-        nonlocal planner_calls
+        nonlocal planner_turn_contents, planner_turn_index
         _ = model, kwargs
         response = MagicMock()
         if config is not None and config.response_schema is IntentClassification:
@@ -351,12 +429,15 @@ def build_eval_genai_client(
             return response
 
         if config is not None and config.response_schema is AgentPlannerStep:
+            if contents != planner_turn_contents:
+                planner_turn_contents = contents
+                planner_turn_index = 0
             step = _planner_step_for_eval_case(
                 case,
-                planner_call_index=planner_calls,
+                planner_call_index=planner_turn_index,
                 user_contents=contents,
             )
-            planner_calls += 1
+            planner_turn_index += 1
             response.parsed = step
             response.text = step.model_dump_json()
             return response
