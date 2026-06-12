@@ -79,6 +79,11 @@ def test_validate_delivery_date_iso_accepts_today() -> None:
     assert error is None
 
 
+def test_parse_relative_invalid_iso_returns_none() -> None:
+    """Malformed ISO tokens do not raise during relative parse."""
+    assert parse_relative_delivery_date("deliver 2025-02-30 to Colombo", today=_FRIDAY) is None
+
+
 def test_delivery_date_clarifying_question_includes_today() -> None:
     fixed = datetime(2026, 6, 12, 12, 0, tzinfo=COLOMBO)
     with patch("lib.utils.timezone.colombo_now", return_value=fixed):

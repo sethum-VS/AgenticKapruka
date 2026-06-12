@@ -2,6 +2,31 @@
 
 All notable changes to AgenticKapruka are documented here.
 
+## [0.0.12.0] - 2026-06-12
+
+### Added
+
+- Per-turn agent state reset (`_per_turn_agent_reset_fields`) preventing multi-turn tool_trace and clarifying-question leaks
+- `lib/chat/delivery_dates.py` for Colombo-grounded delivery date parse, normalize, and past-date rejection
+- General intent static welcome path (`build_general_welcome_message`) without Gemini on empty tool traces
+- `scripts/verify_chat_loop.py` expanded to 7 scenarios (greeting, gifts, cakes, flowers, product, tracking, delivery)
+- Cake search post-filter and planner query-rewrite hints; HTML entity decode on assistant replies
+- Chat SSE loading hardening: `htmx:afterRequest` backup and pending bubble cleanup on stream error
+
+### Changed
+
+- Concierge response prompts: warm top 2–3 curation, exact prices, delivery context (replaces utility no-empathy tone)
+- `MAX_ITERATIONS` 4 → 3 with force-finish after successful search; 90s chat turn timeout in streaming
+- `TrackOrderOutput.amount` coerces MCP Money `{value, currency}` shape to formatted string
+- Planner tool arg normalization (`query` → `q`) and canonical dedup in `tool_executor`
+
+### Fixed
+
+- Agent loop exits immediately on MCP tool errors with user-facing tier-1 messages
+- Invalid ISO delivery tokens no longer crash turns; bare weekday false positives removed from date parse
+- Cake accessory filter falls back to raw results when curation would empty a non-empty catalog
+- Stale clarifying questions no longer mask search results when exit reason is not `ask_user`
+
 ## [0.0.11.0] - 2026-06-12
 
 ### Added

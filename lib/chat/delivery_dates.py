@@ -56,7 +56,10 @@ def parse_relative_delivery_date(text: str, *, today: date | None = None) -> dat
 
     iso_match = _ISO_DATE.search(text)
     if iso_match:
-        return date.fromisoformat(iso_match.group(1))
+        try:
+            return date.fromisoformat(iso_match.group(1))
+        except ValueError:
+            return None
 
     if re.search(r"\btoday\b", normalized):
         return today
@@ -73,10 +76,6 @@ def parse_relative_delivery_date(text: str, *, today: date | None = None) -> dat
         for name, weekday in _WEEKDAY_NAMES.items():
             if re.search(rf"\b{prefix}\s+{name}\b", normalized):
                 return _resolve_weekday(today, weekday, is_next=is_next)
-
-    for name, weekday in _WEEKDAY_NAMES.items():
-        if re.search(rf"\b{name}\b", normalized):
-            return _resolve_weekday(today, weekday, is_next=False)
 
     return None
 

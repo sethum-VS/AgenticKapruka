@@ -75,7 +75,7 @@ Return structured JSON with:
 - action: call_tool | finish | ask_user
 - tool_name: MCP tool name when action is call_tool (otherwise null)
 - tool_args: tool arguments object when action is call_tool (otherwise null)
-- rationale: brief trace note for debugging (not shown to the customer)
+- rationale: for ask_user, a short customer-facing clarifying question; otherwise a brief trace note
 
 Allowed tools only:
 - kapruka_search_products (tool_args must include string field q, not query)

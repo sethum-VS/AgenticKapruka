@@ -242,7 +242,11 @@ def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, An
         for item in raw_results
         if isinstance(item, dict) and item.get("id") and item.get("name")
     ]
-    return _filter_cake_search_products(products, _search_query_from_payload(search_payload))
+    query = _search_query_from_payload(search_payload)
+    curated = _filter_cake_search_products(products, query)
+    if not curated and products and _is_cake_search_query(query):
+        return products
+    return curated
 
 
 def _cap_search_products_for_llm_context(
