@@ -24,8 +24,10 @@ from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.system_prompts import (
+    GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION,
     LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION,
     UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION,
+    build_general_welcome_message,
     select_response_system_instruction,
 )
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
@@ -159,8 +161,72 @@ async def test_generate_response_empty_user_message_skips_llm() -> None:
     result = await generate_response(state, genai_client=mock_client)
 
     assert "response_html" in result
-    assert "How can I help you" in result["response_html"]
+    assert result["assistant_message"] == build_general_welcome_message()
+    assert "Welcome to Kapruka" in result["response_html"]
     mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "user_message",
+    [
+        "hello",
+        "thanks!",
+        "what can you help with?",
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_response_general_welcome_skips_gemini(
+    user_message: str,
+) -> None:
+    """General intent with no tools returns static welcome — no empty-catalog Gemini reply."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content=user_message)],
+        "intent": "general",
+        "tool_trace": [],
+        "agent_loop_exit_reason": "finish",
+        "agent_loop_done": True,
+        "session_id": f"sess-gen-welcome-{user_message[:8]}",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    welcome = build_general_welcome_message()
+    assert result["assistant_message"] == welcome
+    assert "cakes" in result["assistant_message"].lower()
+    assert "flowers" in result["assistant_message"].lower()
+    assert "order tracking" in result["assistant_message"].lower()
+    assert "couldn't find products" not in result["assistant_message"].lower()
+    assert 'data-testid="product-carousel"' not in result["response_html"]
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_refined_general_finish_zero_tools_uses_welcome() -> None:
+    """agent_loop refined_intent=general + finish with empty tool_trace uses static welcome."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="thanks!")],
+        "intent": "general",
+        "tool_trace": [],
+        "tool_results": {},
+        "agent_loop_exit_reason": "finish",
+        "agent_loop_done": True,
+        "agent_loop_iterations": 1,
+        "session_id": "sess-gen-refined-general",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert result["assistant_message"] == build_general_welcome_message()
+    mock_client.models.generate_content.assert_not_called()
+
+
+def test_select_response_system_instruction_general_omits_empty_tool_results_rule() -> None:
+    """General intent Gemini path must not instruct empty-catalog fallback copy."""
+    prompt = select_response_system_instruction(None, intent="general")
+    assert prompt == GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION
+    assert "tool_results are empty" not in prompt.lower()
 
 
 @pytest.mark.asyncio

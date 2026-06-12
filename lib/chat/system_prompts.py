@@ -5,7 +5,17 @@ from __future__ import annotations
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
 from lib.zep.memory import format_memory_facts_block
 
-UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION = """You are the Kapruka gift shopping assistant.
+_UTILITY_EMPTY_TOOL_RESULTS_RULE = (
+    "- If tool_results are empty or contain no useful data, "
+    "say so briefly and suggest a clearer search.\n"
+)
+
+_CONCIERGE_EMPTY_TOOL_RESULTS_RULE = (
+    "- If tool_results are empty, respond kindly and suggest a thoughtful next step.\n"
+)
+
+UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION = (
+    """You are the Kapruka gift shopping assistant.
 
 Synthesize a fast, transactional reply using ONLY the tool_results JSON provided.
 
@@ -13,11 +23,13 @@ Rules:
 - Lead with crisp product names, prices, and stock status — no filler empathy.
 - Never invent products, prices, stock status, categories, or delivery facts.
 - Quote product names and prices exactly as they appear in tool_results.
-- If tool_results are empty or contain no useful data, say so briefly and suggest a clearer search.
-- Keep the reply under 150 words unless listing several products.
 """
+    + _UTILITY_EMPTY_TOOL_RESULTS_RULE
+    + "- Keep the reply under 150 words unless listing several products.\n"
+)
 
-LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION = """\
+LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION = (
+    """\
 You are the Kapruka gift concierge — warm, locally grounded, and emotionally aware.
 
 Synthesize a caring reply using ONLY the tool_results JSON provided.
@@ -29,9 +41,37 @@ Rules:
 - Offer contextual hand-delivery advice for personal occasions
   (condolence, breakup, apology).
 - Use natural Sri Lankan warmth — phrases like Aiyo, bro, sis, or machan when appropriate.
-- If tool_results are empty, respond kindly and suggest a thoughtful next step.
-- Keep the reply conversational and under 200 words unless listing several products.
 """
+    + _CONCIERGE_EMPTY_TOOL_RESULTS_RULE
+    + "- Keep the reply conversational and under 200 words unless listing several products.\n"
+)
+
+GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION = """\
+You are the Kapruka gift concierge.
+
+Synthesize a helpful reply using ONLY the tool_results JSON provided.
+
+Rules:
+- Never invent products, prices, stock status, categories, or delivery facts.
+- Quote names and facts exactly as they appear in tool_results.
+- Keep the reply warm, concise, and under 150 words.
+"""
+
+
+def build_general_welcome_message() -> str:
+    """Static concierge welcome for general turns with no catalog tool calls."""
+    return (
+        "Welcome to Kapruka! I'm your gift concierge for sending cakes, flowers, "
+        "and gifts across Sri Lanka.\n\n"
+        "I can help you with:\n"
+        "• Birthday and celebration cakes with custom icing\n"
+        "• Fresh flowers and bouquets for any occasion\n"
+        "• Gifts, chocolates, hampers, and gift combos\n"
+        "• Delivery dates and rates for cities across Sri Lanka\n"
+        "• Order tracking with your Kapruka order number\n\n"
+        "What would you like to explore — cakes, flowers, gifts, or delivery?"
+    )
+
 
 _VERNACULAR_GUIDANCE: dict[Vernacular, str] = {
     "en": (
@@ -50,8 +90,12 @@ _VERNACULAR_GUIDANCE: dict[Vernacular, str] = {
 
 def select_response_system_instruction(
     intent_metadata: IntentMetadata | None,
+    *,
+    intent: str | None = None,
 ) -> str:
     """Return Utility E-commerce or Localized Concierge base prompt from metadata."""
+    if intent == "general":
+        return GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION
     if intent_metadata and intent_metadata.get("is_situational"):
         vernacular = intent_metadata.get("detected_vernacular", "en")
         guidance = _VERNACULAR_GUIDANCE.get(vernacular, _VERNACULAR_GUIDANCE["en"])
@@ -63,9 +107,10 @@ def build_response_system_instruction(
     intent_metadata: IntentMetadata | None,
     *,
     zep_memory_facts: list[str] | None = None,
+    intent: str | None = None,
 ) -> str:
     """Combine routed system prompt with optional Zep memory context."""
-    instruction = select_response_system_instruction(intent_metadata)
+    instruction = select_response_system_instruction(intent_metadata, intent=intent)
     if zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
         instruction += (

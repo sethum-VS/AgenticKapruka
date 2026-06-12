@@ -18,7 +18,10 @@ from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question
 from lib.chat.intent_metadata import IntentMetadata
-from lib.chat.system_prompts import build_response_system_instruction
+from lib.chat.system_prompts import (
+    build_general_welcome_message,
+    build_response_system_instruction,
+)
 from lib.checkout.tracking import extract_order_number, tracking_output_from_tool_results
 from lib.genai.errors import is_resource_exhausted
 from lib.genai.fallback import generate_content_with_fallback
@@ -137,6 +140,17 @@ def build_agent_tool_error_message(
     return f"I could not {action} right now. {cause} Please adjust your request and try again."
 
 
+def _is_general_welcome_path(state: AgentState) -> bool:
+    """True when general intent finished with no MCP catalog or tracking payloads."""
+    if state.get("intent") != "general":
+        return False
+    tool_trace = state.get("tool_trace")
+    if tool_trace:
+        return False
+    tool_results = state.get("tool_results")
+    return not isinstance(tool_results, dict) or not tool_results
+
+
 def _resolve_effective_tool_results(state: AgentState) -> dict[str, Any] | None:
     """Prefer checkout/tracking payloads; else merged agent-loop trace; else tool_results."""
     tool_results = state.get("tool_results")
@@ -200,11 +214,13 @@ def _generate_reply_sync(
     zep_memory_facts: list[str] | None = None,
     intent_metadata: IntentMetadata | None = None,
     system_instruction: str | None = None,
+    intent: str | None = None,
 ) -> str:
     """Blocking Gemini call; run via asyncio.to_thread from generate_response."""
     instruction = system_instruction or build_response_system_instruction(
         intent_metadata,
         zep_memory_facts=zep_memory_facts,
+        intent=intent,
     )
     if system_instruction is not None and zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
@@ -402,10 +418,17 @@ async def generate_response(
     tool_results = _resolve_effective_tool_results(state)
 
     if not user_message.strip():
-        fallback = "How can I help you find a gift on Kapruka today?"
+        welcome = build_general_welcome_message()
         return {
-            "response_html": render_assistant_html(fallback),
-            "assistant_message": fallback,
+            "response_html": render_assistant_html(welcome),
+            "assistant_message": welcome,
+        }
+
+    if _is_general_welcome_path(state):
+        welcome = build_general_welcome_message()
+        return {
+            "response_html": render_assistant_html(welcome),
+            "assistant_message": welcome,
         }
 
     clarifying_question = state.get("agent_clarifying_question")
@@ -540,6 +563,7 @@ async def generate_response(
 
     zep_memory_facts = state.get("zep_memory_facts")
     intent_metadata = state.get("intent_metadata")
+    intent = state.get("intent")
     try:
         reply_text = await asyncio.to_thread(
             _generate_reply_sync,
@@ -548,6 +572,7 @@ async def generate_response(
             user_prompt=user_prompt,
             zep_memory_facts=zep_memory_facts,
             intent_metadata=intent_metadata,
+            intent=intent,
         )
     except Exception as exc:
         if not is_resource_exhausted(exc):
