@@ -16,16 +16,30 @@ from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
+from lib.chat.delivery_dates import delivery_date_clarifying_question
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.system_prompts import build_response_system_instruction
 from lib.checkout.tracking import extract_order_number, tracking_output_from_tool_results
 from lib.genai.errors import is_resource_exhausted
 from lib.genai.fallback import generate_content_with_fallback
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
+from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
+from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.utils.text import decode_html_entities
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
+
+_TOOL_ERROR_ACTION_LABELS: dict[str, str] = {
+    SEARCH_PRODUCTS_TOOL: "search the Kapruka catalog",
+    GET_PRODUCT_TOOL: "fetch that product",
+    LIST_CATEGORIES_TOOL: "browse categories",
+    CHECK_DELIVERY_TOOL: "check delivery",
+    LIST_CITIES_TOOL: "list delivery cities",
+}
+
+_PAST_DELIVERY_ERROR_CODES = frozenset({"past_delivery_date", "validation_error"})
 
 CHECKOUT_REVIEW_SYSTEM_INSTRUCTION = (
     "You are the Kapruka gift shopping assistant at the final checkout review step.\n\n"
@@ -79,6 +93,48 @@ def merge_tool_trace(tool_trace: list[ToolInvocation]) -> dict[str, Any]:
         merged[SEARCH_PRODUCTS_TOOL] = search_merged
 
     return merged
+
+
+def _error_code_from_tool_trace(
+    tool_trace: list[ToolInvocation] | None,
+    tool_name: str,
+) -> str | None:
+    """Return MCP error code for the last failed invocation of tool_name."""
+    if not tool_trace:
+        return None
+    for invocation in reversed(tool_trace):
+        if invocation.get("name") != tool_name:
+            continue
+        result = invocation.get("result")
+        if isinstance(result, dict) and result.get("error"):
+            code = result.get("error")
+            return str(code) if code is not None else None
+    return None
+
+
+def build_agent_tool_error_message(
+    *,
+    tool: str,
+    raw_message: str,
+    error_code: str | None = None,
+) -> str:
+    """Tier-1 user-facing copy for agent-loop MCP failures (problem + cause + fix)."""
+    if (
+        error_code in _PAST_DELIVERY_ERROR_CODES
+        and tool == CHECK_DELIVERY_TOOL
+        and ("past" in raw_message.lower() or error_code == "past_delivery_date")
+    ):
+        return delivery_date_clarifying_question()
+    if error_code == "date_not_deliverable":
+        return (
+            "That delivery date is not available. "
+            f"{raw_message} "
+            "Would you like to try a different date?"
+        )
+
+    action = _TOOL_ERROR_ACTION_LABELS.get(tool, "complete that request")
+    cause = raw_message.strip() or "Kapruka could not process the request."
+    return f"I could not {action} right now. {cause} Please adjust your request and try again."
 
 
 def _resolve_effective_tool_results(state: AgentState) -> dict[str, Any] | None:
@@ -362,6 +418,26 @@ async def generate_response(
         return {
             "response_html": render_assistant_html(question),
             "assistant_message": question,
+        }
+
+    agent_tool_error = state.get("agent_tool_error")
+    if (
+        state.get("agent_loop_exit_reason") == "tool_error"
+        and isinstance(agent_tool_error, dict)
+        and agent_tool_error.get("tool")
+        and agent_tool_error.get("message")
+    ):
+        tool_name = str(agent_tool_error["tool"])
+        raw_message = str(agent_tool_error["message"])
+        error_code = _error_code_from_tool_trace(state.get("tool_trace"), tool_name)
+        error_reply = build_agent_tool_error_message(
+            tool=tool_name,
+            raw_message=raw_message,
+            error_code=error_code,
+        )
+        return {
+            "response_html": render_assistant_html(error_reply),
+            "assistant_message": error_reply,
         }
 
     if state.get("intent") == "tracking":

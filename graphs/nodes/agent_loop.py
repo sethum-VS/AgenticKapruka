@@ -424,6 +424,7 @@ async def agent_loop(
     tool_trace: list[ToolInvocation] = []
     tool_call_count = 0
     agent_clarifying_question: str | None = None
+    agent_tool_error: dict[str, str] | None = None
     agent_loop_done = False
     force_finish = False
     exit_reason: str | None = None
@@ -536,6 +537,25 @@ async def agent_loop(
         )
         tool_call_count += 1
 
+        if isinstance(result, dict) and result.get("error"):
+            error_message = result.get("message")
+            agent_tool_error = {
+                "tool": tool_name,
+                "message": (
+                    str(error_message).strip()
+                    if isinstance(error_message, str) and error_message.strip()
+                    else str(result.get("error"))
+                ),
+            }
+            exit_reason = "tool_error"
+            agent_loop_done = True
+            logger.debug(
+                "agent_loop: tool %s returned error %r; stopping loop",
+                tool_name,
+                result.get("error"),
+            )
+            break
+
     if not agent_loop_done:
         logger.debug("agent_loop: reached max iterations (%s); finishing", MAX_ITERATIONS)
         exit_reason = "max_iterations"
@@ -555,6 +575,8 @@ async def agent_loop(
         }
     if agent_clarifying_question is not None:
         updates["agent_clarifying_question"] = agent_clarifying_question
+    if agent_tool_error is not None:
+        updates["agent_tool_error"] = agent_tool_error
     if refined_intent is not None:
         updates["intent"] = refined_intent
     return updates

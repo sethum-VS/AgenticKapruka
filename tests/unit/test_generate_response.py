@@ -13,6 +13,7 @@ from graphs.model_router import PRO_MODEL
 from graphs.nodes.generate_response import (
     AssistantReply,
     _resolve_effective_tool_results,
+    build_agent_tool_error_message,
     build_products_carousel_html,
     extract_search_products,
     generate_response,
@@ -20,12 +21,14 @@ from graphs.nodes.generate_response import (
     render_assistant_html,
 )
 from graphs.state import AgentState, ToolInvocation
+from lib.chat.delivery_dates import delivery_date_clarifying_question
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.system_prompts import (
     LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION,
     UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION,
     select_response_system_instruction,
 )
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 
 _CHECKOUT_REVIEW_HTML = '<section data-testid="checkout-review">Review summary</section>'
@@ -602,5 +605,92 @@ async def test_generate_response_empty_merged_search_fallback_via_tool_trace() -
     result = await generate_response(state, genai_client=mock_client)
 
     assert "couldn't find products" in result["assistant_message"].lower()
+    assert 'data-testid="product-carousel"' not in result["response_html"]
+    mock_client.models.generate_content.assert_not_called()
+
+
+def test_build_agent_tool_error_message_past_delivery_date() -> None:
+    """Past delivery MCP errors prompt for a valid delivery date."""
+    message = build_agent_tool_error_message(
+        tool=CHECK_DELIVERY_TOOL,
+        raw_message="Choose a delivery date that is today or later.",
+        error_code="past_delivery_date",
+    )
+    assert message == delivery_date_clarifying_question()
+
+
+def test_build_agent_tool_error_message_generic_mcp() -> None:
+    """Generic MCP failures use problem + cause + fix copy."""
+    message = build_agent_tool_error_message(
+        tool=SEARCH_PRODUCTS_TOOL,
+        raw_message="Kapruka search timed out.",
+        error_code="upstream_error",
+    )
+    assert "could not search the kapruka catalog" in message.lower()
+    assert "Kapruka search timed out." in message
+    assert "adjust your request" in message.lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_tool_error_past_delivery_skips_gemini() -> None:
+    """tool_error exit renders delivery-date guidance without catalog synthesis."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="deliver cake to Colombo on 2024-01-01")],
+        "intent": "discovery",
+        "agent_loop_exit_reason": "tool_error",
+        "agent_tool_error": {
+            "tool": CHECK_DELIVERY_TOOL,
+            "message": "Choose a delivery date that is today or later.",
+        },
+        "tool_trace": [
+            {
+                "name": CHECK_DELIVERY_TOOL,
+                "args": {"city": "Colombo 03", "delivery_date": "2024-01-01"},
+                "result": {
+                    "error": "past_delivery_date",
+                    "message": "Choose a delivery date that is today or later.",
+                },
+            },
+        ],
+        "session_id": "sess-gen-tool-error-delivery",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert result["assistant_message"] == delivery_date_clarifying_question()
+    assert "When would you like delivery?" in result["response_html"]
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_tool_error_generic_mcp_skips_gemini() -> None:
+    """tool_error exit renders tier-1 MCP failure copy without Gemini."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cakes")],
+        "intent": "discovery",
+        "agent_loop_exit_reason": "tool_error",
+        "agent_tool_error": {
+            "tool": SEARCH_PRODUCTS_TOOL,
+            "message": "Kapruka search timed out.",
+        },
+        "tool_trace": [
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"q": "birthday cake"},
+                "result": {
+                    "error": "upstream_error",
+                    "message": "Kapruka search timed out.",
+                },
+            },
+        ],
+        "session_id": "sess-gen-tool-error-search",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "could not search the kapruka catalog" in result["assistant_message"].lower()
+    assert "Kapruka search timed out." in result["assistant_message"]
     assert 'data-testid="product-carousel"' not in result["response_html"]
     mock_client.models.generate_content.assert_not_called()

@@ -44,6 +44,7 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
         "agent_loop_exit_reason",
         "agent_loop_iterations",
         "agent_clarifying_question",
+        "agent_tool_error",
         "model_tier",
         "session_id",
         "zep_thread_id",

@@ -16,6 +16,7 @@ AgentLoopExitReason = Literal[
     "ask_user",
     "max_iterations",
     "duplicate_guard",
+    "tool_error",
 ]
 CheckoutStep = Literal[
     "cart",
@@ -52,6 +53,7 @@ class AgentState(TypedDict):
     agent_loop_exit_reason: AgentLoopExitReason | None
     agent_loop_iterations: int | None
     agent_clarifying_question: str | None
+    agent_tool_error: dict[str, str] | None
     model_tier: ModelTier | None
     session_id: str | None
     zep_thread_id: str | None

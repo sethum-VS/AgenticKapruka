@@ -176,6 +176,7 @@ def _per_turn_agent_reset_fields() -> dict[str, Any]:
         "tool_results": {},
         "tool_call_count": 0,
         "agent_clarifying_question": None,
+        "agent_tool_error": None,
         "agent_loop_done": None,
         "agent_loop_exit_reason": None,
         "agent_loop_iterations": None,

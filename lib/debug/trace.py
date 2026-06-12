@@ -138,6 +138,8 @@ def _resolve_agent_loop_exit_reason(update: dict[str, Any]) -> str:
         return explicit
     if update.get("agent_clarifying_question"):
         return "ask_user"
+    if update.get("agent_tool_error"):
+        return "tool_error"
     return "finish"
 
 

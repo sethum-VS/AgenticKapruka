@@ -405,6 +405,55 @@ async def test_agent_loop_duplicate_tool_guard_forces_finish() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_loop_tool_error_exits_immediately() -> None:
+    """MCP tool error stops the loop with tool_error exit — no further planner iterations."""
+    mock_service = _mock_kapruka_service()
+    mock_service.check_delivery.return_value = {
+        "error": "past_delivery_date",
+        "message": "Choose a delivery date that is today or later.",
+    }
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Colombo 03", "delivery_date": "2026-06-20"},
+            rationale="check delivery",
+        ),
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "should not run"},
+            rationale="never reached",
+        ),
+    ]
+    fixed = datetime(2026, 6, 12, 12, 0, tzinfo=ZoneInfo("Asia/Colombo"))
+
+    with (
+        patch("lib.utils.timezone.colombo_now", return_value=fixed),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ) as mock_plan,
+    ):
+        result = await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "tool_error"
+    assert result["agent_tool_error"] == {
+        "tool": CHECK_DELIVERY_TOOL,
+        "message": "Choose a delivery date that is today or later.",
+    }
+    assert len(result["tool_trace"]) == 1
+    assert result["tool_trace"][0]["result"]["error"] == "past_delivery_date"
+    assert mock_plan.call_count == 1
+    mock_service.search_products.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_emits_status_events() -> None:
     """Status events are emitted at loop entry and per tool invocation."""
     mock_service = _mock_kapruka_service()

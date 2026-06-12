@@ -16,6 +16,7 @@ def test_append_message_state_resets_per_turn_agent_fields() -> None:
     assert delta["tool_results"] == {}
     assert delta["tool_call_count"] == 0
     assert delta["agent_clarifying_question"] is None
+    assert delta["agent_tool_error"] is None
     assert delta["agent_loop_done"] is None
     assert delta["agent_loop_exit_reason"] is None
     assert delta["agent_loop_iterations"] is None
