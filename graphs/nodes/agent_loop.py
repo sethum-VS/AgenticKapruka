@@ -15,7 +15,7 @@ from pydantic import BaseModel, ValidationError
 
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.analyze_intent import _extract_latest_user_message
-from graphs.state import AgentState, ToolInvocation
+from graphs.state import AgentState, Intent, ToolInvocation
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
@@ -82,6 +82,13 @@ always wins over inferred preferences.
 
 Prior tool iterations in the user prompt are summarized summaries only — never
 assume full catalog payloads from summaries alone.
+
+On every step also set refined_intent:
+- discovery: browsing, searching, or finding gifts and products
+- general: greetings, thanks, FAQ, or unclear/off-topic messages
+
+Shopping turns that need no catalog tools should use refined_intent general with
+action finish.
 """
 
 
@@ -92,6 +99,7 @@ class AgentPlannerStep(BaseModel):
     tool_name: str | None = None
     tool_args: dict[str, Any] | None = None
     rationale: str = ""
+    refined_intent: Literal["discovery", "general"] | None = None
 
 
 class PlannerTraceEntry(TypedDict):
@@ -380,6 +388,7 @@ async def agent_loop(
     force_finish = False
     exit_reason: str | None = None
     planner_iterations = 0
+    refined_intent: Intent | None = None
 
     _emit_status(_DEFAULT_STATUS_MESSAGE)
 
@@ -402,6 +411,9 @@ async def agent_loop(
             tool_trace=tool_trace,
         )
         planner_iterations = iteration + 1
+
+        if iteration == 0 and step.refined_intent in ("discovery", "general"):
+            refined_intent = step.refined_intent
 
         iteration_args: dict[str, Any] = (
             dict(step.tool_args or {}) if step.action == "call_tool" else {"action": step.action}
@@ -492,4 +504,6 @@ async def agent_loop(
         }
     if agent_clarifying_question is not None:
         updates["agent_clarifying_question"] = agent_clarifying_question
+    if refined_intent is not None:
+        updates["intent"] = refined_intent
     return updates

@@ -1,47 +1,32 @@
-"""Classify user intent via Gemini structured output."""
+"""Routing guards for checkout, tracking, and shopping-turn preprocessing."""
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 from typing import Any
 
-from google import genai
-from google.genai import types
 from langchain_core.messages import BaseMessage, HumanMessage
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from graphs.state import AgentState, Intent
-from lib.chat.intent_heuristics import infer_intent_from_message
-from lib.chat.model_router import select_intent_model
+from lib.chat.intent_heuristics import (
+    PROCEED_CHECKOUT_MESSAGE,
+    is_checkout_trigger,
+    is_proceed_checkout_message,
+    is_tracking_guard,
+)
 from lib.chat.query_preprocessor import QueryPreprocessor
-from lib.genai.errors import is_resource_exhausted
-from lib.genai.fallback import generate_content_with_fallback
-from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_INSTRUCTION = """You classify user messages for the Kapruka gift shopping assistant.
-
-Return exactly one intent:
-- discovery: browsing, searching, or finding gifts and products
-- checkout: placing an order, cart, delivery, payment, or recipient details
-- tracking: order status, delivery progress, or locating an existing order
-- general: greetings, thanks, FAQ, or unclear/off-topic messages
-"""
-
-VALID_INTENTS: frozenset[Intent] = frozenset(
-    {"discovery", "checkout", "tracking", "general"},
-)
-
-PROCEED_CHECKOUT_MESSAGE = "Proceed to checkout"
+# Default shopping-path intent before agent_loop refines discovery vs general.
+_SHOPPING_PATH_INTENT: Intent = "discovery"
 
 _query_preprocessor = QueryPreprocessor()
 
 
 class IntentClassification(BaseModel):
-    """Structured Gemini response for intent routing."""
+    """Structured Gemini response for intent routing (legacy mocks and evals)."""
 
     intent: Intent
 
@@ -65,72 +50,24 @@ def _extract_latest_user_message(messages: list[BaseMessage]) -> str:
     return ""
 
 
-def _parse_intent_response(response: types.GenerateContentResponse) -> Intent:
-    """Parse structured or JSON text intent from a Gemini response."""
-    if response.parsed is not None:
-        if isinstance(response.parsed, IntentClassification):
-            return response.parsed.intent
-        validated = IntentClassification.model_validate(response.parsed)
-        return validated.intent
-
-    raw_text = (response.text or "").strip()
-    if not raw_text:
-        msg = "Gemini returned empty intent classification"
-        raise ValueError(msg)
-
-    try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        msg = f"Gemini intent response is not valid JSON: {raw_text!r}"
-        raise ValueError(msg) from exc
-
-    try:
-        return IntentClassification.model_validate(payload).intent
-    except ValidationError as exc:
-        msg = f"Gemini intent JSON failed validation: {payload!r}"
-        raise ValueError(msg) from exc
-
-
-def _build_intent_system_instruction(zep_memory_facts: list[str] | None) -> str:
-    """Combine base intent prompt with optional Zep memory context."""
-    instruction = SYSTEM_INSTRUCTION
-    if zep_memory_facts:
-        instruction += format_memory_facts_block(zep_memory_facts)
-    return instruction
-
-
-def _classify_intent_sync(
-    client: genai.Client | None,
-    user_message: str,
-    *,
-    model: str,
-    zep_memory_facts: list[str] | None = None,
-) -> Intent:
-    """Blocking Gemini call; run via asyncio.to_thread from analyze_intent."""
-    response = generate_content_with_fallback(
-        client=client,
-        model=model,
-        contents=user_message,
-        config=types.GenerateContentConfig(
-            system_instruction=_build_intent_system_instruction(zep_memory_facts),
-            response_mime_type="application/json",
-            response_schema=IntentClassification,
-            temperature=0,
-        ),
-    )
-    intent = _parse_intent_response(response)
-    if intent not in VALID_INTENTS:
-        msg = f"Unsupported intent value from model: {intent!r}"
-        raise ValueError(msg)
-    return intent
+def _classify_routing_guard(user_message: str) -> Intent | None:
+    """Return a guard intent or None when the turn should defer to agent_loop."""
+    if is_proceed_checkout_message(user_message):
+        return "checkout"
+    if is_tracking_guard(user_message):
+        return "tracking"
+    if is_checkout_trigger(user_message):
+        return "checkout"
+    return None
 
 
 async def analyze_intent(
     state: AgentState,
     *,
-    genai_client: genai.Client | None = None,
+    genai_client: object | None = None,
 ) -> dict[str, Any]:
-    """LangGraph node: classify the latest user message into routing intent."""
+    """LangGraph node: guard-only routing plus query preprocessing (no LLM)."""
+    _ = genai_client
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
     intent_metadata = _query_preprocessor.process(user_message)
@@ -143,25 +80,12 @@ async def analyze_intent(
         logger.info("analyze_intent: proceed-to-checkout trigger from cart drawer")
         return {"intent": "checkout", "intent_metadata": intent_metadata}
 
-    client = genai_client
-    zep_memory_facts = state.get("zep_memory_facts")
-    model = select_intent_model()
-    try:
-        intent = await asyncio.to_thread(
-            _classify_intent_sync,
-            client,
-            user_message,
-            model=model,
-            zep_memory_facts=zep_memory_facts,
-        )
-    except Exception as exc:
-        if not is_resource_exhausted(exc):
-            raise
-        intent = infer_intent_from_message(user_message)
-        logger.warning(
-            "analyze_intent: Gemini rate limited; heuristic fallback -> %s",
-            intent,
-            exc_info=True,
-        )
-    logger.info("analyze_intent: classified message as %s", intent)
-    return {"intent": intent, "intent_metadata": intent_metadata}
+    guard_intent = _classify_routing_guard(user_message)
+    if guard_intent is not None:
+        logger.info("analyze_intent: guard routed message as %s", guard_intent)
+        return {"intent": guard_intent, "intent_metadata": intent_metadata}
+
+    logger.debug(
+        "analyze_intent: shopping turn — deferring discovery/general to agent_loop planner",
+    )
+    return {"intent": _SHOPPING_PATH_INTENT, "intent_metadata": intent_metadata}

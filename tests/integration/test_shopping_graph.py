@@ -234,7 +234,11 @@ async def test_shopping_graph_thanks_skips_tools_via_agent_loop(
 
     with patch(
         "graphs.nodes.agent_loop._plan_next_step_sync",
-        return_value=AgentPlannerStep(action="finish", rationale="no tools needed"),
+        return_value=AgentPlannerStep(
+            action="finish",
+            refined_intent="general",
+            rationale="no tools needed",
+        ),
     ):
         result = await graph.ainvoke(state)
         node_names = await _collect_graph_node_names(graph, state)
@@ -290,7 +294,8 @@ async def test_shopping_graph_tracking_skips_hybrid_context_and_agent_loop(
     )
     genai_client = graph_deps.genai_client
     assert isinstance(genai_client, MagicMock)
-    assert genai_client.models.generate_content.call_count == 1
+    # Phase 2: tracking is guard + template only — no intent LLM or planner.
+    assert genai_client.models.generate_content.call_count == 0
 
     node_names = await _collect_graph_node_names(graph, state)
     assert node_names == [

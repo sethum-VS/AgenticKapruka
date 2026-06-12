@@ -219,6 +219,34 @@ def _mock_kapruka_service() -> AsyncMock:
 
 
 @pytest.mark.asyncio
+async def test_agent_loop_first_iteration_refines_intent() -> None:
+    """Phase 2: discovery vs general refinement happens on the first planner iteration."""
+    mock_service = _mock_kapruka_service()
+    finish_step = AgentPlannerStep(
+        action="finish",
+        refined_intent="general",
+        rationale="thanks only",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        return_value=finish_step,
+    ):
+        result = await agent_loop(
+            {
+                "messages": [HumanMessage(content="thanks!")],
+                "session_id": "sess-agent-loop-refine",
+                "intent": "discovery",
+            },
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["intent"] == "general"
+    assert result["agent_loop_done"] is True
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_finish_sets_done() -> None:
     """Planner finish action ends the loop immediately with agent_loop_done=True."""
     mock_service = _mock_kapruka_service()

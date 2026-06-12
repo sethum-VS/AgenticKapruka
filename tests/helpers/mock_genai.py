@@ -52,7 +52,14 @@ def build_mock_genai_client(
 
         if config is not None and config.response_schema is AgentPlannerStep:
             planner_calls += 1
-            if planner_calls == 1:
+            resolved_intent = _resolve_intent()
+            if planner_calls == 1 and resolved_intent == "general":
+                step = AgentPlannerStep(
+                    action="finish",
+                    refined_intent="general",
+                    rationale="no catalog tools needed",
+                )
+            elif planner_calls == 1:
                 query = search_query or contents.strip()
                 if len(query) < 3:
                     query = "gifts"
@@ -60,6 +67,7 @@ def build_mock_genai_client(
                     action="call_tool",
                     tool_name=SEARCH_PRODUCTS_TOOL,
                     tool_args={"q": query},
+                    refined_intent="discovery",
                     rationale="search catalog",
                 )
             else:
