@@ -82,11 +82,17 @@ def merge_tool_trace(tool_trace: list[ToolInvocation]) -> dict[str, Any]:
 
 
 def _resolve_effective_tool_results(state: AgentState) -> dict[str, Any] | None:
-    """Prefer merged agent-loop trace; fall back to heuristic tool_results."""
+    """Prefer checkout/tracking payloads; else merged agent-loop trace; else tool_results."""
+    tool_results = state.get("tool_results")
+    intent = state.get("intent")
+    if isinstance(tool_results, dict) and (
+        intent in ("checkout", "tracking") or CHECKOUT_TOOL_KEY in tool_results
+    ):
+        return tool_results
     tool_trace = state.get("tool_trace")
     if tool_trace:
         return merge_tool_trace(tool_trace)
-    return state.get("tool_results")
+    return tool_results
 
 
 def _format_tool_results_context(tool_results: dict[str, Any] | None) -> str:
