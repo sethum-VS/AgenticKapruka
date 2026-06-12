@@ -15,7 +15,7 @@ from app.templating import get_templates, render_product_carousel, render_tracki
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
-from graphs.state import AgentState
+from graphs.state import AgentState, ToolInvocation
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.system_prompts import build_response_system_instruction
 from lib.checkout.tracking import extract_order_number, tracking_output_from_tool_results
@@ -43,6 +43,50 @@ class AssistantReply(BaseModel):
     """Structured Gemini response for the assistant message body."""
 
     message: str
+
+
+def merge_tool_trace(tool_trace: list[ToolInvocation]) -> dict[str, Any]:
+    """Merge agent-loop invocations into tool_results shape for generate_response.
+
+    Non-search tools use last-wins per tool name. ``kapruka_search_products`` unions
+    product dicts across trace entries with deduplication by product id; other search
+    payload fields come from the last search invocation.
+    """
+    merged: dict[str, Any] = {}
+    search_products_by_id: dict[str, dict[str, Any]] = {}
+    last_search_payload: dict[str, Any] | None = None
+
+    for invocation in tool_trace:
+        name = invocation["name"]
+        result = invocation["result"]
+
+        if name == SEARCH_PRODUCTS_TOOL and isinstance(result, dict):
+            last_search_payload = result
+            raw_results = result.get("results")
+            if isinstance(raw_results, list):
+                for item in raw_results:
+                    if isinstance(item, dict):
+                        product_id = item.get("id")
+                        if product_id:
+                            search_products_by_id[str(product_id)] = item
+            continue
+
+        merged[name] = result
+
+    if last_search_payload is not None:
+        search_merged = dict(last_search_payload)
+        search_merged["results"] = list(search_products_by_id.values())
+        merged[SEARCH_PRODUCTS_TOOL] = search_merged
+
+    return merged
+
+
+def _resolve_effective_tool_results(state: AgentState) -> dict[str, Any] | None:
+    """Prefer merged agent-loop trace; fall back to heuristic tool_results."""
+    tool_trace = state.get("tool_trace")
+    if tool_trace:
+        return merge_tool_trace(tool_trace)
+    return state.get("tool_results")
 
 
 def _format_tool_results_context(tool_results: dict[str, Any] | None) -> str:
@@ -293,13 +337,21 @@ async def generate_response(
     """LangGraph node: synthesize assistant text and render response_html partial."""
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
-    tool_results = state.get("tool_results")
+    tool_results = _resolve_effective_tool_results(state)
 
     if not user_message.strip():
         fallback = "How can I help you find a gift on Kapruka today?"
         return {
             "response_html": render_assistant_html(fallback),
             "assistant_message": fallback,
+        }
+
+    clarifying_question = state.get("agent_clarifying_question")
+    if isinstance(clarifying_question, str) and clarifying_question.strip():
+        question = clarifying_question.strip()
+        return {
+            "response_html": render_assistant_html(question),
+            "assistant_message": question,
         }
 
     if state.get("intent") == "tracking":

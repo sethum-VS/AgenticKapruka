@@ -465,7 +465,7 @@ async def agent_loop(
         "agent_loop_done": agent_loop_done,
     }
     if tool_trace:
-        # Mirror trace into tool_results until generate_response merge_tool_trace (PRD-109).
+        # Mirror trace into tool_results; generate_response merges via merge_tool_trace.
         updates["tool_results"] = {
             invocation["name"]: invocation["result"] for invocation in tool_trace
         }

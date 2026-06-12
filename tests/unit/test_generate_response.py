@@ -15,9 +15,10 @@ from graphs.nodes.generate_response import (
     build_products_carousel_html,
     extract_search_products,
     generate_response,
+    merge_tool_trace,
     render_assistant_html,
 )
-from graphs.state import AgentState
+from graphs.state import AgentState, ToolInvocation
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.system_prompts import (
     LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION,
@@ -357,4 +358,177 @@ async def test_generate_response_no_carousel_when_search_empty() -> None:
 
     assert 'data-testid="product-carousel"' not in result["response_html"]
     assert "couldn't find products" in result["assistant_message"].lower()
+    mock_client.models.generate_content.assert_not_called()
+
+
+def _product(
+    product_id: str,
+    name: str,
+    *,
+    amount: float = 4500.0,
+) -> dict[str, object]:
+    return {
+        "id": product_id,
+        "name": name,
+        "summary": f"Summary for {name}.",
+        "price": {"amount": amount, "currency": "LKR"},
+        "compare_at_price": None,
+        "in_stock": True,
+        "stock_level": "high",
+        "image_url": None,
+        "category": {"id": "cat_cakes", "name": "Birthday", "slug": "birthday"},
+        "rating": None,
+        "ships_internationally": False,
+        "url": f"https://www.kapruka.com/{product_id}",
+    }
+
+
+def test_merge_tool_trace_last_wins_non_search_tools() -> None:
+    """Non-search tools keep the last invocation result per tool name."""
+    trace: list[ToolInvocation] = [
+        {
+            "name": "kapruka_check_delivery",
+            "args": {"city": "Kandy"},
+            "result": {"city": "Kandy", "deliverable": False},
+        },
+        {
+            "name": "kapruka_check_delivery",
+            "args": {"city": "Colombo"},
+            "result": {"city": "Colombo", "deliverable": True},
+        },
+    ]
+    merged = merge_tool_trace(trace)
+    assert merged["kapruka_check_delivery"]["city"] == "Colombo"
+    assert merged["kapruka_check_delivery"]["deliverable"] is True
+
+
+def test_merge_tool_trace_unions_search_product_ids() -> None:
+    """Search invocations merge into one payload with deduped product union."""
+    trace: list[ToolInvocation] = [
+        {
+            "name": SEARCH_PRODUCTS_TOOL,
+            "args": {"q": "chocolate cake"},
+            "result": {
+                "results": [_product("cake00ka002034", "Chocolate Birthday Cake")],
+                "applied_filters": {"q": "chocolate cake"},
+            },
+        },
+        {
+            "name": SEARCH_PRODUCTS_TOOL,
+            "args": {"q": "vanilla cake"},
+            "result": {
+                "results": [
+                    _product("cake00ka002034", "Chocolate Birthday Cake"),
+                    _product("cake00ka002099", "Vanilla Celebration Cake"),
+                ],
+                "applied_filters": {"q": "vanilla cake"},
+            },
+        },
+    ]
+    merged = merge_tool_trace(trace)
+    search_payload = merged[SEARCH_PRODUCTS_TOOL]
+    assert search_payload["applied_filters"] == {"q": "vanilla cake"}
+    product_ids = [item["id"] for item in search_payload["results"]]
+    assert product_ids == ["cake00ka002034", "cake00ka002099"]
+
+
+@pytest.mark.asyncio
+async def test_generate_response_merged_trace_carousel_union() -> None:
+    """Multi-step agent loop trace renders carousel from unioned search products."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="Here are cakes from both searches.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": SEARCH_PRODUCTS_TOOL,
+            "args": {"q": "chocolate cake"},
+            "result": {
+                "results": [_product("cake00ka002034", "Chocolate Birthday Cake")],
+            },
+        },
+        {
+            "name": SEARCH_PRODUCTS_TOOL,
+            "args": {"q": "vanilla cake"},
+            "result": {
+                "results": [_product("cake00ka002099", "Vanilla Celebration Cake")],
+            },
+        },
+    ]
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cakes for mom")],
+        "tool_trace": tool_trace,
+        "agent_loop_done": True,
+        "session_id": "sess-gen-trace-union",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    html = result["response_html"]
+    assert 'data-testid="product-carousel"' in html
+    assert 'data-product-id="cake00ka002034"' in html
+    assert 'data-product-id="cake00ka002099"' in html
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    assert "Chocolate Birthday Cake" in call_kwargs["contents"]
+    assert "Vanilla Celebration Cake" in call_kwargs["contents"]
+
+
+@pytest.mark.asyncio
+async def test_generate_response_clarifying_question_skips_gemini() -> None:
+    """ask_user exit renders clarifying question without catalog synthesis."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="send flowers to my aunt")],
+        "intent": "discovery",
+        "agent_clarifying_question": "Which city should we deliver to?",
+        "tool_trace": [
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"q": "flowers"},
+                "result": {"results": [_product("flw001", "Rose Bouquet")]},
+            },
+        ],
+        "session_id": "sess-gen-clarify",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert result["assistant_message"] == "Which city should we deliver to?"
+    assert "Which city should we deliver to?" in result["response_html"]
+    assert 'data-testid="product-carousel"' not in result["response_html"]
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_empty_merged_search_fallback_via_tool_trace() -> None:
+    """Empty unioned search in tool_trace keeps empathetic discovery fallback."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="obscure gift idea")],
+        "intent": "discovery",
+        "tool_trace": [
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"q": "first try"},
+                "result": {"results": []},
+            },
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"q": "second try"},
+                "result": {"results": []},
+            },
+        ],
+        "agent_loop_done": True,
+        "session_id": "sess-gen-trace-empty",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "couldn't find products" in result["assistant_message"].lower()
+    assert 'data-testid="product-carousel"' not in result["response_html"]
     mock_client.models.generate_content.assert_not_called()
