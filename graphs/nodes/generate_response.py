@@ -15,6 +15,7 @@ from pydantic import BaseModel, ValidationError
 from app.templating import (
     get_templates,
     render_cart_partial_oob,
+    render_delivery_date_status,
     render_product_carousel,
     render_tracking_status,
 )
@@ -22,9 +23,10 @@ from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
-from lib.chat.delivery_dates import delivery_date_clarifying_question
+from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.product_curation import sort_and_filter_by_budget
+from lib.chat.query_preprocessor import extract_target_city
 from lib.chat.system_prompts import (
     build_general_welcome_message,
     build_response_system_instruction,
@@ -36,6 +38,7 @@ from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.kapruka.types import CheckDeliveryOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import format_currency
 from lib.utils.text import decode_html_entities
@@ -62,6 +65,20 @@ _TOOL_ERROR_ACTION_LABELS: dict[str, str] = {
 }
 
 _PAST_DELIVERY_ERROR_CODES = frozenset({"past_delivery_date", "validation_error"})
+
+_DELIVERY_FEE_CLAIM = re.compile(
+    r"\b(?:delivery\s+fee|flat\s+(?:delivery\s+)?rate|delivery\s+(?:rate|charge|cost))\b",
+    re.I,
+)
+_DELIVERY_AVAILABILITY_CLAIM = re.compile(
+    r"\b(?:delivery\s+available|can\s+deliver|we\s+deliver|deliver(?:s|ed)?\s+to|"
+    r"not\s+available\s+for\s+delivery|unable\s+to\s+deliver)\b",
+    re.I,
+)
+_DELIVERY_QUOTED_RATE = re.compile(
+    r"\b(?:rs\.?|lkr)\s*[\d,]+(?:\.\d+)?\s*(?:per\s+order|for\s+delivery|delivery)\b",
+    re.I,
+)
 
 CHECKOUT_REVIEW_SYSTEM_INSTRUCTION = (
     "You are the Kapruka gift shopping assistant at the final checkout review step.\n\n"
@@ -157,6 +174,98 @@ def build_agent_tool_error_message(
     action = _TOOL_ERROR_ACTION_LABELS.get(tool, "complete that request")
     cause = raw_message.strip() or "Kapruka could not process the request."
     return f"I could not {action} right now. {cause} Please adjust your request and try again."
+
+
+def _reply_claims_delivery_facts(reply_text: str) -> bool:
+    """True when assistant copy quotes delivery fees or deliverability without MCP grounding."""
+    if not reply_text.strip():
+        return False
+    if _DELIVERY_FEE_CLAIM.search(reply_text):
+        return True
+    if _DELIVERY_AVAILABILITY_CLAIM.search(reply_text):
+        return True
+    if _DELIVERY_QUOTED_RATE.search(reply_text):
+        return True
+    has_amount = bool(re.search(r"\b[\d,]+(?:\.\d+)?\s*(?:LKR|Rs\.?)\b", reply_text, re.I))
+    has_delivery_word = bool(re.search(r"\bdeliver", reply_text, re.I))
+    return has_amount and has_delivery_word
+
+
+def _tool_trace_has_check_delivery(tool_trace: list[ToolInvocation] | None) -> bool:
+    return any(invocation.get("name") == CHECK_DELIVERY_TOOL for invocation in (tool_trace or []))
+
+
+def _user_named_city_and_date(user_message: str) -> bool:
+    city = extract_target_city(user_message)
+    if not city:
+        return False
+    return normalize_delivery_date({}, user_message) is not None
+
+
+def delivery_claim_guard(
+    reply_text: str,
+    tool_trace: list[ToolInvocation] | None,
+    *,
+    user_message: str = "",
+) -> str:
+    """Replace ungrounded delivery fee/availability claims when check_delivery is absent."""
+    if not _reply_claims_delivery_facts(reply_text):
+        return reply_text
+    if _tool_trace_has_check_delivery(tool_trace):
+        return reply_text
+    if _user_named_city_and_date(user_message):
+        city = extract_target_city(user_message) or "your city"
+        return (
+            f"I can verify Kapruka delivery to {city} once we confirm the date — "
+            "I won't quote a fee until that's checked. "
+            f"{delivery_date_clarifying_question()}"
+        )
+    return (
+        "I have not verified Kapruka delivery for that location and date yet. "
+        f"{delivery_date_clarifying_question()}"
+    )
+
+
+def _last_check_delivery_result(
+    tool_trace: list[ToolInvocation] | None,
+) -> dict[str, Any] | None:
+    if not tool_trace:
+        return None
+    for invocation in reversed(tool_trace):
+        if invocation.get("name") != CHECK_DELIVERY_TOOL:
+            continue
+        result = invocation.get("result")
+        if isinstance(result, dict) and not result.get("error"):
+            return result
+    return None
+
+
+def _apply_perishable_delivery_honesty(
+    reply_text: str,
+    tool_trace: list[ToolInvocation] | None,
+) -> tuple[str, str | None]:
+    """Append perishable_warning copy and render amber delivery status partial when grounded."""
+    delivery = _last_check_delivery_result(tool_trace)
+    if delivery is None:
+        return reply_text, None
+
+    warning = delivery.get("perishable_warning")
+    if not isinstance(warning, str) or not warning.strip():
+        return reply_text, None
+
+    warning = warning.strip()
+    updated_reply = reply_text
+    if warning not in updated_reply:
+        updated_reply = f"{updated_reply}\n\n{warning}".strip()
+
+    try:
+        delivery_output = CheckDeliveryOutput.model_validate(delivery)
+        delivery_html = render_delivery_date_status(result=delivery_output)
+    except ValidationError:
+        logger.warning("generate_response: invalid check_delivery payload for status partial")
+        return updated_reply, None
+
+    return updated_reply, delivery_html
 
 
 def _is_general_welcome_path(state: AgentState) -> bool:
@@ -546,6 +655,7 @@ def render_assistant_html(
     checkout_review_html: str | None = None,
     checkout_payment_html: str | None = None,
     tracking_status_html: str | None = None,
+    delivery_status_html: str | None = None,
 ) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
@@ -556,6 +666,7 @@ def render_assistant_html(
         checkout_review_html=checkout_review_html,
         checkout_payment_html=checkout_payment_html,
         tracking_status_html=tracking_status_html,
+        delivery_status_html=delivery_status_html,
     )
 
 
@@ -810,6 +921,13 @@ async def generate_response(
         )
 
     reply_text = decode_html_entities(reply_text)
+    tool_trace = state.get("tool_trace")
+    reply_text = delivery_claim_guard(
+        reply_text,
+        tool_trace,
+        user_message=user_message,
+    )
+    reply_text, delivery_status_html = _apply_perishable_delivery_honesty(reply_text, tool_trace)
 
     logger.info(
         "generate_response: rendered assistant reply (%d chars, carousel=%s)",
@@ -817,6 +935,10 @@ async def generate_response(
         bool(products_html),
     )
     return {
-        "response_html": render_assistant_html(reply_text, products_html=products_html),
+        "response_html": render_assistant_html(
+            reply_text,
+            products_html=products_html,
+            delivery_status_html=delivery_status_html,
+        ),
         "assistant_message": reply_text,
     }

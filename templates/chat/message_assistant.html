@@ -47,5 +47,15 @@
       {{ tracking_status_html | safe }}
     </div>
     {% endif %}
+    {% if delivery_status_html %}
+    <div
+      class="assistant-delivery-status mt-3 border-t border-commerce-parchment/60 pt-3"
+      data-slot="delivery-status"
+      role="region"
+      aria-label="Delivery availability"
+    >
+      {{ delivery_status_html | safe }}
+    </div>
+    {% endif %}
   </div>
 </div>

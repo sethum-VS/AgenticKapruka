@@ -18,6 +18,7 @@ from graphs.nodes.generate_response import (
     _resolve_effective_tool_results,
     build_agent_tool_error_message,
     build_products_carousel_html,
+    delivery_claim_guard,
     extract_search_products,
     generate_response,
     merge_tool_trace,
@@ -962,3 +963,139 @@ async def test_generate_response_tool_error_generic_mcp_skips_gemini() -> None:
     assert "Kapruka search timed out." in result["assistant_message"]
     assert 'data-testid="product-carousel"' not in result["response_html"]
     mock_client.models.generate_content.assert_not_called()
+
+
+def test_delivery_claim_guard_blocks_ungrounded_delivery_fee() -> None:
+    """Guard replaces fee/availability claims when kapruka_check_delivery is absent."""
+    reply = "Delivery to Colombo is available with a flat delivery rate of Rs. 350 per order."
+    guarded = delivery_claim_guard(reply, tool_trace=[])
+    assert guarded != reply
+    assert "When would you like delivery?" in guarded
+    assert "Rs. 350" not in guarded
+
+
+def test_delivery_claim_guard_allows_grounded_delivery_claim() -> None:
+    """Grounded replies pass through when check_delivery ran this turn."""
+    reply = "Flat delivery rate: Rs. 350 per order to Colombo."
+    trace: list[ToolInvocation] = [
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {"city": "Colombo 03", "delivery_date": "2026-06-14"},
+            "result": {
+                "city": "Colombo 03",
+                "now": "2026-06-07T10:00:00+05:30",
+                "checked_date": "2026-06-14",
+                "available": True,
+                "rate": 350.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": None,
+            },
+        },
+    ]
+    assert delivery_claim_guard(reply, tool_trace=trace) == reply
+
+
+def test_delivery_claim_guard_city_date_asks_before_fee() -> None:
+    """City + date in user message without MCP check prompts date confirmation, not a fee."""
+    reply = "We can deliver to Colombo next Saturday for Rs. 400."
+    user_message = "can you deliver flowers to Colombo next Saturday?"
+    guarded = delivery_claim_guard(reply, tool_trace=[], user_message=user_message)
+    assert "Colombo" in guarded
+    assert "won't quote a fee" in guarded
+    assert "Rs. 400" not in guarded
+
+
+@pytest.mark.asyncio
+async def test_generate_response_perishable_warning_surfaces_in_chat() -> None:
+    """Study turn 3 follow-up: grounded fee copy plus perishable_warning partial."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message=(
+            "Delivery to Colombo is available on 2026-06-22. "
+            "The flat delivery rate is Rs. 350 per order."
+        ),
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    perishable_warning = (
+        "Fresh flowers are best within 1–2 days of delivery. "
+        "Your date is 7 days out — consider ordering closer to the event."
+    )
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": SEARCH_PRODUCTS_TOOL,
+            "args": {"q": "flowers"},
+            "result": {
+                "results": [_product("flower00ka001", "Blush Roses Bouquet")],
+            },
+        },
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {
+                "city": "Colombo 03",
+                "delivery_date": "2026-06-22",
+                "product_id": "flower00ka001",
+            },
+            "result": {
+                "city": "Colombo 03",
+                "now": "2026-06-15T10:00:00+05:30",
+                "checked_date": "2026-06-22",
+                "available": True,
+                "rate": 350.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": perishable_warning,
+            },
+        },
+    ]
+    state: AgentState = {
+        "messages": [HumanMessage(content="What is the delivery fee to Colombo on 2026-06-22?")],
+        "intent": "discovery",
+        "tool_trace": tool_trace,
+        "session_id": "sess-perishable-delivery",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "Rs. 350" in result["assistant_message"]
+    assert perishable_warning in result["assistant_message"]
+    assert 'data-testid="delivery-date-available"' in result["response_html"]
+    assert "text-amber-800" in result["response_html"]
+    assert 'data-slot="delivery-status"' in result["response_html"]
+
+
+@pytest.mark.asyncio
+async def test_generate_response_guard_blocks_llm_hallucinated_delivery_fee() -> None:
+    """LLM delivery fee without check_delivery this turn is replaced with clarifying copy."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="Yes, we deliver to Kandy for a flat rate of Rs. 500 per order.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom in Kandy")],
+        "intent": "discovery",
+        "tool_trace": [
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"q": "birthday cake"},
+                "result": {
+                    "results": [_product("cake00ka002034", "Chocolate Birthday Cake")],
+                },
+            },
+        ],
+        "session_id": "sess-guard-delivery-fee",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "Rs. 500" not in result["assistant_message"]
+    assert "When would you like delivery?" in result["assistant_message"]
