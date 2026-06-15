@@ -17,6 +17,7 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   tracking_order      ~5–15s  order-tracking-status card, no carousel
   delivery_colombo    ~8–25s  delivery confirmation or clarifying date, no carousel
   budget_sort         ~8–20s  carousel first item within stated budget cap
+  silk_disclaimer     ~8–20s  artificial floral note when silk products appear
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ class TurnScenario:
     expect_tracking: bool = False
     expect_delivery: bool = False
     max_first_carousel_price: float | None = None
+    expect_artificial_disclaimer_if_silk: bool = False
     forbidden_substrings: tuple[str, ...] = ()
 
 
@@ -92,6 +94,12 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         message="wife birthday chocolate flowers ~8000 LKR colombo",
         expect_carousel=True,
         max_first_carousel_price=8000.0,
+    ),
+    TurnScenario(
+        name="silk_disclaimer",
+        message="chocolate and flowers wife birthday",
+        expect_carousel=True,
+        expect_artificial_disclaimer_if_silk=True,
     ),
 )
 
@@ -210,6 +218,19 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
     for forbidden in scenario.forbidden_substrings:
         if forbidden.lower() in lower:
             failures.append(f"forbidden substring present: {forbidden!r}")
+
+    if scenario.expect_artificial_disclaimer_if_silk:
+        has_silk_pick = bool(re.search(r"\bsilk\b", html, re.I)) and bool(
+            re.search(r"\b(?:rose|roses|flower|flowers|bouquet)\b", html, re.I),
+        )
+        disclaimer_markers = (
+            "artificial",
+            "not fresh-cut",
+            "not fresh cut",
+            "silk or artificial",
+        )
+        if has_silk_pick and not any(marker in lower for marker in disclaimer_markers):
+            failures.append("expected artificial floral disclaimer when silk products in results")
 
     if 'role="alert"' in html and "Something went wrong" in html:
         failures.append("error banner in response")

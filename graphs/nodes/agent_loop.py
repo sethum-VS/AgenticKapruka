@@ -296,6 +296,7 @@ _BROAD_GIFTS = re.compile(
     r"^(?:show me )?(?:some )?gifts?\s*[!.?]*$",
     re.I,
 )
+_FLOWERS_REQUEST = re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)s?\b", re.I)
 
 
 def _search_has_products(result: Any) -> bool:
@@ -360,6 +361,12 @@ def _format_planner_query_rewrite_hints(user_message: str) -> str:
         hints.append(
             'Vague "gifts" query with no occasion or recipient: prefer action ask_user '
             "before kapruka_search_products."
+        )
+    if _FLOWERS_REQUEST.search(user_message):
+        hints.append(
+            "Flowers/roses/bouquet request: prefer kapruka_search_products q emphasizing "
+            "fresh cut roses or bouquets. If results are only silk, artificial, soap, or "
+            "paper florals, try one broader fresh-flowers search before finish."
         )
     if not hints:
         return ""

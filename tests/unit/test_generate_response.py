@@ -614,6 +614,61 @@ def test_build_discovery_template_reply_warm_top_three_opener() -> None:
     assert "Strawberry Delight Cake" in reply
 
 
+def test_build_discovery_template_reply_prepends_artificial_floral_note() -> None:
+    products = [
+        _product("EF_PC_CHOC0V571POD00108", "Kit Kat Silk Roses Bouquet", amount=5900.0),
+        _product("flower00ka001", "6 Red Rose Bouquet", amount=5210.0),
+    ]
+    reply = _build_discovery_template_reply(
+        products,
+        user_message="chocolate and flowers wife birthday",
+    )
+    assert "artificial" in reply.lower()
+    assert "not fresh-cut" in reply.lower()
+    assert "Kit Kat Silk Roses Bouquet" in reply
+
+
+@pytest.mark.asyncio
+async def test_generate_response_study_turn_4_silk_roses_disclaimer() -> None:
+    """Study turn 4: Kit Kat Silk Roses recommendation includes proactive artificial note."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="Here are a few picks for your wife's birthday: Kit Kat Silk Roses Bouquet.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": SEARCH_PRODUCTS_TOOL,
+            "args": {"q": "chocolate flowers birthday"},
+            "result": {
+                "results": [
+                    _product(
+                        "EF_PC_CHOC0V571POD00108",
+                        "Kit Kat Silk Roses Bouquet",
+                        amount=5900.0,
+                    ),
+                ],
+            },
+        },
+    ]
+    state: AgentState = {
+        "messages": [HumanMessage(content="chocolate and flowers wife birthday")],
+        "intent": "discovery",
+        "tool_trace": tool_trace,
+        "session_id": "sess-study-turn-4-silk",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    lower = result["assistant_message"].lower()
+    assert "kit kat silk roses bouquet" in lower
+    assert "artificial" in lower
+    assert "not fresh-cut" in lower
+
+
 def test_cap_search_products_for_llm_context_limits_to_five() -> None:
     many_results = {
         SEARCH_PRODUCTS_TOOL: {

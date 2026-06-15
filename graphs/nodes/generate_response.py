@@ -26,6 +26,10 @@ from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.product_curation import sort_and_filter_by_budget
+from lib.chat.product_honesty import (
+    artificial_floral_note_for_picks,
+    reply_already_discloses_artificial_floral,
+)
 from lib.chat.query_preprocessor import extract_target_city
 from lib.chat.system_prompts import (
     build_general_welcome_message,
@@ -580,7 +584,26 @@ def _format_product_line(product: dict[str, Any]) -> str:
     return f"'{name}', {stock_note}"
 
 
-def _build_discovery_template_reply(products: list[dict[str, Any]]) -> str:
+def _apply_artificial_floral_honesty(
+    reply_text: str,
+    products: list[dict[str, Any]],
+    *,
+    user_message: str = "",
+) -> str:
+    """Prepend proactive artificial-floral disclosure when flowers requests surface silk picks."""
+    note = artificial_floral_note_for_picks(products, user_message=user_message)
+    if note is None:
+        return reply_text
+    if reply_already_discloses_artificial_floral(reply_text):
+        return reply_text
+    return f"{note}\n\n{reply_text}".strip()
+
+
+def _build_discovery_template_reply(
+    products: list[dict[str, Any]],
+    *,
+    user_message: str = "",
+) -> str:
     """Deterministic assistant copy from MCP search results (no Gemini)."""
     if not products:
         return ""
@@ -588,10 +611,15 @@ def _build_discovery_template_reply(products: list[dict[str, Any]]) -> str:
     lines = [_format_product_line(product) for product in picks]
     opener = "Here are a few thoughtful Kapruka picks:"
     if len(lines) == 1:
-        return f"{opener} {lines[0]}."
-    if len(lines) == 2:
-        return f"{opener} {lines[0]}, and {lines[1]}."
-    return f"{opener} {lines[0]}, {lines[1]}, and {lines[2]}."
+        body = f"{opener} {lines[0]}."
+    elif len(lines) == 2:
+        body = f"{opener} {lines[0]}, and {lines[1]}."
+    else:
+        body = f"{opener} {lines[0]}, {lines[1]}, and {lines[2]}."
+    note = artificial_floral_note_for_picks(picks, user_message=user_message)
+    if note:
+        return f"{note}\n\n{body}"
+    return body
 
 
 def build_products_carousel_html(
@@ -908,7 +936,7 @@ async def generate_response(
     except Exception as exc:
         if not is_resource_exhausted(exc):
             raise
-        reply_text = _build_discovery_template_reply(products)
+        reply_text = _build_discovery_template_reply(products, user_message=user_message)
         logger.warning(
             "generate_response: Gemini rate limited; template fallback (%d products)",
             len(products),
@@ -916,7 +944,7 @@ async def generate_response(
         )
 
     if not reply_text:
-        reply_text = _build_discovery_template_reply(products) or (
+        reply_text = _build_discovery_template_reply(products, user_message=user_message) or (
             "I could not generate a response. Please try again."
         )
 
@@ -925,6 +953,11 @@ async def generate_response(
     reply_text = delivery_claim_guard(
         reply_text,
         tool_trace,
+        user_message=user_message,
+    )
+    reply_text = _apply_artificial_floral_honesty(
+        reply_text,
+        products,
         user_message=user_message,
     )
     reply_text, delivery_status_html = _apply_perishable_delivery_honesty(reply_text, tool_trace)

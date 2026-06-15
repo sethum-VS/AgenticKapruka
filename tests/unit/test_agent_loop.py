@@ -597,6 +597,15 @@ def test_planner_user_prompt_mom_birthday_bias_hint() -> None:
     assert "combopack" in prompt.lower()
 
 
+def test_planner_user_prompt_flowers_fresh_search_hint() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="chocolate and flowers wife birthday")],
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert "fresh cut roses" in prompt.lower()
+    assert "silk" in prompt.lower()
+
+
 def test_planner_user_prompt_skips_cakes_hint_when_birthday_cake_named() -> None:
     state: AgentState = {
         "messages": [HumanMessage(content="I need a birthday cake for Saturday")],
