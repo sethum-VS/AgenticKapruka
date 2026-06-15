@@ -14,6 +14,8 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   cakes_after_clarify ~8–20s  product carousel after prior clarify turn
   category_flowers    ~8–20s  product carousel
   specific_product    ~8–20s  product carousel
+  search_blush_roses  ~8–20s  product carousel (setup for add-to-cart)
+  add_blush_roses_cart ~8–20s  cart add confirmation, no carousel
   tracking_order      ~5–15s  order-tracking-status card, no carousel
   tracking_ka         ~5–15s  KA legacy educate copy, no tracking card
   tracking_status     ~5–15s  check-status phrasing + VIMP tracking card
@@ -50,6 +52,7 @@ class TurnScenario:
     max_first_carousel_price: float | None = None
     expect_artificial_disclaimer_if_silk: bool = False
     expect_farewell: bool = False
+    expect_cart_add: bool = False
     forbidden_substrings: tuple[str, ...] = ()
 
 
@@ -81,6 +84,17 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         name="specific_product",
         message="chocolate birthday cake",
         expect_carousel=True,
+    ),
+    TurnScenario(
+        name="search_blush_roses",
+        message="blush roses combo",
+        expect_carousel=True,
+    ),
+    TurnScenario(
+        name="add_blush_roses_cart",
+        message="Add the Blush Roses combo to my cart please",
+        expect_carousel=False,
+        expect_cart_add=True,
     ),
     TurnScenario(
         name="tracking_order",
@@ -264,6 +278,14 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
         )
         if not any(marker in lower for marker in farewell_markers):
             failures.append("expected warm farewell sign-off")
+
+    if scenario.expect_cart_add:
+        cart_markers = (
+            "added",
+            "cart",
+        )
+        if not all(marker in lower for marker in cart_markers):
+            failures.append("expected add-to-cart confirmation copy")
 
     for forbidden in scenario.forbidden_substrings:
         if forbidden.lower() in lower:

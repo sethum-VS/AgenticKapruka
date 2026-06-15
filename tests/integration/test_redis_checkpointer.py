@@ -43,8 +43,23 @@ _THREAD_ID = "thread-checkpoint-test-001"
 _SESSION_ID = "sess-checkpoint-test-001"
 _CLIENT_IP = "203.0.113.42"
 
+_CHECKPOINT_SEARCH_PRODUCT = ProductResult(
+    id="cake00ka002034",
+    name="Chocolate Birthday Cake",
+    summary="Rich chocolate layers.",
+    price=Money(amount=4500.0, currency="LKR"),
+    compare_at_price=None,
+    in_stock=True,
+    stock_level="high",
+    image_url="https://example.com/cake.jpg",
+    category=CategoryRef(id="cat_cakes", name="Birthday", slug="birthday"),
+    rating=None,
+    ships_internationally=False,
+    url="https://www.kapruka.com/cake",
+)
+
 _SEARCH_OUTPUT = SearchProductsOutput(
-    results=[],
+    results=[_CHECKPOINT_SEARCH_PRODUCT],
     next_cursor=None,
     applied_filters={"q": "birthday cake", "limit": 10, "in_stock_only": False},
 )
@@ -244,20 +259,7 @@ async def test_different_thread_ids_have_isolated_state(
     assert result_b["messages"][0].content == "second thread"
 
 
-_CAKE_PRODUCT = ProductResult(
-    id="cake00ka002034",
-    name="Chocolate Birthday Cake",
-    summary="Rich chocolate layers.",
-    price=Money(amount=4500.0, currency="LKR"),
-    compare_at_price=None,
-    in_stock=True,
-    stock_level="high",
-    image_url="https://example.com/cake.jpg",
-    category=CategoryRef(id="cat_cakes", name="Birthday", slug="birthday"),
-    rating=None,
-    ships_internationally=False,
-    url="https://www.kapruka.com/cake",
-)
+_CAKE_PRODUCT = _CHECKPOINT_SEARCH_PRODUCT
 
 
 def _ask_then_cakes_mock_genai() -> MagicMock:

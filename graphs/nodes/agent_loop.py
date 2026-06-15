@@ -297,6 +297,10 @@ _BROAD_GIFTS = re.compile(
     r"^(?:show me )?(?:some )?gifts?\s*[!.?]*$",
     re.I,
 )
+_SHORT_CATEGORY_REPLY = re.compile(
+    r"^(?:cakes?|flowers?|chocolates?|roses?|bouquets?)\s*[!.?]*$",
+    re.I,
+)
 _FLOWERS_REQUEST = re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)s?\b", re.I)
 
 
@@ -345,9 +349,19 @@ def _should_force_finish_after_search(
     return True
 
 
-def _format_planner_query_rewrite_hints(user_message: str) -> str:
+def _format_planner_query_rewrite_hints(
+    user_message: str,
+    *,
+    message_count: int = 1,
+) -> str:
     """Soft search-query rewrite suggestions for broad cake and mom/birthday turns."""
     hints: list[str] = []
+    if message_count > 1 and _SHORT_CATEGORY_REPLY.match(user_message.strip()):
+        hints.append(
+            "Follow-up category reply after a prior clarifying turn: prefer action call_tool "
+            'with kapruka_search_products (e.g. "cakes" → q="birthday cake"; '
+            '"flowers" → q="fresh roses bouquet") rather than ask_user.'
+        )
     if _CAKES_BROAD.search(user_message) and not _BIRTHDAY_CAKE.search(user_message):
         hints.append(
             'Broad "cakes" query: prefer kapruka_search_products with q="birthday cake" '
@@ -414,9 +428,13 @@ def _build_planner_system_instruction(
 
 def _build_planner_user_prompt(state: AgentState) -> str:
     """User turn content for the planner — latest message only."""
-    user_message = _extract_latest_user_message(state.get("messages") or [])
+    messages = state.get("messages") or []
+    user_message = _extract_latest_user_message(messages)
     prompt = f"Customer message:\n{user_message}"
-    rewrite_hints = _format_planner_query_rewrite_hints(user_message)
+    rewrite_hints = _format_planner_query_rewrite_hints(
+        user_message,
+        message_count=len(messages),
+    )
     if rewrite_hints:
         prompt += f"\n\n{rewrite_hints}"
     return prompt
