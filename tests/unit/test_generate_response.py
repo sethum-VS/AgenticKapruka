@@ -15,6 +15,7 @@ from graphs.nodes.generate_response import (
     _build_discovery_template_reply,
     _build_user_prompt,
     _cap_search_products_for_llm_context,
+    _format_product_line,
     _resolve_effective_tool_results,
     build_agent_tool_error_message,
     build_products_carousel_html,
@@ -31,7 +32,9 @@ from lib.chat.system_prompts import (
     GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION,
     LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION,
     UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION,
+    build_farewell_message,
     build_general_welcome_message,
+    is_farewell_message,
     select_response_system_instruction,
 )
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
@@ -197,7 +200,6 @@ async def test_generate_response_empty_user_message_skips_llm() -> None:
     "user_message",
     [
         "hello",
-        "thanks!",
         "what can you help with?",
     ],
 )
@@ -229,23 +231,63 @@ async def test_generate_response_general_welcome_skips_gemini(
 
 
 @pytest.mark.asyncio
-async def test_generate_response_refined_general_finish_zero_tools_uses_welcome() -> None:
-    """agent_loop refined_intent=general + finish with empty tool_trace uses static welcome."""
+async def test_generate_response_refined_general_farewell_uses_sign_off() -> None:
+    """agent_loop refined_intent=general + finish with thanks that's all returns farewell."""
     mock_client = MagicMock()
     state: AgentState = {
-        "messages": [HumanMessage(content="thanks!")],
+        "messages": [HumanMessage(content="thanks that's all")],
         "intent": "general",
         "tool_trace": [],
         "tool_results": {},
         "agent_loop_exit_reason": "finish",
         "agent_loop_done": True,
         "agent_loop_iterations": 1,
-        "session_id": "sess-gen-refined-general",
+        "session_id": "sess-gen-farewell",
     }
 
     result = await generate_response(state, genai_client=mock_client)
 
-    assert result["assistant_message"] == build_general_welcome_message()
+    farewell = build_farewell_message()
+    assert result["assistant_message"] == farewell
+    assert "Welcome to Kapruka" not in result["assistant_message"]
+    assert "What would you like to explore" not in result["assistant_message"]
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "user_message",
+    [
+        "thanks!",
+        "thank you",
+        "that's all",
+        "thanks, that's all",
+        "goodbye",
+    ],
+)
+def test_is_farewell_message(user_message: str) -> None:
+    assert is_farewell_message(user_message)
+
+
+def test_is_farewell_message_rejects_greeting() -> None:
+    assert not is_farewell_message("hello")
+
+
+@pytest.mark.asyncio
+async def test_generate_response_general_thanks_returns_farewell() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="thanks!")],
+        "intent": "general",
+        "tool_trace": [],
+        "agent_loop_exit_reason": "finish",
+        "agent_loop_done": True,
+        "session_id": "sess-gen-thanks-farewell",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert result["assistant_message"] == build_farewell_message()
+    assert "Welcome to Kapruka" not in result["assistant_message"]
     mock_client.models.generate_content.assert_not_called()
 
 
@@ -612,6 +654,18 @@ def test_build_discovery_template_reply_warm_top_three_opener() -> None:
     assert "Chocolate Birthday Cake" in reply
     assert "Vanilla Celebration Cake" in reply
     assert "Strawberry Delight Cake" in reply
+    assert "4500.0" not in reply
+    assert "LKR 4" not in reply
+    assert "Rs. 4,500" in reply
+
+
+def test_format_product_line_uses_format_currency() -> None:
+    line = _format_product_line(
+        _product("cake00ka002034", "Chocolate Birthday Cake", amount=8000.0),
+    )
+    assert "Rs. 8,000" in line
+    assert "8000.0" not in line
+    assert "LKR 8000" not in line
 
 
 def test_build_discovery_template_reply_prepends_artificial_floral_note() -> None:

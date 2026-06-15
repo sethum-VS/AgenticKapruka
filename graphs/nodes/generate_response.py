@@ -33,8 +33,10 @@ from lib.chat.product_honesty import (
 from lib.chat.query_preprocessor import extract_target_city
 from lib.chat.search_broadening import build_empty_search_reply
 from lib.chat.system_prompts import (
+    build_farewell_message,
     build_general_welcome_message,
     build_response_system_instruction,
+    is_farewell_message,
 )
 from lib.checkout.tracking import (
     OrderReferenceKind,
@@ -603,7 +605,7 @@ def _format_product_line(product: dict[str, Any]) -> str:
     else:
         stock_note = "out of stock"
     if amount is not None:
-        return f"'{name}' for {currency} {amount}, {stock_note}"
+        return f"'{name}' for {format_currency(float(amount), currency)}, {stock_note}"
     return f"'{name}', {stock_note}"
 
 
@@ -772,6 +774,12 @@ async def generate_response(
         }
 
     if _is_general_welcome_path(state):
+        if is_farewell_message(user_message):
+            farewell = build_farewell_message()
+            return {
+                "response_html": render_assistant_html(farewell),
+                "assistant_message": farewell,
+            }
         welcome = build_general_welcome_message()
         return {
             "response_html": render_assistant_html(welcome),

@@ -20,6 +20,7 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   delivery_colombo    ~8–25s  delivery confirmation or clarifying date, no carousel
   budget_sort         ~8–20s  carousel first item within stated budget cap
   silk_disclaimer     ~8–20s  artificial floral note when silk products appear
+  farewell            ~2–5s   warm sign-off, not capabilities menu
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ class TurnScenario:
     expect_delivery: bool = False
     max_first_carousel_price: float | None = None
     expect_artificial_disclaimer_if_silk: bool = False
+    expect_farewell: bool = False
     forbidden_substrings: tuple[str, ...] = ()
 
 
@@ -116,6 +118,17 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         message="chocolate and flowers wife birthday",
         expect_carousel=True,
         expect_artificial_disclaimer_if_silk=True,
+    ),
+    TurnScenario(
+        name="farewell",
+        message="thanks that's all",
+        expect_carousel=False,
+        expect_farewell=True,
+        forbidden_substrings=(
+            "Welcome to Kapruka",
+            "What would you like to explore",
+            "I can help you with:",
+        ),
     ),
 )
 
@@ -242,6 +255,15 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
         )
         if not any(marker in lower for marker in delivery_markers):
             failures.append("expected delivery-related response text")
+
+    if scenario.expect_farewell:
+        farewell_markers = (
+            "you're very welcome",
+            "take care",
+            "lovely helping you",
+        )
+        if not any(marker in lower for marker in farewell_markers):
+            failures.append("expected warm farewell sign-off")
 
     for forbidden in scenario.forbidden_substrings:
         if forbidden.lower() in lower:

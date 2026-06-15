@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
 from lib.zep.memory import format_memory_facts_block
 
@@ -86,6 +88,34 @@ def build_general_welcome_message() -> str:
         "• Delivery dates and rates for cities across Sri Lanka\n"
         "• Order tracking with your Kapruka order number\n\n"
         "What would you like to explore — cakes, flowers, gifts, or delivery?"
+    )
+
+
+_FAREWELL_PATTERN = re.compile(
+    r"(?:"
+    r"^\s*(?:thanks?|thank\s+you|thx|cheers)(?:\s+so\s+much)?[!.,\s]*$"
+    r"|^\s*(?:that'?s\s+all|that\s+is\s+all|nothing\s+else|i'?m\s+done|all\s+good)[!.,\s]*$"
+    r"|^\s*(?:good\s*bye|bye(?:\s+bye)?|see\s+ya|take\s+care)[!.,\s]*$"
+    r"|^\s*(?:thanks?,?\s+)?(?:that'?s\s+all|that\s+is\s+all)[!.,\s]*$"
+    r")",
+    re.I,
+)
+
+
+def is_farewell_message(message: str) -> bool:
+    """Return True when the customer is closing the conversation."""
+    text = message.strip()
+    if not text:
+        return False
+    return bool(_FAREWELL_PATTERN.match(text))
+
+
+def build_farewell_message() -> str:
+    """Warm sign-off for thanks / that's all / goodbye on the general intent path."""
+    return (
+        "You're very welcome — it was lovely helping you today. "
+        "Whenever you're ready to send a gift across Sri Lanka, I'm here. "
+        "Take care!"
     )
 
 
