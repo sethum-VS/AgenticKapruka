@@ -17,6 +17,24 @@ document.addEventListener("alpine:init", () => {
           this.focusInput();
         }
       });
+
+      document.body.addEventListener("click", (event) => {
+        const chip = event.target.closest("[data-chat-suggestion]");
+        if (!chip) {
+          return;
+        }
+        const suggestion = chip.getAttribute("data-chat-suggestion");
+        if (!suggestion) {
+          return;
+        }
+        const form = document.getElementById("chat-form");
+        const input = form?.querySelector("#chat-message");
+        if (!form || !input) {
+          return;
+        }
+        input.value = suggestion;
+        form.requestSubmit();
+      });
     },
 
     scrollToBottom() {
