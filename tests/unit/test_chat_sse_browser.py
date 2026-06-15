@@ -300,8 +300,6 @@ def test_chat_suggestion_chip_fills_input_and_submits() -> None:
         )
 
         assert page.input_value("#chat-message") == ""
-        assert any(
-            "Birthday" in body and "Colombo" in body for body in captured_bodies if body
-        )
+        assert any("Birthday" in body and "Colombo" in body for body in captured_bodies if body)
 
         browser.close()
