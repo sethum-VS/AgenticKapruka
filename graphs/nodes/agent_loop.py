@@ -21,6 +21,7 @@ from lib.chat.delivery_dates import (
     delivery_date_clarifying_question,
     normalize_delivery_date,
 )
+from lib.chat.search_broadening import apply_first_broaden
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
@@ -53,13 +54,13 @@ ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
 )
 
 _TOOL_STATUS_MESSAGES: dict[str, str] = {
-    SEARCH_PRODUCTS_TOOL: "Searching catalog…",
+    SEARCH_PRODUCTS_TOOL: "Searching Kapruka…",
     CHECK_DELIVERY_TOOL: "Checking delivery…",
     LIST_CITIES_TOOL: "Listing delivery cities…",
     LIST_CATEGORIES_TOOL: "Browsing categories…",
     GET_PRODUCT_TOOL: "Fetching product details…",
 }
-_DEFAULT_STATUS_MESSAGE = "Searching catalog…"
+_DEFAULT_STATUS_MESSAGE = "Searching Kapruka…"
 
 PLANNER_SEARCH_RESULT_LIMIT = 5
 PLANNER_CATEGORY_NODE_LIMIT = 10
@@ -296,6 +297,7 @@ _BROAD_GIFTS = re.compile(
     r"^(?:show me )?(?:some )?gifts?\s*[!.?]*$",
     re.I,
 )
+_FLOWERS_REQUEST = re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)s?\b", re.I)
 
 
 def _search_has_products(result: Any) -> bool:
@@ -306,6 +308,23 @@ def _search_has_products(result: Any) -> bool:
     if not isinstance(raw_results, list):
         return False
     return bool(raw_results)
+
+
+def _last_search_products_from_trace(
+    tool_trace: list[ToolInvocation],
+) -> list[dict[str, Any]] | None:
+    """Collect product dicts from the latest successful kapruka_search_products call."""
+    for invocation in reversed(tool_trace):
+        if invocation["name"] != SEARCH_PRODUCTS_TOOL:
+            continue
+        result = invocation["result"]
+        if not _search_has_products(result):
+            continue
+        raw_results = result.get("results")
+        if isinstance(raw_results, list):
+            products = [item for item in raw_results if isinstance(item, dict)]
+            return products or None
+    return None
 
 
 def _should_force_finish_after_search(
@@ -343,6 +362,12 @@ def _format_planner_query_rewrite_hints(user_message: str) -> str:
         hints.append(
             'Vague "gifts" query with no occasion or recipient: prefer action ask_user '
             "before kapruka_search_products."
+        )
+    if _FLOWERS_REQUEST.search(user_message):
+        hints.append(
+            "Flowers/roses/bouquet request: prefer kapruka_search_products q emphasizing "
+            "fresh cut roses or bouquets. If results are only silk, artificial, soap, or "
+            "paper florals, try one broader fresh-flowers search before finish."
         )
     if not hints:
         return ""
@@ -504,6 +529,7 @@ async def agent_loop(
     exit_reason: str | None = None
     planner_iterations = 0
     refined_intent: Intent | None = None
+    search_broaden_applied = False
 
     _emit_status(_DEFAULT_STATUS_MESSAGE)
 
@@ -634,6 +660,62 @@ async def agent_loop(
 
         if (
             tool_name == SEARCH_PRODUCTS_TOOL
+            and not _search_has_products(result)
+            and not search_broaden_applied
+        ):
+            broadened_args, _broaden_step = apply_first_broaden(enriched_args)
+            if broadened_args is not None and not _is_duplicate_invocation(
+                tool_trace,
+                SEARCH_PRODUCTS_TOOL,
+                broadened_args,
+            ):
+                search_broaden_applied = True
+                _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+                broaden_result = await invoke_tool(
+                    SEARCH_PRODUCTS_TOOL,
+                    broadened_args,
+                    kapruka_service=kapruka_service,
+                    client_ip=rate_limit_key,
+                    currency=currency,
+                )
+                tool_trace.append(
+                    {
+                        "name": SEARCH_PRODUCTS_TOOL,
+                        "args": broadened_args,
+                        "result": broaden_result,
+                    },
+                )
+                tool_call_count += 1
+                if isinstance(broaden_result, dict) and broaden_result.get("error"):
+                    error_message = broaden_result.get("message")
+                    agent_tool_error = {
+                        "tool": SEARCH_PRODUCTS_TOOL,
+                        "message": (
+                            str(error_message).strip()
+                            if isinstance(error_message, str) and error_message.strip()
+                            else str(broaden_result.get("error"))
+                        ),
+                    }
+                    exit_reason = "tool_error"
+                    agent_loop_done = True
+                    logger.debug(
+                        "agent_loop: broaden search returned error %r; stopping loop",
+                        broaden_result.get("error"),
+                    )
+                    break
+                if _search_has_products(broaden_result) and _should_force_finish_after_search(
+                    state,
+                    tool_trace,
+                ):
+                    logger.debug(
+                        "agent_loop: broaden search returned products; forcing finish",
+                    )
+                    force_finish = True
+                    force_finish_reason = "finish"
+                continue
+
+        if (
+            tool_name == SEARCH_PRODUCTS_TOOL
             and _search_has_products(result)
             and _should_force_finish_after_search(state, tool_trace)
         ):
@@ -666,4 +748,11 @@ async def agent_loop(
         updates["agent_tool_error"] = agent_tool_error
     if refined_intent is not None:
         updates["intent"] = refined_intent
+    if search_broaden_applied:
+        updates["search_broaden_applied"] = True
+
+    last_search_products = _last_search_products_from_trace(tool_trace)
+    if last_search_products:
+        updates["last_search_products"] = last_search_products
+
     return updates

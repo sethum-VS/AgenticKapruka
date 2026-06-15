@@ -6,6 +6,7 @@ import re
 from typing import Literal
 
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
+from lib.neo4j.hybrid_context import extract_max_price
 
 QueryMode = Literal["utility", "situational"]
 
@@ -162,4 +163,5 @@ class QueryPreprocessor:
             "detected_vernacular": vernacular,
             "requires_delivery_validation": requires_delivery,
             "target_city": target_city,
+            "budget_max": extract_max_price(stripped),
         }

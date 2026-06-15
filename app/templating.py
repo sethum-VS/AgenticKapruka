@@ -114,6 +114,20 @@ def render_cart_partial(
     return template.render(items=items, currency=currency)
 
 
+def render_cart_partial_oob(
+    *,
+    items: list[StoredCartItem],
+    currency: str = "LKR",
+) -> str:
+    """Cart partial with hx-swap-oob for chat-driven add-to-cart confirmation."""
+    partial = render_cart_partial(items=items, currency=currency)
+    return partial.replace(
+        'id="cart-panel"',
+        'id="cart-panel" hx-swap-oob="outerHTML"',
+        1,
+    )
+
+
 def render_cart_drawer(
     *,
     items: list[StoredCartItem],

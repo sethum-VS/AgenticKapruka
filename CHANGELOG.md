@@ -2,6 +2,28 @@
 
 All notable changes to AgenticKapruka are documented here.
 
+## [0.0.13.0] - 2026-06-16
+
+### Added
+
+- Cart intent subgraph: `resolve_cart_product` → `execute_cart_action` with Redis cart OOB panel updates
+- Budget-aware carousel curation (`sort_and_filter_by_budget`) with session budget persistence
+- Delivery honesty guard blocking ungrounded fee claims; perishable warnings inline in chat
+- Product honesty disclaimers for artificial/silk florals (`lib/chat/product_honesty.py`)
+- Order tracking robustness for KA legacy and VIMP references (`lib/checkout/tracking.py`)
+- Search broadening ladder on empty MCP results (`lib/chat/search_broadening.py`)
+- Farewell sign-off path and `format_currency` in discovery product lines
+- Clickable welcome suggestion chips with `data-chat-suggestion` handler
+- Early SSE `event: status` with "Searching Kapruka…" before carousel/final reply
+
+### Changed
+
+- Agent loop status copy aligned to "Searching Kapruka…" (was "Searching catalog…")
+
+### Fixed
+
+- Date-sensitive unit tests use future ISO delivery dates relative to Colombo today
+
 ## [0.0.12.0] - 2026-06-12
 
 ### Added

@@ -139,6 +139,7 @@ async def test_retrieve_hybrid_context_zep_category_overrides_graph_hint() -> No
         ("general", "retrieve_hybrid_context"),
         ("tracking", "call_mcp_tools"),
         ("checkout", "run_checkout_graph"),
+        ("cart", "resolve_cart_product"),
     ],
 )
 def test_route_after_analyze_intent_routes_checkout_and_skips_tracking(

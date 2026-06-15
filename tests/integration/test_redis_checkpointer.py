@@ -27,11 +27,15 @@ from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import (
     CategoryRef,
+    GetProductOutput,
     Money,
+    ProductAttributes,
     ProductResult,
+    ProductShipping,
     SearchProductsOutput,
     TrackOrderOutput,
 )
+from lib.redis.cart import get_cart
 from lib.redis.checkpointer import get_checkpointer
 from lib.redis.client import RedisClient
 
@@ -347,3 +351,95 @@ async def test_cakes_after_ask_user_renders_carousel_not_stale_clarifying(
     assert 'data-testid="product-carousel"' in html
     assert 'data-product-id="cake00ka002034"' in html
     assert "previous search for 'gifts'" not in (second.get("assistant_message") or "").lower()
+
+
+_BLUSH_ROSES_PRODUCT = ProductResult(
+    id="combo00blush001",
+    name="Blush Roses Combo Gift",
+    summary="Roses and chocolates combo.",
+    price=Money(amount=6500.0, currency="LKR"),
+    compare_at_price=None,
+    in_stock=True,
+    stock_level="high",
+    image_url="https://example.com/blush.jpg",
+    category=CategoryRef(id="cat_combo", name="Combo", slug="combo"),
+    rating=None,
+    ships_internationally=False,
+    url="https://www.kapruka.com/blush",
+)
+
+_BLUSH_GET_PRODUCT = GetProductOutput(
+    id="combo00blush001",
+    name="Blush Roses Combo Gift",
+    description="Roses and chocolates combo.",
+    summary="Roses and chocolates combo.",
+    price=Money(amount=6500.0, currency="LKR"),
+    compare_at_price=None,
+    in_stock=True,
+    stock_level="high",
+    category=CategoryRef(id="cat_combo", name="Combo", slug="combo"),
+    variants=[],
+    images=[],
+    attributes=ProductAttributes(),
+    shipping=ProductShipping(
+        ships_from="Colombo",
+        ships_internationally=False,
+        restricted_countries=[],
+    ),
+    rating=None,
+    url="https://www.kapruka.com/blush",
+)
+
+
+@pytest.mark.asyncio
+async def test_search_turn_then_add_to_cart_resolves_from_checkpoint(
+    checkpointer: AsyncRedisSaver,
+    redis_client: RedisClient,
+) -> None:
+    """Add-to-cart turn matches last_search_products persisted from a prior search turn."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[_BLUSH_ROSES_PRODUCT],
+        next_cursor=None,
+        applied_filters={"q": "blush roses", "limit": 10, "in_stock_only": False},
+    )
+    mock_service.get_product.return_value = _BLUSH_GET_PRODUCT
+
+    deps = ShoppingGraphDeps(
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        genai_client=build_mock_genai_client(
+            search_query="blush roses",
+            assistant_message="Here are some blush rose combos.",
+        ),
+        redis_client=redis_client,
+    )
+    graph = build_shopping_graph(checkpointer=checkpointer, deps=deps)
+    config: dict[str, Any] = {"configurable": {"thread_id": "thread-cart-add"}}
+
+    first = await graph.ainvoke(
+        initial_shopping_state(
+            message="blush roses combo",
+            session_id=_SESSION_ID,
+            thread_id="thread-cart-add",
+        ),
+        config,
+    )
+    assert first.get("last_search_products")
+    assert len(first["last_search_products"]) == 1
+
+    second = await graph.ainvoke(
+        append_message_state("Add the Blush Roses combo to my cart please"),
+        config,
+    )
+    assert second["intent"] == "cart"
+    action = second.get("cart_action_result") or {}
+    assert action.get("status") == "added"
+    assert "checkout" not in (second.get("assistant_message") or "").lower()
+
+    cart = await get_cart(redis_client, _SESSION_ID)
+    assert len(cart) == 1
+    assert cart[0].product_id == "combo00blush001"
+    assert cart[0].quantity == 1
+    assert 'hx-swap-oob="outerHTML"' in (second.get("response_html") or "")
+    mock_service.get_product.assert_awaited_once()

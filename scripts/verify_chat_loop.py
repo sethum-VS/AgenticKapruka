@@ -15,7 +15,12 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   category_flowers    ~8–20s  product carousel
   specific_product    ~8–20s  product carousel
   tracking_order      ~5–15s  order-tracking-status card, no carousel
+  tracking_ka         ~5–15s  KA legacy educate copy, no tracking card
+  tracking_status     ~5–15s  check-status phrasing + VIMP tracking card
   delivery_colombo    ~8–25s  delivery confirmation or clarifying date, no carousel
+  budget_sort         ~8–20s  carousel first item within stated budget cap
+  silk_disclaimer     ~8–20s  artificial floral note when silk products appear
+  farewell            ~2–5s   warm sign-off, not capabilities menu
 """
 
 from __future__ import annotations
@@ -40,7 +45,11 @@ class TurnScenario:
     expect_carousel: bool
     expect_clarifying: bool = False
     expect_tracking: bool = False
+    expect_tracking_educate: bool = False
     expect_delivery: bool = False
+    max_first_carousel_price: float | None = None
+    expect_artificial_disclaimer_if_silk: bool = False
+    expect_farewell: bool = False
     forbidden_substrings: tuple[str, ...] = ()
 
 
@@ -80,10 +89,46 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         expect_tracking=True,
     ),
     TurnScenario(
+        name="tracking_ka",
+        message="Where is order KA123456?",
+        expect_carousel=False,
+        expect_tracking=False,
+        expect_tracking_educate=True,
+    ),
+    TurnScenario(
+        name="tracking_status",
+        message="check status of my order VIMP34456CB2",
+        expect_carousel=False,
+        expect_tracking=True,
+    ),
+    TurnScenario(
         name="delivery_colombo",
         message="can you deliver flowers to Colombo next Saturday?",
         expect_carousel=False,
         expect_delivery=True,
+    ),
+    TurnScenario(
+        name="budget_sort",
+        message="wife birthday chocolate flowers ~8000 LKR colombo",
+        expect_carousel=True,
+        max_first_carousel_price=8000.0,
+    ),
+    TurnScenario(
+        name="silk_disclaimer",
+        message="chocolate and flowers wife birthday",
+        expect_carousel=True,
+        expect_artificial_disclaimer_if_silk=True,
+    ),
+    TurnScenario(
+        name="farewell",
+        message="thanks that's all",
+        expect_carousel=False,
+        expect_farewell=True,
+        forbidden_substrings=(
+            "Welcome to Kapruka",
+            "What would you like to explore",
+            "I can help you with:",
+        ),
     ),
 )
 
@@ -135,6 +180,20 @@ def _session_cookie_from_set_cookie(set_cookie: str | None) -> str | None:
     return f"ak_session={match.group(1)}"
 
 
+def _extract_first_carousel_price(html: str) -> float | None:
+    carousel_idx = html.find('data-testid="product-carousel"')
+    if carousel_idx < 0:
+        return None
+    fragment = html[carousel_idx:]
+    match = re.search(
+        r'data-testid="product-price"[^>]*>\s*(?:Rs\.\s*|[$£]|A\$|C\$|€)?([\d,]+(?:\.\d+)?)',
+        fragment,
+    )
+    if not match:
+        return None
+    return float(match.group(1).replace(",", ""))
+
+
 def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
     failures: list[str] = []
     lower = html.lower()
@@ -145,6 +204,16 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
         failures.append("expected product carousel, none found")
     if not scenario.expect_carousel and has_carousel:
         failures.append("unexpected product carousel")
+
+    if scenario.max_first_carousel_price is not None and has_carousel:
+        first_price = _extract_first_carousel_price(html)
+        if first_price is None:
+            failures.append("could not parse first carousel item price")
+        elif first_price > scenario.max_first_carousel_price:
+            failures.append(
+                f"first carousel item price {first_price:.0f} exceeds budget "
+                f"{scenario.max_first_carousel_price:.0f}",
+            )
 
     if scenario.expect_clarifying:
         clarifying_markers = (
@@ -163,6 +232,18 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
     if scenario.expect_tracking and not has_tracking:
         failures.append("expected order tracking status card")
 
+    if scenario.expect_tracking_educate:
+        educate_markers = (
+            "vimp",
+            "post-payment",
+            "confirmation email",
+            "legacy",
+        )
+        if not any(marker in lower for marker in educate_markers):
+            failures.append("expected KA legacy tracking educate copy")
+        if has_tracking:
+            failures.append("unexpected tracking card for KA legacy educate path")
+
     if scenario.expect_delivery:
         delivery_markers = (
             "deliver",
@@ -175,9 +256,31 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
         if not any(marker in lower for marker in delivery_markers):
             failures.append("expected delivery-related response text")
 
+    if scenario.expect_farewell:
+        farewell_markers = (
+            "you're very welcome",
+            "take care",
+            "lovely helping you",
+        )
+        if not any(marker in lower for marker in farewell_markers):
+            failures.append("expected warm farewell sign-off")
+
     for forbidden in scenario.forbidden_substrings:
         if forbidden.lower() in lower:
             failures.append(f"forbidden substring present: {forbidden!r}")
+
+    if scenario.expect_artificial_disclaimer_if_silk:
+        has_silk_pick = bool(re.search(r"\bsilk\b", html, re.I)) and bool(
+            re.search(r"\b(?:rose|roses|flower|flowers|bouquet)\b", html, re.I),
+        )
+        disclaimer_markers = (
+            "artificial",
+            "not fresh-cut",
+            "not fresh cut",
+            "silk or artificial",
+        )
+        if has_silk_pick and not any(marker in lower for marker in disclaimer_markers):
+            failures.append("expected artificial floral disclaimer when silk products in results")
 
     if 'role="alert"' in html and "Something went wrong" in html:
         failures.append("error banner in response")

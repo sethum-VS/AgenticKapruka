@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
 from lib.zep.memory import format_memory_facts_block
 
@@ -12,6 +14,11 @@ _UTILITY_EMPTY_TOOL_RESULTS_RULE = (
 
 _CONCIERGE_EMPTY_TOOL_RESULTS_RULE = (
     "- If tool_results are empty, respond kindly and suggest a thoughtful next step.\n"
+)
+
+_ARTIFICIAL_FLORAL_DISCLOSURE_RULE = (
+    "- When the customer asked for flowers and tool_results include silk, artificial, soap, "
+    "or paper floral products, disclose they are not fresh-cut flowers before recommending.\n"
 )
 
 UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION = (
@@ -26,6 +33,7 @@ Rules:
 - When delivery city or date appears in tool_results or the customer message, mention it briefly.
 - Never invent products, prices, stock status, categories, or delivery facts.
 """
+    + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
     + _UTILITY_EMPTY_TOOL_RESULTS_RULE
     + "- Keep the reply under 180 words.\n"
 )
@@ -45,11 +53,13 @@ Rules:
   personal occasions (condolence, breakup, apology).
 - Use natural Sri Lankan warmth — phrases like Aiyo, bro, sis, or machan when appropriate.
 """
+    + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
     + _CONCIERGE_EMPTY_TOOL_RESULTS_RULE
     + "- Keep the reply conversational and under 200 words.\n"
 )
 
-GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION = """\
+GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION = (
+    """\
 You are the Kapruka gift concierge.
 
 Synthesize a helpful reply using ONLY the tool_results JSON provided.
@@ -60,8 +70,10 @@ Rules:
 - Never invent products, prices, stock status, categories, or delivery facts.
 - Quote names and facts exactly as they appear in tool_results.
 - Mention delivery city or date when present in tool_results.
-- Keep the reply warm, concise, and under 150 words.
 """
+    + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
+    + "- Keep the reply warm, concise, and under 150 words.\n"
+)
 
 
 def build_general_welcome_message() -> str:
@@ -76,6 +88,34 @@ def build_general_welcome_message() -> str:
         "• Delivery dates and rates for cities across Sri Lanka\n"
         "• Order tracking with your Kapruka order number\n\n"
         "What would you like to explore — cakes, flowers, gifts, or delivery?"
+    )
+
+
+_FAREWELL_PATTERN = re.compile(
+    r"(?:"
+    r"^\s*(?:thanks?|thank\s+you|thx|cheers)(?:\s+so\s+much)?[!.,\s]*$"
+    r"|^\s*(?:that'?s\s+all|that\s+is\s+all|nothing\s+else|i'?m\s+done|all\s+good)[!.,\s]*$"
+    r"|^\s*(?:good\s*bye|bye(?:\s+bye)?|see\s+ya|take\s+care)[!.,\s]*$"
+    r"|^\s*(?:thanks?,?\s+)?(?:that'?s\s+all|that\s+is\s+all)[!.,\s]*$"
+    r")",
+    re.I,
+)
+
+
+def is_farewell_message(message: str) -> bool:
+    """Return True when the customer is closing the conversation."""
+    text = message.strip()
+    if not text:
+        return False
+    return bool(_FAREWELL_PATTERN.match(text))
+
+
+def build_farewell_message() -> str:
+    """Warm sign-off for thanks / that's all / goodbye on the general intent path."""
+    return (
+        "You're very welcome — it was lovely helping you today. "
+        "Whenever you're ready to send a gift across Sri Lanka, I'm here. "
+        "Take care!"
     )
 
 

@@ -62,6 +62,8 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'id="chat-empty-state"' in html
     assert "What would you like to send today?" in html
     assert "Birthday cake for mom in Colombo" in html
+    assert 'data-chat-suggestion="Birthday cake for mom in Colombo"' in html
+    assert 'type="button"' in html
     assert "htmx.org" in html
     assert 'href="/static/css/app.css"' in html
     assert 'id="chat-form"' in html

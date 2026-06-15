@@ -42,7 +42,7 @@ def test_chunk_text_splits_words() -> None:
 
 @pytest.mark.asyncio
 async def test_iter_chat_sse_events_yields_thinking_bubble_on_stream_start() -> None:
-    """User turn is followed immediately by a pending 'Searching catalog…' bubble."""
+    """User turn is followed by pending bubble and early Searching Kapruka status SSE."""
     mock_graph = MagicMock()
 
     async def empty_astream(
@@ -65,11 +65,14 @@ async def test_iter_chat_sse_events_yields_thinking_bubble_on_stream_start() -> 
     ):
         events.append(event)
 
-    assert len(events) >= 2
+    assert len(events) >= 3
     assert 'data: <div id="user">hi</div>' in events[0]
-    assert "Searching catalog…" in events[1]
+    assert "Searching Kapruka…" in events[1]
     assert 'id="assistant-stream-abc123"' in events[1]
     assert 'hx-swap-oob="outerHTML"' not in events[1]
+    assert events[2].startswith("event: status\n")
+    assert "Searching Kapruka…" in events[2]
+    assert 'hx-swap-oob="outerHTML"' in events[2]
 
 
 @pytest.mark.asyncio
@@ -99,8 +102,9 @@ async def test_iter_chat_sse_events_maps_custom_status_to_status_sse() -> None:
         events.append(event)
 
     status_events = [event for event in events if event.startswith("event: status\n")]
-    assert len(status_events) == 1
-    assert "Checking delivery…" in status_events[0]
+    assert len(status_events) == 2
+    assert "Searching Kapruka…" in status_events[0]
+    assert "Checking delivery…" in status_events[1]
     assert 'id="assistant-stream-status1"' in status_events[0]
     assert 'hx-swap-oob="outerHTML"' in status_events[0]
 
@@ -137,10 +141,12 @@ async def test_iter_chat_sse_events_yields_user_then_assistant_chunks() -> None:
     ):
         events.append(event)
 
-    assert len(events) >= 4
+    assert len(events) >= 5
     assert 'data: <div id="user">hi</div>' in events[0]
-    assert "Searching catalog…" in events[1]
-    assert any("assistant-stream-" in event for event in events[2:])
+    assert "Searching Kapruka…" in events[1]
+    assert events[2].startswith("event: status\n")
+    assert "Searching Kapruka…" in events[2]
+    assert any("assistant-stream-" in event for event in events[3:])
     assert "Hello from Kapruka assistant." in events[-1]
     assert 'aria-label="Assistant message"' in events[-1]
     assert 'hx-swap-oob="delete"' in events[-1]
@@ -206,7 +212,7 @@ async def test_iter_chat_sse_events_emits_error_event_on_graph_failure() -> None
         collected.append(event)
 
     assert collected
-    assert "Searching catalog…" in collected[1]
+    assert "Searching Kapruka…" in collected[1]
     assert "Something went wrong" in collected[-1]
     assert sum("Something went wrong" in event for event in collected) == 1
     assert 'hx-swap-oob="delete"' in collected[-1]

@@ -68,9 +68,12 @@ async def iter_chat_sse_events(
     pending_id = f"assistant-stream-{stream_id or secrets.token_hex(4)}"
     stream_started = False
 
-    thinking_html = _render_streaming_assistant("Searching catalog…", pending_id, oob=False)
+    early_status_message = "Searching Kapruka…"
+    thinking_html = _render_streaming_assistant(early_status_message, pending_id, oob=False)
     yield format_sse_event(thinking_html)
     stream_started = True
+    status_html = _render_streaming_assistant(early_status_message, pending_id, oob=True)
+    yield format_sse_event(status_html, event="status")
 
     thread_id = ""
     configurable = config.get("configurable") if isinstance(config, dict) else None

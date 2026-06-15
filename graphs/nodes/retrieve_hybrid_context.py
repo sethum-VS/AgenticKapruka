@@ -36,6 +36,7 @@ RouteAfterAnalyzeIntent = Literal[
     "retrieve_hybrid_context",
     "call_mcp_tools",
     "run_checkout_graph",
+    "resolve_cart_product",
 ]
 
 _INTENTS_SKIP_HYBRID_CONTEXT: frozenset[Intent] = frozenset({"tracking"})
@@ -60,6 +61,15 @@ def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
             reason="checkout intent",
         )
         return "run_checkout_graph"
+    if intent == "cart":
+        logger.debug("route_after_analyze_intent: routing to cart transaction path")
+        trace_route_decision(
+            from_node="analyze_intent",
+            target="resolve_cart_product",
+            intent=intent,
+            reason="cart add intent",
+        )
+        return "resolve_cart_product"
     if intent in _INTENTS_SKIP_HYBRID_CONTEXT:
         logger.debug("route_after_analyze_intent: skipping hybrid context for %s", intent)
         trace_route_decision(
