@@ -613,6 +613,19 @@ def test_planner_user_prompt_includes_cakes_rewrite_hint() -> None:
     assert 'q="birthday cake"' in prompt
 
 
+def test_planner_user_prompt_post_clarify_category_reply_hint() -> None:
+    """Short category noun after gifts clarify should bias planner toward search."""
+    state: AgentState = {
+        "messages": [
+            HumanMessage(content="show me some gifts"),
+            HumanMessage(content="cakes"),
+        ],
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert "follow-up category reply" in prompt.lower()
+    assert "kapruka_search_products" in prompt
+
+
 def test_planner_user_prompt_mom_birthday_bias_hint() -> None:
     state: AgentState = {"messages": [HumanMessage(content="birthday gift for my mom")]}
     prompt = _build_planner_user_prompt(state)
