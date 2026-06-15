@@ -2,6 +2,17 @@
 
 All notable changes to AgenticKapruka are documented here.
 
+## [0.0.13.1] - 2026-06-16
+
+### Added
+
+- `verify_chat_loop.py`: blush roses search + add-to-cart multi-turn scenarios
+- Planner post-clarify hint for short category replies (`cakes`, `flowers`, etc.)
+
+### Fixed
+
+- Redis checkpoint integration test: mock non-empty search results so PRD-128 broadening does not inflate `tool_call_count`
+
 ## [0.0.13.0] - 2026-06-16
 
 ### Added
