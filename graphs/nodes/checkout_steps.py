@@ -14,6 +14,7 @@ from graphs.checkout_state import (
     resolve_navigation,
 )
 from graphs.state import CheckoutStep
+from lib.chat.city_resolution import resolve_delivery_city
 from lib.checkout.delivery import DeliveryFormValues, parse_delivery_form
 from lib.checkout.order import build_create_order_from_checkout
 from lib.checkout.payment import payment_cta_from_finalize
@@ -212,14 +213,13 @@ async def _validate_step(
         ok, errors = validate_delivery_city_step(state)
         if ok and kapruka_service is not None:
             city = (state.get("delivery_city") or "").strip()
-            cities = await kapruka_service.list_delivery_cities(
-                client_ip,
-                query=city,
-                limit=50,
-            )
-            if city not in cities:
-                msg = "City is not available for Kapruka delivery."
-                return False, {"delivery_city": msg}, extra
+            resolution = await resolve_delivery_city(kapruka_service, client_ip, city)
+            if resolution.status == "resolved" and resolution.canonical:
+                if resolution.canonical != city:
+                    extra["delivery_city"] = resolution.canonical
+                return ok, errors, extra
+            message = resolution.customer_message or "City is not available for Kapruka delivery."
+            return False, {"delivery_city": message}, extra
         return ok, errors, extra
 
     if step == "delivery_date":

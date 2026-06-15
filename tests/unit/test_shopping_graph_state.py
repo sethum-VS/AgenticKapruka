@@ -20,6 +20,8 @@ def test_append_message_state_resets_per_turn_agent_fields() -> None:
     assert delta["agent_loop_done"] is None
     assert delta["agent_loop_exit_reason"] is None
     assert delta["agent_loop_iterations"] is None
+    assert delta["delivery_city_canonical"] is None
+    assert delta["delivery_context_ready"] is None
 
 
 def test_append_message_state_passes_currency_when_set() -> None:

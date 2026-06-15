@@ -199,6 +199,23 @@ def build_agent_tool_error_message(
             f"{raw_message} "
             "Would you like to try a different date?"
         )
+    if error_code == "city_not_deliverable" and tool == CHECK_DELIVERY_TOOL:
+        return (
+            "We cannot deliver to that city. Please choose a Kapruka delivery area "
+            "(for example Colombo 03, Kandy, or Galle)."
+        )
+    if error_code == "validation_error":
+        lowered = raw_message.lower()
+        if tool == CHECK_DELIVERY_TOOL and (
+            "delivery_date" in lowered or "date" in lowered or "past" in lowered
+        ):
+            return delivery_date_clarifying_question()
+        if tool == CHECK_DELIVERY_TOOL and "city" in lowered:
+            return (
+                "Please choose a valid Kapruka delivery city "
+                "(for example Colombo 03, Kandy, or Galle)."
+            )
+        return "Please check your delivery details and try again."
 
     action = _TOOL_ERROR_ACTION_LABELS.get(tool, "complete that request")
     cause = raw_message.strip() or "Kapruka could not process the request."

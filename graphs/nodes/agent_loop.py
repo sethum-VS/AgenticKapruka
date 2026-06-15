@@ -630,6 +630,12 @@ async def agent_loop(
 
         if tool_name == CHECK_DELIVERY_TOOL:
             user_message = _extract_latest_user_message(state.get("messages") or [])
+            canonical_city = state.get("delivery_city_canonical")
+            if isinstance(canonical_city, str) and canonical_city.strip():
+                enriched_args["city"] = canonical_city.strip()
+            state_date = state.get("delivery_date")
+            if isinstance(state_date, str) and state_date.strip():
+                enriched_args["delivery_date"] = state_date.strip()
             resolved_date = normalize_delivery_date(enriched_args, user_message)
             if resolved_date is None:
                 agent_clarifying_question = delivery_date_clarifying_question()

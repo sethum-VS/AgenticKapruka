@@ -58,6 +58,11 @@ _DELIVERY_INTENT = re.compile(
     re.I,
 )
 
+_PERISHABLE_GIFT_INTENT = re.compile(
+    r"\b(?:cake|cakes|flower|flowers|rose|roses|bouquet|fruit|gift|gifts|hamper|combo)\b",
+    re.I,
+)
+
 _DELIVER_TO_CITY = re.compile(
     r"\bdeliver(?:y)?\s+(?:to\s+)?(Colombo(?:\s+\d{2})?|Kandy|Galle|Negombo|Jaffna|Matara)\b",
     re.I,
@@ -129,6 +134,10 @@ def _has_delivery_intent(text: str) -> bool:
     return bool(_DELIVERY_INTENT.search(text))
 
 
+def _has_perishable_gift_intent(text: str) -> bool:
+    return bool(_PERISHABLE_GIFT_INTENT.search(text))
+
+
 def _normalize_city(raw: str) -> str:
     parts = raw.strip().split()
     if len(parts) >= 2 and parts[0].lower() == "colombo" and parts[1].isdigit():
@@ -157,7 +166,9 @@ class QueryPreprocessor:
         mode = classify_query_mode(stripped)
         vernacular = detect_vernacular(stripped)
         target_city = extract_target_city(stripped)
-        requires_delivery = target_city is not None and _has_delivery_intent(stripped)
+        requires_delivery = target_city is not None and (
+            _has_delivery_intent(stripped) or _has_perishable_gift_intent(stripped)
+        )
         return {
             "is_situational": mode == "situational",
             "detected_vernacular": vernacular,

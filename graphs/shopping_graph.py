@@ -18,6 +18,10 @@ from graphs.nodes.execute_cart_action import execute_cart_action
 from graphs.nodes.generate_response import generate_response
 from graphs.nodes.load_zep_memory import load_zep_memory
 from graphs.nodes.resolve_cart_product import resolve_cart_product
+from graphs.nodes.resolve_delivery_context import (
+    resolve_delivery_context,
+    route_after_resolve_delivery_context,
+)
 from graphs.nodes.retrieve_hybrid_context import (
     retrieve_hybrid_context,
     route_after_analyze_intent,
@@ -115,6 +119,13 @@ def build_shopping_graph(
             client_ip=client_ip,
         )
 
+    async def _resolve_delivery_context(state: AgentState) -> dict[str, Any]:
+        return await resolve_delivery_context(
+            state,
+            kapruka_service=kapruka_service,
+            client_ip=client_ip,
+        )
+
     graph = StateGraph(AgentState)
     graph.add_node("load_zep_memory", _load_zep_memory)
     graph.add_node("analyze_intent", _analyze_intent)
@@ -124,6 +135,7 @@ def build_shopping_graph(
     graph.add_node("generate_response", _generate_response)
     graph.add_node("run_checkout_graph", _run_checkout_graph)
     graph.add_node("resolve_cart_product", _resolve_cart_product)
+    graph.add_node("resolve_delivery_context", _resolve_delivery_context)
     graph.add_node("execute_cart_action", _execute_cart_action)
     graph.add_node("zep_memory_write", _zep_memory_write)
 
@@ -137,9 +149,19 @@ def build_shopping_graph(
             "call_mcp_tools": "call_mcp_tools",
             "run_checkout_graph": "run_checkout_graph",
             "resolve_cart_product": "resolve_cart_product",
+            "resolve_delivery_context": "resolve_delivery_context",
         },
     )
-    graph.add_edge("retrieve_hybrid_context", "agent_loop")
+    graph.add_edge("retrieve_hybrid_context", "resolve_delivery_context")
+    graph.add_conditional_edges(
+        "resolve_delivery_context",
+        route_after_resolve_delivery_context,
+        {
+            "agent_loop": "agent_loop",
+            "call_mcp_tools": "call_mcp_tools",
+            "generate_response": "generate_response",
+        },
+    )
     graph.add_edge("agent_loop", "generate_response")
     graph.add_edge("call_mcp_tools", "generate_response")
     graph.add_edge("run_checkout_graph", "generate_response")
@@ -202,6 +224,12 @@ def _per_turn_agent_reset_fields() -> dict[str, Any]:
         "agent_loop_done": None,
         "agent_loop_exit_reason": None,
         "agent_loop_iterations": None,
+        "delivery_city_raw": None,
+        "delivery_city_canonical": None,
+        "delivery_city_status": None,
+        "delivery_city_candidates": None,
+        "delivery_date": None,
+        "delivery_context_ready": None,
     }
 
 

@@ -1041,6 +1041,27 @@ def test_build_agent_tool_error_message_generic_mcp() -> None:
     assert "adjust your request" in message.lower()
 
 
+def test_build_agent_tool_error_message_city_not_deliverable() -> None:
+    message = build_agent_tool_error_message(
+        tool=CHECK_DELIVERY_TOOL,
+        raw_message="City is not in the Kapruka delivery network",
+        error_code="city_not_deliverable",
+    )
+    assert "cannot deliver to that city" in message.lower()
+    assert "Colombo 03" in message
+    assert "loc:" not in message.lower()
+
+
+def test_build_agent_tool_error_message_validation_error_hides_pydantic_loc() -> None:
+    message = build_agent_tool_error_message(
+        tool=CHECK_DELIVERY_TOOL,
+        raw_message="delivery_date: Input should be a valid date",
+        error_code="validation_error",
+    )
+    assert "loc:" not in message.lower()
+    assert "delivery" in message.lower()
+
+
 @pytest.mark.asyncio
 async def test_generate_response_tool_error_past_delivery_skips_gemini() -> None:
     """tool_error exit renders delivery-date guidance without catalog synthesis."""

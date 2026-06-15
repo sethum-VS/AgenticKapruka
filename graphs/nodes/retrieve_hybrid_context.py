@@ -12,6 +12,7 @@ from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, Intent
 from lib.debug.trace import trace_route_decision
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
+from lib.chat.intent_metadata import IntentMetadata
 from lib.embeddings.vertex_embeddings import embed_texts
 from lib.kapruka.product_id import contains_product_id
 from lib.neo4j.client import Neo4jClient
@@ -37,6 +38,7 @@ RouteAfterAnalyzeIntent = Literal[
     "call_mcp_tools",
     "run_checkout_graph",
     "resolve_cart_product",
+    "resolve_delivery_context",
 ]
 
 _INTENTS_SKIP_HYBRID_CONTEXT: frozenset[Intent] = frozenset({"tracking"})
@@ -82,6 +84,21 @@ def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
     if intent in ("discovery", "general"):
         user_message = _extract_latest_user_message(state.get("messages") or [])
         if contains_product_id(user_message):
+            intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
+            has_city = bool(intent_metadata.get("target_city")) or bool(
+                intent_metadata.get("requires_delivery_validation"),
+            )
+            if has_city:
+                logger.debug(
+                    "route_after_analyze_intent: product ID + city → resolve_delivery_context",
+                )
+                trace_route_decision(
+                    from_node="analyze_intent",
+                    target="resolve_delivery_context",
+                    intent=intent,
+                    reason="product ID with delivery city",
+                )
+                return "resolve_delivery_context"
             logger.debug(
                 "route_after_analyze_intent: product ID fast-path for intent=%s",
                 intent,
