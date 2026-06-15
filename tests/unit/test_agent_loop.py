@@ -389,18 +389,18 @@ async def test_agent_loop_duplicate_tool_guard_forces_finish() -> None:
     """Duplicate tool+args skips re-invocation and forces finish on the next iteration."""
     mock_service = _mock_kapruka_service()
     mock_service.search_products.return_value = _SEARCH_EMPTY
-    search_args = {"q": "gift hamper", "currency": "LKR"}
+    search_args = {"q": "chocolate hamper", "currency": "LKR"}
     planner_steps = [
         AgentPlannerStep(
             action="call_tool",
             tool_name=SEARCH_PRODUCTS_TOOL,
-            tool_args={"q": "gift hamper"},
+            tool_args={"q": "chocolate hamper"},
             rationale="initial search",
         ),
         AgentPlannerStep(
             action="call_tool",
             tool_name=SEARCH_PRODUCTS_TOOL,
-            tool_args={"q": "gift hamper"},
+            tool_args={"q": "chocolate hamper"},
             rationale="duplicate search",
         ),
         AgentPlannerStep(
@@ -491,6 +491,29 @@ def test_planner_user_prompt_includes_broad_gifts_ask_user_hint() -> None:
     prompt = _build_planner_user_prompt(state)
     assert "ask_user" in prompt.lower()
     assert "gifts" in prompt.lower()
+    assert "gift voucher" not in prompt.lower()
+
+
+def test_planner_user_prompt_budgeted_gift_ideas_prefers_search() -> None:
+    """Budgeted gift ideas bias planner toward kapruka_search_products before ask_user."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="Gift ideas under Rs. 5,000")],
+        "intent_metadata": {"budget_max": 5000.0},
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert "call_tool" in prompt.lower()
+    assert "gift voucher" in prompt.lower()
+    assert "max_price=5000" in prompt
+    assert "ask_user before" not in prompt.lower()
+
+
+def test_planner_system_instruction_budgeted_gifts_search_before_ask_user() -> None:
+    """System instruction directs budgeted gift queries to search before clarify."""
+    from graphs.nodes.agent_loop import PLANNER_SYSTEM_INSTRUCTION
+
+    assert "Budgeted gift queries" in PLANNER_SYSTEM_INSTRUCTION
+    assert "gift voucher" in PLANNER_SYSTEM_INSTRUCTION
+    assert "before ask_user" in PLANNER_SYSTEM_INSTRUCTION
 
 
 @pytest.mark.asyncio

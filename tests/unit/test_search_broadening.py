@@ -11,6 +11,29 @@ from lib.chat.search_broadening import (
 )
 
 
+def test_broaden_gift_voucher_fallback_rewrites_gift_query() -> None:
+    args = {"q": "gift ideas under 5000", "currency": "LKR", "max_price": 5000.0}
+    broadened = broaden_search_args(args, "gift_voucher_fallback")
+    assert broadened is not None
+    assert broadened["q"] == "voucher"
+    assert broadened["max_price"] == 5000.0
+
+
+def test_broaden_gift_voucher_fallback_noop_without_gift() -> None:
+    args = {"q": "birthday cake", "currency": "LKR"}
+    assert broaden_search_args(args, "gift_voucher_fallback") is None
+
+
+def test_broaden_gift_voucher_fallback_noop_when_already_voucher() -> None:
+    args = {"q": "voucher", "currency": "LKR", "max_price": 5000.0}
+    assert broaden_search_args(args, "gift_voucher_fallback") is None
+
+
+def test_first_applicable_broaden_step_gift_query_prefers_voucher_fallback() -> None:
+    args = {"q": "gift ideas", "currency": "LKR", "max_price": 5000.0}
+    assert first_applicable_broaden_step(args) == "gift_voucher_fallback"
+
+
 def test_broaden_simplify_q_birthday_cake_to_cake() -> None:
     args = {"q": "birthday cake for mom", "currency": "LKR", "max_price": 30.0}
     broadened = broaden_search_args(args, "simplify_q")
@@ -72,7 +95,12 @@ def test_apply_first_broaden_returns_one_step() -> None:
 
 
 def test_broaden_ladder_order_constant() -> None:
-    assert BROADEN_LADDER == ("simplify_q", "strip_city", "drop_max_price")
+    assert BROADEN_LADDER == (
+        "gift_voucher_fallback",
+        "simplify_q",
+        "strip_city",
+        "drop_max_price",
+    )
 
 
 def test_build_empty_search_reply_suggests_broader_query() -> None:

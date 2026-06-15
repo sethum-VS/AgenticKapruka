@@ -10,9 +10,9 @@ from typing import Any, Literal
 from app.config import get_settings
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, Intent
+from lib.chat.intent_metadata import IntentMetadata
 from lib.debug.trace import trace_route_decision
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
-from lib.chat.intent_metadata import IntentMetadata
 from lib.embeddings.vertex_embeddings import embed_texts
 from lib.kapruka.product_id import contains_product_id
 from lib.neo4j.client import Neo4jClient

@@ -7,13 +7,16 @@ from typing import Any, Literal
 
 from lib.neo4j.hybrid_context import strip_location_from_search_query
 
-BroadenStep = Literal["simplify_q", "strip_city", "drop_max_price"]
+BroadenStep = Literal["gift_voucher_fallback", "simplify_q", "strip_city", "drop_max_price"]
 
 BROADEN_LADDER: tuple[BroadenStep, ...] = (
+    "gift_voucher_fallback",
     "simplify_q",
     "strip_city",
     "drop_max_price",
 )
+
+_GIFT_IN_Q = re.compile(r"\bgifts?\b", re.I)
 
 _SIMPLIFY_Q_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bbirthday\s+cake\b", re.I), "cake"),
@@ -34,6 +37,13 @@ def broaden_search_args(args: dict[str, Any], step: BroadenStep) -> dict[str, An
     q = str(args.get("q") or "").strip()
     if not q:
         return None
+
+    if step == "gift_voucher_fallback":
+        if not _GIFT_IN_Q.search(q):
+            return None
+        if q.lower().strip() == "voucher":
+            return None
+        return {**args, "q": "voucher"}
 
     if step == "simplify_q":
         new_q = q

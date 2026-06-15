@@ -92,8 +92,12 @@ action MUST be finish. Do not run auxiliary category browsing or extra searches
 unless the user explicitly requested them.
 
 Broad gifts example: Customer says "show me gifts" or "some gifts" with no
-occasion or recipient named → action MUST be ask_user to learn who the gift is
-for or what occasion before running kapruka_search_products.
+occasion, recipient, or budget named → action MUST be ask_user to learn who the
+gift is for or what occasion before running kapruka_search_products.
+
+Budgeted gift queries: When the customer names a budget (e.g. "gift ideas under
+Rs. 5,000") → action MUST be call_tool kapruka_search_products with
+q="gift voucher" and max_price from their budget before ask_user.
 
 Prior session facts (Zep) are conversational context only — not catalog truth.
 Hybrid context hints and preferences are soft hints; the explicit user message
@@ -297,6 +301,7 @@ _BROAD_GIFTS = re.compile(
     r"^(?:show me )?(?:some )?gifts?\s*[!.?]*$",
     re.I,
 )
+_GIFT_WORD = re.compile(r"\bgifts?\b", re.I)
 _SHORT_CATEGORY_REPLY = re.compile(
     r"^(?:cakes?|flowers?|chocolates?|roses?|bouquets?)\s*[!.?]*$",
     re.I,
@@ -353,9 +358,11 @@ def _format_planner_query_rewrite_hints(
     user_message: str,
     *,
     message_count: int = 1,
+    budget_max: float | None = None,
 ) -> str:
     """Soft search-query rewrite suggestions for broad cake and mom/birthday turns."""
     hints: list[str] = []
+    has_budget = budget_max is not None and budget_max > 0
     if message_count > 1 and _SHORT_CATEGORY_REPLY.match(user_message.strip()):
         hints.append(
             "Follow-up category reply after a prior clarifying turn: prefer action call_tool "
@@ -373,9 +380,20 @@ def _format_planner_query_rewrite_hints(
             "or combopack/combo gifts unless the customer specified another product type."
         )
     if _BROAD_GIFTS.match(user_message.strip()):
+        if has_budget:
+            hints.append(
+                f'Budgeted "gifts" query: prefer action call_tool with kapruka_search_products '
+                f'q="gift voucher" and max_price={budget_max} rather than ask_user.'
+            )
+        else:
+            hints.append(
+                'Vague "gifts" query with no occasion, recipient, or budget: prefer action '
+                "ask_user before kapruka_search_products."
+            )
+    elif has_budget and _GIFT_WORD.search(user_message):
         hints.append(
-            'Vague "gifts" query with no occasion or recipient: prefer action ask_user '
-            "before kapruka_search_products."
+            f"Budgeted gift query: prefer action call_tool with kapruka_search_products "
+            f'q="gift voucher" and max_price={budget_max} before ask_user.'
         )
     if _FLOWERS_REQUEST.search(user_message):
         hints.append(
@@ -431,9 +449,12 @@ def _build_planner_user_prompt(state: AgentState) -> str:
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
     prompt = f"Customer message:\n{user_message}"
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    budget_max = intent_metadata.get("budget_max")
     rewrite_hints = _format_planner_query_rewrite_hints(
         user_message,
         message_count=len(messages),
+        budget_max=budget_max if isinstance(budget_max, (int, float)) else None,
     )
     if rewrite_hints:
         prompt += f"\n\n{rewrite_hints}"
