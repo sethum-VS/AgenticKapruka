@@ -31,6 +31,7 @@ from lib.chat.product_honesty import (
     reply_already_discloses_artificial_floral,
 )
 from lib.chat.query_preprocessor import extract_target_city
+from lib.chat.search_broadening import build_empty_search_reply
 from lib.chat.system_prompts import (
     build_general_welcome_message,
     build_response_system_instruction,
@@ -932,10 +933,8 @@ async def generate_response(
                     "assistant_message": error_message,
                 }
             if search_payload.get("results") == []:
-                empty_reply = (
-                    "I couldn't find products matching that search on Kapruka. "
-                    "Try naming a specific gift type, such as birthday cake, flowers, "
-                    "or chocolates."
+                empty_reply = build_empty_search_reply(
+                    broaden_attempted=bool(state.get("search_broaden_applied")),
                 )
                 return {
                     "response_html": render_assistant_html(empty_reply),

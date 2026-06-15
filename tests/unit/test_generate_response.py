@@ -929,7 +929,39 @@ async def test_generate_response_empty_merged_search_fallback_via_tool_trace() -
     result = await generate_response(state, genai_client=mock_client)
 
     assert "couldn't find products" in result["assistant_message"].lower()
+    assert "broader gift type" in result["assistant_message"].lower()
     assert 'data-testid="product-carousel"' not in result["response_html"]
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_empty_search_after_broaden_suggests_next_steps() -> None:
+    """After broaden retry, empty-state copy references broader options."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom in Kandy under $30")],
+        "intent": "discovery",
+        "search_broaden_applied": True,
+        "tool_trace": [
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"q": "birthday cake", "max_price": 30.0},
+                "result": {"results": []},
+            },
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"q": "cake", "max_price": 30.0},
+                "result": {"results": []},
+            },
+        ],
+        "agent_loop_done": True,
+        "session_id": "sess-gen-broaden-empty",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "broadened the search" in result["assistant_message"].lower()
+    assert "higher budget" in result["assistant_message"].lower()
     mock_client.models.generate_content.assert_not_called()
 
 

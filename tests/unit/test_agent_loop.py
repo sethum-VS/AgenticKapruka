@@ -33,7 +33,28 @@ from lib.kapruka.types import CategoryRef, Money, ProductResult, SearchProductsO
 
 _CLIENT_IP = "203.0.113.99"
 
+_SEARCH_HIT = ProductResult(
+    id="cake001",
+    name="Chocolate Cake",
+    summary="Rich chocolate layers.",
+    price=Money(amount=4500.0, currency="LKR"),
+    compare_at_price=None,
+    in_stock=True,
+    stock_level="high",
+    image_url="https://example.com/cake.jpg",
+    category=CategoryRef(id="cat_cakes", name="Birthday", slug="birthday"),
+    rating=None,
+    ships_internationally=False,
+    url="https://www.kapruka.com/cake",
+)
+
 _SEARCH_OUTPUT = SearchProductsOutput(
+    results=[_SEARCH_HIT],
+    next_cursor=None,
+    applied_filters={"q": "birthday cake", "limit": 10, "in_stock_only": False},
+)
+
+_SEARCH_EMPTY = SearchProductsOutput(
     results=[],
     next_cursor=None,
     applied_filters={"q": "birthday cake", "limit": 10, "in_stock_only": False},
@@ -335,6 +356,7 @@ async def test_agent_loop_ask_user_sets_clarifying_question_and_exits() -> None:
 async def test_agent_loop_iteration_cap_limits_tool_calls() -> None:
     """Bounded loop runs at most MAX_ITERATIONS planner steps with tool invocations."""
     mock_service = _mock_kapruka_service()
+    mock_service.search_products.return_value = _SEARCH_EMPTY
     planner_steps = [
         AgentPlannerStep(
             action="call_tool",
@@ -366,18 +388,19 @@ async def test_agent_loop_iteration_cap_limits_tool_calls() -> None:
 async def test_agent_loop_duplicate_tool_guard_forces_finish() -> None:
     """Duplicate tool+args skips re-invocation and forces finish on the next iteration."""
     mock_service = _mock_kapruka_service()
-    search_args = {"q": "birthday cake", "currency": "LKR"}
+    mock_service.search_products.return_value = _SEARCH_EMPTY
+    search_args = {"q": "gift hamper", "currency": "LKR"}
     planner_steps = [
         AgentPlannerStep(
             action="call_tool",
             tool_name=SEARCH_PRODUCTS_TOOL,
-            tool_args={"q": "birthday cake"},
+            tool_args={"q": "gift hamper"},
             rationale="initial search",
         ),
         AgentPlannerStep(
             action="call_tool",
             tool_name=SEARCH_PRODUCTS_TOOL,
-            tool_args={"q": "birthday cake"},
+            tool_args={"q": "gift hamper"},
             rationale="duplicate search",
         ),
         AgentPlannerStep(
@@ -757,3 +780,87 @@ async def test_agent_loop_check_delivery_past_date_without_message_asks_user() -
     assert result["agent_clarifying_question"] == expected_question
     assert result["tool_trace"] == []
     mock_service.check_delivery.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_empty_search_runs_one_broaden_retry() -> None:
+    """Empty kapruka_search_products triggers a single broaden retry per turn."""
+    mock_service = _mock_kapruka_service()
+    empty = _SEARCH_EMPTY
+    hit = SearchProductsOutput(
+        results=[_SEARCH_HIT],
+        next_cursor=None,
+        applied_filters={"q": "cake", "limit": 10, "in_stock_only": False},
+    )
+    mock_service.search_products.side_effect = [empty, hit]
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "birthday cake", "max_price": 30.0},
+            rationale="search catalog",
+        ),
+        AgentPlannerStep(
+            action="finish",
+            rationale="done",
+        ),
+    ]
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert mock_service.search_products.call_count == 2
+    assert result["search_broaden_applied"] is True
+    assert len(result["tool_trace"]) == 2
+    assert result["tool_trace"][0]["args"]["q"] == "birthday cake"
+    assert result["tool_trace"][1]["args"]["q"] == "cake"
+    assert result["last_search_products"] is not None
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_empty_search_broaden_guard_at_most_one_retry() -> None:
+    """After one automatic broaden, a second empty search does not auto-broaden again."""
+    mock_service = _mock_kapruka_service()
+    empty = _SEARCH_EMPTY
+    mock_service.search_products.return_value = empty
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "birthday cake", "max_price": 30.0},
+            rationale="search catalog",
+        ),
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "flowers"},
+            rationale="planner second search",
+        ),
+        AgentPlannerStep(
+            action="finish",
+            rationale="done",
+        ),
+    ]
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            _base_state(),
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert mock_service.search_products.call_count == 3
+    assert result["search_broaden_applied"] is True
+    assert len(result["tool_trace"]) == 3
+    assert result["tool_trace"][1]["args"]["q"] == "cake"
+    assert result["tool_trace"][2]["args"]["q"] == "flowers"

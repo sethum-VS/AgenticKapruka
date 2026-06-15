@@ -55,6 +55,7 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
         "assistant_message",
         "zep_memory_facts",
         "last_search_products",
+        "search_broaden_applied",
         "cart_action_result",
     }
     assert set(hints) == expected_keys
