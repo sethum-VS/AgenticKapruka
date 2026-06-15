@@ -308,6 +308,23 @@ def _search_has_products(result: Any) -> bool:
     return bool(raw_results)
 
 
+def _last_search_products_from_trace(
+    tool_trace: list[ToolInvocation],
+) -> list[dict[str, Any]] | None:
+    """Collect product dicts from the latest successful kapruka_search_products call."""
+    for invocation in reversed(tool_trace):
+        if invocation["name"] != SEARCH_PRODUCTS_TOOL:
+            continue
+        result = invocation["result"]
+        if not _search_has_products(result):
+            continue
+        raw_results = result.get("results")
+        if isinstance(raw_results, list):
+            products = [item for item in raw_results if isinstance(item, dict)]
+            return products or None
+    return None
+
+
 def _should_force_finish_after_search(
     state: AgentState,
     tool_trace: list[ToolInvocation],
@@ -666,4 +683,9 @@ async def agent_loop(
         updates["agent_tool_error"] = agent_tool_error
     if refined_intent is not None:
         updates["intent"] = refined_intent
+
+    last_search_products = _last_search_products_from_trace(tool_trace)
+    if last_search_products:
+        updates["last_search_products"] = last_search_products
+
     return updates

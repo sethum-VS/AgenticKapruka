@@ -1,14 +1,52 @@
-"""Unit tests for evals.intent_heuristics."""
+"""Unit tests for lib.chat.intent_heuristics cart vs checkout routing."""
 
 from __future__ import annotations
 
 from evals.intent_heuristics import infer_intent_from_message
 
 from lib.chat.intent_heuristics import (
+    classify_routing_guard,
+    extract_cart_product_phrase,
+    is_cart_add_trigger,
     is_checkout_trigger,
     is_proceed_checkout_message,
     is_tracking_guard,
 )
+
+
+def test_cart_add_trigger_matches_add_and_put_phrases() -> None:
+    assert is_cart_add_trigger("Add the Blush Roses combo to my cart please")
+    assert is_cart_add_trigger("put chocolate cake in my cart")
+    assert is_cart_add_trigger("Add roses to cart")
+
+
+def test_cart_add_trigger_does_not_match_view_cart() -> None:
+    assert not is_cart_add_trigger("checkout my cart")
+    assert not is_cart_add_trigger("view cart")
+
+
+def test_extract_cart_product_phrase() -> None:
+    assert extract_cart_product_phrase("Add the Blush Roses combo to my cart") == (
+        "the Blush Roses combo"
+    )
+    assert extract_cart_product_phrase("put chocolate cake in my cart") == "chocolate cake"
+
+
+def test_checkout_trigger_excludes_add_to_cart_substring() -> None:
+    assert not is_checkout_trigger("Add Blush Roses to my cart")
+    assert is_checkout_trigger("checkout my cart")
+    assert is_checkout_trigger("view cart")
+
+
+def test_classify_routing_guard_priority_cart_before_checkout() -> None:
+    assert classify_routing_guard("Add Blush Roses to my cart") == "cart"
+    assert classify_routing_guard("Proceed to checkout") == "checkout"
+    assert classify_routing_guard("where is order VIMP123") == "tracking"
+    assert classify_routing_guard("view cart") == "checkout"
+
+
+def test_infer_intent_add_to_cart_is_cart_not_checkout() -> None:
+    assert infer_intent_from_message("Add the Blush Roses combo to my cart please") == "cart"
 
 
 def test_infer_tracking_from_order_number() -> None:
@@ -30,11 +68,6 @@ def test_infer_discovery_for_product_search() -> None:
 def test_tracking_guard_matches_order_number_and_keywords() -> None:
     assert is_tracking_guard("where is order VIMP34456CB2")
     assert is_tracking_guard("track my order please")
-
-
-def test_checkout_guard_matches_cart_triggers_not_delivery_questions() -> None:
-    assert is_checkout_trigger("checkout my cart")
-    assert not is_checkout_trigger("Can you deliver to Kandy tomorrow?")
 
 
 def test_proceed_checkout_message_is_exact_match() -> None:

@@ -11,9 +11,7 @@ from pydantic import BaseModel
 from graphs.state import AgentState, Intent
 from lib.chat.intent_heuristics import (
     PROCEED_CHECKOUT_MESSAGE,
-    is_checkout_trigger,
-    is_proceed_checkout_message,
-    is_tracking_guard,
+    classify_routing_guard,
 )
 from lib.chat.query_preprocessor import QueryPreprocessor
 
@@ -52,13 +50,7 @@ def _extract_latest_user_message(messages: list[BaseMessage]) -> str:
 
 def _classify_routing_guard(user_message: str) -> Intent | None:
     """Return a guard intent or None when the turn should defer to agent_loop."""
-    if is_proceed_checkout_message(user_message):
-        return "checkout"
-    if is_tracking_guard(user_message):
-        return "tracking"
-    if is_checkout_trigger(user_message):
-        return "checkout"
-    return None
+    return classify_routing_guard(user_message)
 
 
 async def analyze_intent(

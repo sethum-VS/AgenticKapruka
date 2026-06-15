@@ -654,6 +654,7 @@ async def test_agent_loop_check_delivery_missing_date_asks_user_skips_mcp() -> N
 
     with (
         patch("lib.utils.timezone.colombo_now", return_value=fixed),
+        patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
         patch(
             "graphs.nodes.agent_loop._plan_next_step_sync",
             side_effect=planner_steps,
@@ -664,9 +665,10 @@ async def test_agent_loop_check_delivery_missing_date_asks_user_skips_mcp() -> N
             kapruka_service=mock_service,
             client_ip=_CLIENT_IP,
         )
+        expected_question = delivery_date_clarifying_question()
 
     assert result["agent_loop_exit_reason"] == "ask_user"
-    assert result["agent_clarifying_question"] == delivery_date_clarifying_question()
+    assert result["agent_clarifying_question"] == expected_question
     assert result["tool_trace"] == []
     mock_service.check_delivery.assert_not_called()
 
@@ -729,6 +731,7 @@ async def test_agent_loop_check_delivery_past_date_without_message_asks_user() -
 
     with (
         patch("lib.utils.timezone.colombo_now", return_value=fixed),
+        patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
         patch(
             "graphs.nodes.agent_loop._plan_next_step_sync",
             side_effect=planner_steps,
@@ -739,8 +742,9 @@ async def test_agent_loop_check_delivery_past_date_without_message_asks_user() -
             kapruka_service=mock_service,
             client_ip=_CLIENT_IP,
         )
+        expected_question = delivery_date_clarifying_question()
 
     assert result["agent_loop_exit_reason"] == "ask_user"
-    assert result["agent_clarifying_question"] == delivery_date_clarifying_question()
+    assert result["agent_clarifying_question"] == expected_question
     assert result["tool_trace"] == []
     mock_service.check_delivery.assert_not_called()

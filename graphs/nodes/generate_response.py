@@ -12,7 +12,12 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
-from app.templating import get_templates, render_product_carousel, render_tracking_status
+from app.templating import (
+    get_templates,
+    render_cart_partial_oob,
+    render_product_carousel,
+    render_tracking_status,
+)
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
@@ -30,6 +35,7 @@ from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.redis.cart import StoredCartItem
 from lib.utils.text import decode_html_entities
 from lib.zep.memory import format_memory_facts_block
 
@@ -358,6 +364,37 @@ def extract_search_products(tool_results: dict[str, Any] | None) -> list[dict[st
     return _curated_search_results(search_payload)
 
 
+def _build_cart_assistant_message(action: dict[str, Any]) -> str | None:
+    """Synthesize add-to-cart confirmation or error copy from cart_action_result."""
+    status = action.get("status")
+    if status == "clarify":
+        question = action.get("clarifying_question")
+        return str(question).strip() if isinstance(question, str) and question.strip() else None
+    if status == "error":
+        message = action.get("message")
+        return str(message).strip() if isinstance(message, str) and message.strip() else None
+    if status != "added":
+        return None
+    name = str(action.get("product_name") or "item")
+    quantity = action.get("quantity")
+    if action.get("merged") and isinstance(quantity, int):
+        return f"Updated your cart — {name} is now quantity {quantity}."
+    return f"Added {name} to your cart."
+
+
+def _build_cart_oob_html(action: dict[str, Any], *, currency: str) -> str | None:
+    """Render OOB cart panel swap when a cart line was added."""
+    if action.get("status") != "added":
+        return None
+    raw_items = action.get("cart_items")
+    if not isinstance(raw_items, list) or not raw_items:
+        return None
+    items = [StoredCartItem.model_validate(row) for row in raw_items if isinstance(row, dict)]
+    if not items:
+        return None
+    return render_cart_partial_oob(items=items, currency=currency)
+
+
 def build_tracking_status_html(tool_results: dict[str, Any] | None) -> str | None:
     """Render tracking_status partial when kapruka_track_order returned results."""
     tracking = tracking_output_from_tool_results(tool_results)
@@ -563,6 +600,21 @@ async def generate_response(
             "response_html": render_assistant_html(error_reply),
             "assistant_message": error_reply,
         }
+
+    if state.get("intent") == "cart":
+        action = dict(state.get("cart_action_result") or {})
+        cart_reply = _build_cart_assistant_message(action)
+        if cart_reply:
+            cart_oob = _build_cart_oob_html(
+                action,
+                currency=state.get("currency") or "LKR",
+            )
+            assistant_html = render_assistant_html(cart_reply)
+            response_html = f"{cart_oob}{assistant_html}" if cart_oob else assistant_html
+            return {
+                "response_html": response_html,
+                "assistant_message": cart_reply,
+            }
 
     if state.get("intent") == "tracking":
         tracking_reply = _build_tracking_assistant_message(tool_results)

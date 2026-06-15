@@ -102,6 +102,21 @@ async def test_analyze_intent_proceed_checkout_skips_gemini() -> None:
 
 
 @pytest.mark.asyncio
+async def test_analyze_intent_cart_add_routes_to_cart_intent() -> None:
+    mock_client = MagicMock()
+    message = "Add the Blush Roses combo to my cart please"
+    state: AgentState = {
+        "messages": [HumanMessage(content=message)],
+        "session_id": "sess-intent-cart-add",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent"] == "cart"
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_analyze_intent_checkout_trigger_skips_gemini() -> None:
     mock_client = MagicMock()
     state: AgentState = {

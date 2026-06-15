@@ -9,7 +9,7 @@ from langchain_core.messages import BaseMessage
 
 from lib.chat.intent_metadata import IntentMetadata
 
-Intent = Literal["discovery", "checkout", "tracking", "general"]
+Intent = Literal["discovery", "checkout", "tracking", "general", "cart"]
 ModelTier = Literal["flash", "pro"]
 AgentLoopExitReason = Literal[
     "finish",
@@ -62,3 +62,5 @@ class AgentState(TypedDict):
     response_html: str | None
     assistant_message: str | None
     zep_memory_facts: list[str] | None
+    last_search_products: list[dict[str, Any]] | None
+    cart_action_result: dict[str, Any] | None
