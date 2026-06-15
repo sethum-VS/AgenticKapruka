@@ -272,9 +272,9 @@ def delivery_claim_guard(
     )
 
 
-def _last_check_delivery_result(
+def _last_check_delivery_invocation(
     tool_trace: list[ToolInvocation] | None,
-) -> dict[str, Any] | None:
+) -> ToolInvocation | None:
     if not tool_trace:
         return None
     for invocation in reversed(tool_trace):
@@ -282,34 +282,77 @@ def _last_check_delivery_result(
             continue
         result = invocation.get("result")
         if isinstance(result, dict) and not result.get("error"):
-            return result
+            return invocation
     return None
+
+
+def _canonical_city_from_check_delivery_invocation(invocation: ToolInvocation) -> str | None:
+    args = invocation.get("args")
+    if isinstance(args, dict):
+        raw_city = args.get("city")
+        if isinstance(raw_city, str) and raw_city.strip():
+            return raw_city.strip()
+    result = invocation.get("result")
+    if isinstance(result, dict):
+        raw_city = result.get("city")
+        if isinstance(raw_city, str) and raw_city.strip():
+            return raw_city.strip()
+    return None
+
+
+def _build_verified_delivery_fee_line(
+    *,
+    city: str,
+    checked_date: str,
+    rate: float,
+    currency: str,
+) -> str:
+    fee = format_currency(rate, currency)
+    return f"Delivery to {city} on {checked_date}: {fee} (verified with Kapruka)"
 
 
 def _apply_perishable_delivery_honesty(
     reply_text: str,
     tool_trace: list[ToolInvocation] | None,
 ) -> tuple[str, str | None]:
-    """Append perishable_warning copy and render amber delivery status partial when grounded."""
-    delivery = _last_check_delivery_result(tool_trace)
-    if delivery is None:
+    """Append verified delivery fee and perishable_warning; render delivery status partial."""
+    invocation = _last_check_delivery_invocation(tool_trace)
+    if invocation is None:
         return reply_text, None
 
-    warning = delivery.get("perishable_warning")
-    if not isinstance(warning, str) or not warning.strip():
+    delivery = invocation.get("result")
+    if not isinstance(delivery, dict):
         return reply_text, None
-
-    warning = warning.strip()
-    updated_reply = reply_text
-    if warning not in updated_reply:
-        updated_reply = f"{updated_reply}\n\n{warning}".strip()
 
     try:
         delivery_output = CheckDeliveryOutput.model_validate(delivery)
-        delivery_html = render_delivery_date_status(result=delivery_output)
     except ValidationError:
-        logger.warning("generate_response: invalid check_delivery payload for status partial")
-        return updated_reply, None
+        logger.warning("generate_response: invalid check_delivery payload for delivery honesty")
+        return reply_text, None
+
+    updated_reply = reply_text
+    delivery_html: str | None = None
+
+    if delivery_output.available:
+        city = _canonical_city_from_check_delivery_invocation(invocation)
+        if city:
+            fee_line = _build_verified_delivery_fee_line(
+                city=city,
+                checked_date=delivery_output.checked_date,
+                rate=delivery_output.rate,
+                currency=delivery_output.currency,
+            )
+            if "verified with Kapruka" not in updated_reply:
+                updated_reply = f"{updated_reply}\n\n{fee_line}".strip()
+        delivery_html = render_delivery_date_status(result=delivery_output)
+
+    warning = delivery_output.perishable_warning
+    if isinstance(warning, str) and warning.strip():
+        warning = warning.strip()
+        if warning not in updated_reply:
+            updated_reply = f"{updated_reply}\n\n{warning}".strip()
+        if delivery_html is None:
+            delivery_html = render_delivery_date_status(result=delivery_output)
 
     return updated_reply, delivery_html
 

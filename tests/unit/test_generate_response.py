@@ -12,8 +12,10 @@ from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import PRO_MODEL
 from graphs.nodes.generate_response import (
     AssistantReply,
+    _apply_perishable_delivery_honesty,
     _build_discovery_template_reply,
     _build_user_prompt,
+    _build_verified_delivery_fee_line,
     _cap_search_products_for_llm_context,
     _format_product_line,
     _resolve_effective_tool_results,
@@ -1167,6 +1169,97 @@ def test_delivery_claim_guard_city_date_asks_before_fee() -> None:
     assert "Colombo" in guarded
     assert "won't quote a fee" in guarded
     assert "Rs. 400" not in guarded
+
+
+def test_build_verified_delivery_fee_line_uses_format_currency() -> None:
+    line = _build_verified_delivery_fee_line(
+        city="Galle",
+        checked_date="2026-06-17",
+        rate=450.0,
+        currency="LKR",
+    )
+    assert line == "Delivery to Galle on 2026-06-17: Rs. 450 (verified with Kapruka)"
+
+
+def test_apply_perishable_delivery_honesty_appends_verified_fee_from_tool_trace() -> None:
+    """Grounded check_delivery with rate appends verified fee using canonical city from args."""
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {"city": "Galle", "delivery_date": "2026-06-17"},
+            "result": {
+                "city": "Galle",
+                "now": "2026-06-16T10:00:00+05:30",
+                "checked_date": "2026-06-17",
+                "available": True,
+                "rate": 450.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": None,
+            },
+        },
+    ]
+    reply, delivery_html = _apply_perishable_delivery_honesty(
+        "Here are a few roses we can send.",
+        tool_trace,
+    )
+    assert "Delivery to Galle on 2026-06-17: Rs. 450 (verified with Kapruka)" in reply
+    assert delivery_html is not None
+    assert 'data-testid="delivery-date-available"' in delivery_html
+    assert "Flat delivery rate: Rs. 450 per order." in delivery_html
+
+
+@pytest.mark.asyncio
+async def test_generate_response_surfaces_delivery_fee_when_mcp_returns_rate() -> None:
+    """Discovery reply quotes verified fee when check_delivery succeeds without LLM fee copy."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="Here are some lovely rose bouquets for Galle.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": SEARCH_PRODUCTS_TOOL,
+            "args": {"q": "roses"},
+            "result": {
+                "results": [_product("flower00ka002", "Classic Roses")],
+            },
+        },
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {"city": "Galle", "delivery_date": "2026-06-17"},
+            "result": {
+                "city": "Galle",
+                "now": "2026-06-16T10:00:00+05:30",
+                "checked_date": "2026-06-17",
+                "available": True,
+                "rate": 450.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": None,
+            },
+        },
+    ]
+    state: AgentState = {
+        "messages": [HumanMessage(content="roses for Galle tomorrow")],
+        "intent": "discovery",
+        "tool_trace": tool_trace,
+        "session_id": "sess-delivery-fee",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert (
+        "Delivery to Galle on 2026-06-17: Rs. 450 (verified with Kapruka)"
+        in (result["assistant_message"])
+    )
+    assert 'data-testid="delivery-date-available"' in result["response_html"]
+    assert 'data-slot="delivery-status"' in result["response_html"]
 
 
 @pytest.mark.asyncio
