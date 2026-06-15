@@ -335,3 +335,29 @@ async def test_retrieve_hybrid_context_pruned_graph_hints_only_for_planner() -> 
 
     assert updates["hybrid_context"]["hints"]["category"] == "Flowers"
     assert selected == []
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_adds_puja_exclude_hints_for_flower_fruit() -> None:
+    graph_context = {
+        "hints": {"category": "Flowers"},
+        "vector_hits": [{"id": "category:flowers", "score": 0.7, "display_name": "Flowers"}],
+        "categories": [],
+        "occasions": [],
+        "product_types": [],
+        "direct_occasion_hits": [],
+    }
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    state: AgentState = {
+        "messages": [HumanMessage(content="flowers and fruit basket for Kandy")],
+        "intent": "discovery",
+    }
+
+    with patch(
+        "graphs.nodes.retrieve_hybrid_context._fetch_graph_hybrid_context",
+        new=AsyncMock(return_value=graph_context),
+    ):
+        updates = await retrieve_hybrid_context(state, neo4j_client=neo4j_client)
+
+    assert "exclude_categories" in updates["hybrid_context"]["hints"]
+    assert "Puja" in updates["hybrid_context"]["hints"]["exclude_categories"]

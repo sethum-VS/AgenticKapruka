@@ -19,6 +19,7 @@ from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
     VECTOR_CONFIDENCE_THRESHOLD,
     build_graph_hybrid_context,
+    enrich_flower_fruit_negative_hints,
     fetch_category_display_names,
     fetch_category_ids_for_occasions,
 )
@@ -216,6 +217,7 @@ async def retrieve_hybrid_context(
             )
 
     hybrid_context = merge_preferences_into_hybrid_context(hybrid_context, preferences)
+    hybrid_context = enrich_flower_fruit_negative_hints(user_message, hybrid_context)
 
     updates: dict[str, Any] = {"hybrid_context": hybrid_context}
     currency_hint = preferences.get("currency")

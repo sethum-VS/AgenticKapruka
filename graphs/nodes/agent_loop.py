@@ -21,6 +21,11 @@ from lib.chat.delivery_dates import (
     delivery_date_clarifying_question,
     normalize_delivery_date,
 )
+from lib.chat.product_curation import (
+    apply_puja_curation,
+    has_graph_hybrid_context,
+    is_flower_fruit_intent,
+)
 from lib.chat.search_broadening import apply_first_broaden
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
@@ -327,6 +332,8 @@ def _search_has_products(result: Any) -> bool:
 
 def _last_search_products_from_trace(
     tool_trace: list[ToolInvocation],
+    *,
+    state: AgentState | None = None,
 ) -> list[dict[str, Any]] | None:
     """Collect product dicts from the latest successful kapruka_search_products call."""
     for invocation in reversed(tool_trace):
@@ -336,9 +343,23 @@ def _last_search_products_from_trace(
         if not _search_has_products(result):
             continue
         raw_results = result.get("results")
-        if isinstance(raw_results, list):
-            products = [item for item in raw_results if isinstance(item, dict)]
-            return products or None
+        if not isinstance(raw_results, list):
+            continue
+        products = [item for item in raw_results if isinstance(item, dict)]
+        if not products:
+            return None
+        if state is None:
+            return products
+        user_message = _extract_latest_user_message(state.get("messages") or [])
+        hybrid_context = state.get("hybrid_context") or {}
+        return (
+            apply_puja_curation(
+                products,
+                query=user_message,
+                graph_context_available=has_graph_hybrid_context(hybrid_context),
+            )
+            or None
+        )
     return None
 
 
@@ -388,6 +409,7 @@ def _format_planner_query_rewrite_hints(
     *,
     message_count: int = 1,
     budget_max: float | None = None,
+    graph_context_available: bool = False,
 ) -> str:
     """Soft search-query rewrite suggestions for broad cake and mom/birthday turns."""
     hints: list[str] = []
@@ -430,6 +452,14 @@ def _format_planner_query_rewrite_hints(
             "fresh cut roses or bouquets. If results are only silk, artificial, soap, or "
             "paper florals, try one broader fresh-flowers search before finish."
         )
+    if is_flower_fruit_intent(user_message):
+        puja_avoid = (
+            "Flower/fruit request: avoid puja, pooja, watti, and religious offering products; "
+            "prefer fresh flowers, fruit baskets, and bouquets."
+        )
+        if graph_context_available:
+            puja_avoid += " Graph exclude_categories hint lists puja/religious categories to skip."
+        hints.append(puja_avoid)
     if not hints:
         return ""
     bullet_lines = "\n".join(f"- {hint}" for hint in hints)
@@ -483,10 +513,12 @@ def _build_planner_user_prompt(state: AgentState) -> str:
     prompt = f"Customer message:\n{user_message}"
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     budget_max = intent_metadata.get("budget_max")
+    hybrid_context = state.get("hybrid_context") or {}
     rewrite_hints = _format_planner_query_rewrite_hints(
         user_message,
         message_count=len(messages),
         budget_max=budget_max if isinstance(budget_max, (int, float)) else None,
+        graph_context_available=has_graph_hybrid_context(hybrid_context),
     )
     if rewrite_hints:
         prompt += f"\n\n{rewrite_hints}"
@@ -833,7 +865,7 @@ async def agent_loop(
     if search_broaden_applied:
         updates["search_broaden_applied"] = True
 
-    last_search_products = _last_search_products_from_trace(tool_trace)
+    last_search_products = _last_search_products_from_trace(tool_trace, state=state)
     if last_search_products:
         updates["last_search_products"] = last_search_products
 

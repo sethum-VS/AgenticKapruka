@@ -25,7 +25,10 @@ from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
-from lib.chat.product_curation import sort_and_filter_by_budget
+from lib.chat.product_curation import (
+    curate_carousel_products,
+    has_graph_hybrid_context,
+)
 from lib.chat.product_honesty import (
     artificial_floral_note_for_picks,
     reply_already_discloses_artificial_floral,
@@ -455,14 +458,31 @@ def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, An
     return curated
 
 
+def _discovery_curation_query(
+    search_payload: dict[str, Any],
+    *,
+    user_message: str,
+) -> str:
+    query = _search_query_from_payload(search_payload)
+    return user_message.strip() or (query or "")
+
+
 def _budget_curated_products(
     products: list[dict[str, Any]],
     *,
+    query: str,
     budget_max: float | None,
     currency: str,
+    graph_context_available: bool,
 ) -> list[dict[str, Any]]:
-    """Apply budget sort/filter after cake curation."""
-    return sort_and_filter_by_budget(products, budget_max, currency)
+    """Apply puja relevance and budget-aware carousel ordering."""
+    return curate_carousel_products(
+        products,
+        query=query,
+        budget_max=budget_max,
+        currency=currency,
+        graph_context_available=graph_context_available,
+    )
 
 
 def _cap_search_products_for_llm_context(
@@ -471,6 +491,8 @@ def _cap_search_products_for_llm_context(
     limit: int = _LLM_CONTEXT_PRODUCT_LIMIT,
     budget_max: float | None = None,
     currency: str = "LKR",
+    user_message: str = "",
+    graph_context_available: bool = False,
 ) -> dict[str, Any] | None:
     """Slice curated kapruka_search_products results before Gemini synthesis."""
     if not tool_results:
@@ -486,8 +508,10 @@ def _cap_search_products_for_llm_context(
 
     curated = _budget_curated_products(
         _curated_search_results(search_payload),
+        query=_discovery_curation_query(search_payload, user_message=user_message),
         budget_max=budget_max,
         currency=currency,
+        graph_context_available=graph_context_available,
     )
     capped_results = curated[:limit]
     if capped_results == raw_results:
@@ -587,6 +611,8 @@ def extract_search_products(
     *,
     budget_max: float | None = None,
     currency: str = "LKR",
+    user_message: str = "",
+    graph_context_available: bool = False,
 ) -> list[dict[str, Any]]:
     """Return curated product dicts from kapruka_search_products tool_results, if any."""
     if not tool_results:
@@ -597,7 +623,13 @@ def extract_search_products(
         return []
 
     products = _curated_search_results(search_payload)
-    return _budget_curated_products(products, budget_max=budget_max, currency=currency)
+    return _budget_curated_products(
+        products,
+        query=_discovery_curation_query(search_payload, user_message=user_message),
+        budget_max=budget_max,
+        currency=currency,
+        graph_context_available=graph_context_available,
+    )
 
 
 def _build_cart_assistant_message(action: dict[str, Any]) -> str | None:
@@ -712,12 +744,16 @@ def build_products_carousel_html(
     *,
     budget_max: float | None = None,
     currency: str = "LKR",
+    user_message: str = "",
+    graph_context_available: bool = False,
 ) -> str | None:
     """Render product carousel partial when search_products returned results."""
     products = extract_search_products(
         tool_results,
         budget_max=budget_max,
         currency=currency,
+        user_message=user_message,
+        graph_context_available=graph_context_available,
     )
     if not products:
         return None
@@ -1010,17 +1046,29 @@ async def generate_response(
                 }
 
     currency = state.get("currency") or "LKR"
-    session_budget_max = state.get("session_budget_max")
+    metadata = dict(state.get("intent_metadata") or {})
+    session_budget = state.get("session_budget_max")
+    turn_budget = metadata.get("budget_max")
+    budget_max: float | None = None
+    if isinstance(session_budget, (int, float)) and session_budget > 0:
+        budget_max = float(session_budget)
+    elif isinstance(turn_budget, (int, float)) and turn_budget > 0:
+        budget_max = float(turn_budget)
+    graph_context_available = has_graph_hybrid_context(state.get("hybrid_context") or {})
 
     products = extract_search_products(
         tool_results,
-        budget_max=session_budget_max,
+        budget_max=budget_max,
         currency=currency,
+        user_message=user_message,
+        graph_context_available=graph_context_available,
     )
     products_html = build_products_carousel_html(
         tool_results,
-        budget_max=session_budget_max,
+        budget_max=budget_max,
         currency=currency,
+        user_message=user_message,
+        graph_context_available=graph_context_available,
     )
 
     client = genai_client
@@ -1029,10 +1077,12 @@ async def generate_response(
         user_message,
         _cap_search_products_for_llm_context(
             tool_results,
-            budget_max=session_budget_max,
+            budget_max=budget_max,
             currency=currency,
+            user_message=user_message,
+            graph_context_available=graph_context_available,
         ),
-        budget_max=session_budget_max,
+        budget_max=budget_max,
         currency=currency,
     )
 

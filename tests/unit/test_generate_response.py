@@ -414,6 +414,46 @@ def test_build_products_carousel_html_budget_sorts_in_budget_first() -> None:
     assert hidden_idx == -1
 
 
+def test_extract_search_products_filters_puja_for_flowers_when_graph_down() -> None:
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                _product("puja", "Puja Flower Set", amount=3500.0),
+                _product("fruit", "Fruit Basket Deluxe", amount=4500.0),
+            ],
+            "applied_filters": {"q": "flower fruit", "limit": 10},
+        },
+    }
+    products = extract_search_products(
+        tool_results,
+        budget_max=5000.0,
+        currency="LKR",
+        user_message="flowers and fruit basket for Kandy, budget 5000 LKR",
+        graph_context_available=False,
+    )
+    assert [item["id"] for item in products] == ["fruit"]
+
+
+def test_extract_search_products_demotes_puja_when_graph_up() -> None:
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                _product("puja", "Puja Flower Set", amount=3500.0),
+                _product("fruit", "Fruit Basket Deluxe", amount=4500.0),
+            ],
+            "applied_filters": {"q": "flower fruit", "limit": 10},
+        },
+    }
+    products = extract_search_products(
+        tool_results,
+        budget_max=5000.0,
+        currency="LKR",
+        user_message="flowers and fruit basket for Kandy",
+        graph_context_available=True,
+    )
+    assert [item["id"] for item in products] == ["fruit", "puja"]
+
+
 def test_build_user_prompt_includes_formatted_budget_cap() -> None:
     prompt = _build_user_prompt(
         "cakes under 5000",
