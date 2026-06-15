@@ -23,6 +23,15 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   budget_sort         ~8–20s  carousel first item within stated budget cap
   silk_disclaimer     ~8–20s  artificial floral note when silk products appear
   farewell            ~2–5s   warm sign-off, not capabilities menu
+  delivery_followup   ~8–25s  delivery check after cart add; no Field required errors
+  cake_mom_colombo    ~8–25s  carousel OR zone clarify OR delivery copy; no API errors
+  roses_galle_tomorrow ~8–25s delivery markers for Galle; no API errors
+  gift_ideas_5000     ~8–20s  gift/voucher carousel first item ≤5000 LKR
+  flowers_fruit_kandy ~8–20s  in-budget carousel; no puja/pooja in top slots
+  track_vimp_regression ~5–15s order-tracking card (regression after eval block)
+
+Customer-eval merge gate (PRD-131): cake_mom_colombo and gift_ideas_5000 are expected
+to fail red on main before PRD-132/133; green when the Eval Fix Pack ships.
 """
 
 from __future__ import annotations
@@ -39,6 +48,40 @@ DEFAULT_BASE_URL = "http://localhost:8080"
 SSE_TIMEOUT_S = 120.0
 TURN_PAUSE_S = 1.5
 
+_API_ERROR_FORBIDDEN = (
+    "Field required",
+    "Unknown city",
+    "validation error",
+    "validation_error",
+)
+
+_CLARIFYING_MARKERS = (
+    "?",
+    "more detail",
+    "narrow",
+    "which",
+    "what kind",
+    "who",
+    "occasion",
+    "recipient",
+    "colombo",
+    "zone",
+)
+
+_DELIVERY_MARKERS = (
+    "deliver",
+    "delivery",
+    "colombo",
+    "galle",
+    "kandy",
+    "saturday",
+    "tomorrow",
+    "when would you like",
+    "delivery date",
+    "delivery fee",
+    "delivery rate",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class TurnScenario:
@@ -53,6 +96,10 @@ class TurnScenario:
     expect_artificial_disclaimer_if_silk: bool = False
     expect_farewell: bool = False
     expect_cart_add: bool = False
+    expect_any_of: tuple[str, ...] = ()
+    expect_carousel_keywords: tuple[str, ...] = ()
+    forbidden_in_carousel_substrings: tuple[str, ...] = ()
+    top_carousel_slots: int = 3
     forbidden_substrings: tuple[str, ...] = ()
 
 
@@ -95,6 +142,13 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         message="Add the Blush Roses combo to my cart please",
         expect_carousel=False,
         expect_cart_add=True,
+    ),
+    TurnScenario(
+        name="delivery_followup",
+        message="Can you deliver this to Colombo tomorrow?",
+        expect_carousel=False,
+        expect_delivery=True,
+        forbidden_substrings=("Field required",),
     ),
     TurnScenario(
         name="tracking_order",
@@ -143,6 +197,42 @@ SCENARIOS: tuple[TurnScenario, ...] = (
             "What would you like to explore",
             "I can help you with:",
         ),
+    ),
+    TurnScenario(
+        name="cake_mom_colombo",
+        message="Birthday cake for mom in Colombo",
+        expect_carousel=False,
+        expect_any_of=("carousel", "clarifying", "delivery"),
+        forbidden_substrings=_API_ERROR_FORBIDDEN,
+    ),
+    TurnScenario(
+        name="roses_galle_tomorrow",
+        message="roses for Galle tomorrow",
+        expect_carousel=False,
+        expect_delivery=True,
+        forbidden_substrings=_API_ERROR_FORBIDDEN,
+    ),
+    TurnScenario(
+        name="gift_ideas_5000",
+        message="Gift ideas under Rs. 5,000",
+        expect_carousel=True,
+        max_first_carousel_price=5000.0,
+        expect_carousel_keywords=("gift", "voucher"),
+        forbidden_substrings=_API_ERROR_FORBIDDEN,
+    ),
+    TurnScenario(
+        name="flowers_fruit_kandy",
+        message="flowers and fruit basket for Kandy on June 19, budget 5000 LKR",
+        expect_carousel=True,
+        max_first_carousel_price=5000.0,
+        forbidden_in_carousel_substrings=("puja", "pooja", "watti"),
+        forbidden_substrings=_API_ERROR_FORBIDDEN,
+    ),
+    TurnScenario(
+        name="track_vimp_regression",
+        message="Track VIMP34456CB2",
+        expect_carousel=False,
+        expect_tracking=True,
     ),
 )
 
@@ -194,6 +284,30 @@ def _session_cookie_from_set_cookie(set_cookie: str | None) -> str | None:
     return f"ak_session={match.group(1)}"
 
 
+def _outcome_matches(html: str, lower: str, outcome: str) -> bool:
+    if outcome == "carousel":
+        return 'data-testid="product-carousel"' in html
+    if outcome == "clarifying":
+        return any(marker in lower for marker in _CLARIFYING_MARKERS)
+    if outcome == "delivery":
+        return any(marker in lower for marker in _DELIVERY_MARKERS)
+    return False
+
+
+def _extract_top_carousel_card_texts(html: str, limit: int = 3) -> list[str]:
+    carousel_idx = html.find('data-testid="product-carousel"')
+    if carousel_idx < 0:
+        return []
+    fragment = html[carousel_idx:]
+    parts = fragment.split('data-testid="product-card"')[1:]
+    texts: list[str] = []
+    for part in parts[:limit]:
+        chunk = part[:2000]
+        text = re.sub(r"<[^>]+>", " ", chunk)
+        texts.append(re.sub(r"\s+", " ", text).strip().lower())
+    return texts
+
+
 def _extract_first_carousel_price(html: str) -> float | None:
     carousel_idx = html.find('data-testid="product-carousel"')
     if carousel_idx < 0:
@@ -214,10 +328,14 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
     has_carousel = 'data-testid="product-carousel"' in html
     has_tracking = 'data-testid="order-tracking-status"' in html
 
-    if scenario.expect_carousel and not has_carousel:
-        failures.append("expected product carousel, none found")
-    if not scenario.expect_carousel and has_carousel:
-        failures.append("unexpected product carousel")
+    if scenario.expect_any_of:
+        if not any(_outcome_matches(html, lower, outcome) for outcome in scenario.expect_any_of):
+            failures.append(f"expected one of {scenario.expect_any_of}, none matched")
+    else:
+        if scenario.expect_carousel and not has_carousel:
+            failures.append("expected product carousel, none found")
+        if not scenario.expect_carousel and has_carousel and not scenario.expect_delivery:
+            failures.append("unexpected product carousel")
 
     if scenario.max_first_carousel_price is not None and has_carousel:
         first_price = _extract_first_carousel_price(html)
@@ -229,19 +347,12 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
                 f"{scenario.max_first_carousel_price:.0f}",
             )
 
-    if scenario.expect_clarifying:
-        clarifying_markers = (
-            "?",
-            "more detail",
-            "narrow",
-            "which",
-            "what kind",
-            "who",
-            "occasion",
-            "recipient",
-        )
-        if not any(marker in lower for marker in clarifying_markers):
-            failures.append("expected clarifying follow-up text")
+    if (
+        scenario.expect_clarifying
+        and not scenario.expect_any_of
+        and not any(marker in lower for marker in _CLARIFYING_MARKERS)
+    ):
+        failures.append("expected clarifying follow-up text")
 
     if scenario.expect_tracking and not has_tracking:
         failures.append("expected order tracking status card")
@@ -258,17 +369,34 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
         if has_tracking:
             failures.append("unexpected tracking card for KA legacy educate path")
 
-    if scenario.expect_delivery:
-        delivery_markers = (
-            "deliver",
-            "delivery",
-            "colombo",
-            "saturday",
-            "when would you like",
-            "delivery date",
+    if (
+        scenario.expect_delivery
+        and not scenario.expect_any_of
+        and not any(marker in lower for marker in _DELIVERY_MARKERS)
+    ):
+        failures.append("expected delivery-related response text")
+
+    if scenario.expect_carousel_keywords and has_carousel:
+        top_texts = _extract_top_carousel_card_texts(html, scenario.top_carousel_slots)
+        keyword_hit = any(
+            any(keyword in text for keyword in scenario.expect_carousel_keywords)
+            for text in top_texts
         )
-        if not any(marker in lower for marker in delivery_markers):
-            failures.append("expected delivery-related response text")
+        if not keyword_hit:
+            failures.append(
+                f"expected carousel item matching {scenario.expect_carousel_keywords!r} "
+                f"in top {scenario.top_carousel_slots} slots",
+            )
+
+    if scenario.forbidden_in_carousel_substrings and has_carousel:
+        top_texts = _extract_top_carousel_card_texts(html, scenario.top_carousel_slots)
+        for text in top_texts:
+            for forbidden in scenario.forbidden_in_carousel_substrings:
+                if forbidden.lower() in text:
+                    failures.append(
+                        f"forbidden substring in top carousel slot: {forbidden!r}",
+                    )
+                    break
 
     if scenario.expect_farewell:
         farewell_markers = (
