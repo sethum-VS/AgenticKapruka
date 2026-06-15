@@ -58,6 +58,7 @@ class AgentState(TypedDict):
     session_id: str | None
     zep_thread_id: str | None
     currency: CurrencyCode | None
+    session_budget_max: float | None
     checkout_state: CheckoutStep | None
     response_html: str | None
     assistant_message: str | None

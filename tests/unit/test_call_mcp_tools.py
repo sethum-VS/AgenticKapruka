@@ -390,6 +390,7 @@ def test_select_tool_calls_discovery_kandy_delivery_defers_to_agent_loop() -> No
             "detected_vernacular": "tanglish",
             "requires_delivery_validation": True,
             "target_city": "Kandy",
+            "budget_max": None,
         },
     }
 
@@ -406,6 +407,7 @@ def test_select_tool_calls_discovery_product_id_with_delivery_still_binds_check(
             "detected_vernacular": "en",
             "requires_delivery_validation": True,
             "target_city": "Kandy",
+            "budget_max": None,
         },
     }
 

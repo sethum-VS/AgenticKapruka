@@ -152,6 +152,35 @@ async def test_analyze_intent_delivery_question_routes_to_shopping_path() -> Non
 
 
 @pytest.mark.asyncio
+async def test_analyze_intent_persists_session_budget_max() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="cakes under 5000 rupees")],
+        "session_id": "sess-intent-budget",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["session_budget_max"] == 5000.0
+    assert result["intent_metadata"]["budget_max"] == 5000.0
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_keeps_prior_session_budget_when_turn_has_none() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="show me flowers")],
+        "session_id": "sess-intent-budget-carry",
+        "session_budget_max": 8000.0,
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["session_budget_max"] == 8000.0
+    assert result["intent_metadata"]["budget_max"] is None
+
+
+@pytest.mark.asyncio
 async def test_analyze_intent_benchmark_eliminates_separate_intent_llm_call() -> None:
     """Phase 2: one fewer Gemini call — analyze_intent is guard-only for shopping turns."""
     mock_client = MagicMock()

@@ -24,6 +24,7 @@ from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question
 from lib.chat.intent_metadata import IntentMetadata
+from lib.chat.product_curation import sort_and_filter_by_budget
 from lib.chat.system_prompts import (
     build_general_welcome_message,
     build_response_system_instruction,
@@ -36,6 +37,7 @@ from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.redis.cart import StoredCartItem
+from lib.utils.currency import format_currency
 from lib.utils.text import decode_html_entities
 from lib.zep.memory import format_memory_facts_block
 
@@ -255,10 +257,22 @@ def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, An
     return curated
 
 
+def _budget_curated_products(
+    products: list[dict[str, Any]],
+    *,
+    budget_max: float | None,
+    currency: str,
+) -> list[dict[str, Any]]:
+    """Apply budget sort/filter after cake curation."""
+    return sort_and_filter_by_budget(products, budget_max, currency)
+
+
 def _cap_search_products_for_llm_context(
     tool_results: dict[str, Any] | None,
     *,
     limit: int = _LLM_CONTEXT_PRODUCT_LIMIT,
+    budget_max: float | None = None,
+    currency: str = "LKR",
 ) -> dict[str, Any] | None:
     """Slice curated kapruka_search_products results before Gemini synthesis."""
     if not tool_results:
@@ -272,7 +286,11 @@ def _cap_search_products_for_llm_context(
     if not isinstance(raw_results, list):
         return tool_results
 
-    curated = _curated_search_results(search_payload)
+    curated = _budget_curated_products(
+        _curated_search_results(search_payload),
+        budget_max=budget_max,
+        currency=currency,
+    )
     capped_results = curated[:limit]
     if capped_results == raw_results:
         return tool_results
@@ -284,11 +302,25 @@ def _cap_search_products_for_llm_context(
     return capped
 
 
-def _build_user_prompt(user_message: str, tool_results: dict[str, Any] | None) -> str:
+def _budget_prompt_line(budget_max: float | None, currency: str) -> str:
+    if budget_max is None or budget_max <= 0:
+        return ""
+    return f"Customer budget cap: {format_currency(budget_max, currency)}.\n"
+
+
+def _build_user_prompt(
+    user_message: str,
+    tool_results: dict[str, Any] | None,
+    *,
+    budget_max: float | None = None,
+    currency: str = "LKR",
+) -> str:
     """Combine user turn and MCP payload for response synthesis."""
     context = _format_tool_results_context(tool_results)
+    budget_line = _budget_prompt_line(budget_max, currency)
     return (
         f"Customer message:\n{user_message}\n\n"
+        f"{budget_line}"
         f"tool_results (sole source of truth for catalog facts):\n{context}"
     )
 
@@ -352,7 +384,12 @@ def _generate_reply_sync(
     return _parse_reply_response(response)
 
 
-def extract_search_products(tool_results: dict[str, Any] | None) -> list[dict[str, Any]]:
+def extract_search_products(
+    tool_results: dict[str, Any] | None,
+    *,
+    budget_max: float | None = None,
+    currency: str = "LKR",
+) -> list[dict[str, Any]]:
     """Return curated product dicts from kapruka_search_products tool_results, if any."""
     if not tool_results:
         return []
@@ -361,7 +398,8 @@ def extract_search_products(tool_results: dict[str, Any] | None) -> list[dict[st
     if not isinstance(search_payload, dict):
         return []
 
-    return _curated_search_results(search_payload)
+    products = _curated_search_results(search_payload)
+    return _budget_curated_products(products, budget_max=budget_max, currency=currency)
 
 
 def _build_cart_assistant_message(action: dict[str, Any]) -> str | None:
@@ -447,9 +485,18 @@ def _build_discovery_template_reply(products: list[dict[str, Any]]) -> str:
     return f"{opener} {lines[0]}, {lines[1]}, and {lines[2]}."
 
 
-def build_products_carousel_html(tool_results: dict[str, Any] | None) -> str | None:
+def build_products_carousel_html(
+    tool_results: dict[str, Any] | None,
+    *,
+    budget_max: float | None = None,
+    currency: str = "LKR",
+) -> str | None:
     """Render product carousel partial when search_products returned results."""
-    products = extract_search_products(tool_results)
+    products = extract_search_products(
+        tool_results,
+        budget_max=budget_max,
+        currency=currency,
+    )
     if not products:
         return None
     return render_product_carousel(products)
@@ -707,14 +754,31 @@ async def generate_response(
                     "assistant_message": empty_reply,
                 }
 
-    products = extract_search_products(tool_results)
-    products_html = build_products_carousel_html(tool_results)
+    currency = state.get("currency") or "LKR"
+    session_budget_max = state.get("session_budget_max")
+
+    products = extract_search_products(
+        tool_results,
+        budget_max=session_budget_max,
+        currency=currency,
+    )
+    products_html = build_products_carousel_html(
+        tool_results,
+        budget_max=session_budget_max,
+        currency=currency,
+    )
 
     client = genai_client
     model = select_model(state)
     user_prompt = _build_user_prompt(
         user_message,
-        _cap_search_products_for_llm_context(tool_results),
+        _cap_search_products_for_llm_context(
+            tool_results,
+            budget_max=session_budget_max,
+            currency=currency,
+        ),
+        budget_max=session_budget_max,
+        currency=currency,
     )
 
     zep_memory_facts = state.get("zep_memory_facts")

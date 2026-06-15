@@ -344,7 +344,16 @@ _CATALOG_BROWSE_RE = re.compile(
     re.IGNORECASE,
 )
 _MAX_PRICE_RE = re.compile(
-    r"\b(?:under|below|less\s+than|upto|up\s+to)\s*(?:rs\.?|lkr)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
+    r"\b(?:under|below|less\s+than|upto|up\s+to)\s*(?:rs\.?|lkr|\$)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
+    re.IGNORECASE,
+)
+_TILDE_BUDGET_RE = re.compile(r"~\s*(\d[\d,]*)\s*(?:rs\.?|lkr)?\b", re.IGNORECASE)
+_AROUND_BUDGET_RE = re.compile(
+    r"\b(?:around|about)\s*(?:rs\.?|lkr|\$)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
+    re.IGNORECASE,
+)
+_BUDGET_OF_RE = re.compile(
+    r"\bbudget\s*(?:of|around|about)?\s*(?:rs\.?|lkr|\$)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
     re.IGNORECASE,
 )
 _META_QUERY_TOKENS = frozenset(
@@ -458,17 +467,23 @@ def _is_meta_catalog_query(message: str) -> bool:
     return bool(_PRICE_SORT_RE.search(stripped) and not _product_like_tokens(stripped))
 
 
-def _extract_max_price(message: str) -> float | None:
-    """Parse budget caps like 'under 2000rs' into a numeric max_price."""
-    match = _MAX_PRICE_RE.search(message)
-    if not match:
-        return None
-    digits = match.group(1).replace(",", "")
-    try:
-        value = float(digits)
-    except ValueError:
-        return None
-    return value if value > 0 else None
+def extract_max_price(message: str) -> float | None:
+    """Parse budget caps like 'under 2000rs' or '~8000 LKR' into a numeric max_price."""
+    for pattern in (_MAX_PRICE_RE, _TILDE_BUDGET_RE, _AROUND_BUDGET_RE, _BUDGET_OF_RE):
+        match = pattern.search(message)
+        if not match:
+            continue
+        digits = match.group(1).replace(",", "")
+        try:
+            value = float(digits)
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+_extract_max_price = extract_max_price
 
 
 def _product_search_keyword(token: str) -> str:

@@ -16,6 +16,7 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   specific_product    ~8–20s  product carousel
   tracking_order      ~5–15s  order-tracking-status card, no carousel
   delivery_colombo    ~8–25s  delivery confirmation or clarifying date, no carousel
+  budget_sort         ~8–20s  carousel first item within stated budget cap
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ class TurnScenario:
     expect_clarifying: bool = False
     expect_tracking: bool = False
     expect_delivery: bool = False
+    max_first_carousel_price: float | None = None
     forbidden_substrings: tuple[str, ...] = ()
 
 
@@ -84,6 +86,12 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         message="can you deliver flowers to Colombo next Saturday?",
         expect_carousel=False,
         expect_delivery=True,
+    ),
+    TurnScenario(
+        name="budget_sort",
+        message="wife birthday chocolate flowers ~8000 LKR colombo",
+        expect_carousel=True,
+        max_first_carousel_price=8000.0,
     ),
 )
 
@@ -135,6 +143,20 @@ def _session_cookie_from_set_cookie(set_cookie: str | None) -> str | None:
     return f"ak_session={match.group(1)}"
 
 
+def _extract_first_carousel_price(html: str) -> float | None:
+    carousel_idx = html.find('data-testid="product-carousel"')
+    if carousel_idx < 0:
+        return None
+    fragment = html[carousel_idx:]
+    match = re.search(
+        r'data-testid="product-price"[^>]*>\s*(?:Rs\.\s*|[$£]|A\$|C\$|€)?([\d,]+(?:\.\d+)?)',
+        fragment,
+    )
+    if not match:
+        return None
+    return float(match.group(1).replace(",", ""))
+
+
 def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
     failures: list[str] = []
     lower = html.lower()
@@ -145,6 +167,16 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
         failures.append("expected product carousel, none found")
     if not scenario.expect_carousel and has_carousel:
         failures.append("unexpected product carousel")
+
+    if scenario.max_first_carousel_price is not None and has_carousel:
+        first_price = _extract_first_carousel_price(html)
+        if first_price is None:
+            failures.append("could not parse first carousel item price")
+        elif first_price > scenario.max_first_carousel_price:
+            failures.append(
+                f"first carousel item price {first_price:.0f} exceeds budget "
+                f"{scenario.max_first_carousel_price:.0f}",
+            )
 
     if scenario.expect_clarifying:
         clarifying_markers = (

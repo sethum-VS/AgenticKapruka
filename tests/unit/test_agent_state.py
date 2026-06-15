@@ -49,6 +49,7 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
         "session_id",
         "zep_thread_id",
         "currency",
+        "session_budget_max",
         "checkout_state",
         "response_html",
         "assistant_message",
@@ -70,6 +71,7 @@ def test_agent_state_full_optional_fields() -> None:
         "detected_vernacular": "en",
         "requires_delivery_validation": False,
         "target_city": None,
+        "budget_max": None,
     }
     state: AgentState = {
         "messages": [],

@@ -268,6 +268,12 @@ def test_build_discovery_search_args_parses_under_price_budget() -> None:
     assert args["category"] == "Birthday"
 
 
+def test_extract_max_price_parses_tilde_budget() -> None:
+    from lib.neo4j.hybrid_context import extract_max_price
+
+    assert extract_max_price("wife birthday chocolate flowers ~8000 LKR colombo") == 8000.0
+
+
 def test_build_discovery_search_args_strips_trailing_city_from_query() -> None:
     """Location in chat must not pollute Kapruka keyword search."""
     args = build_discovery_search_args(

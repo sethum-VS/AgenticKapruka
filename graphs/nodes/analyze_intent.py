@@ -13,6 +13,7 @@ from lib.chat.intent_heuristics import (
     PROCEED_CHECKOUT_MESSAGE,
     classify_routing_guard,
 )
+from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.query_preprocessor import QueryPreprocessor
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,17 @@ def _classify_routing_guard(user_message: str) -> Intent | None:
     return classify_routing_guard(user_message)
 
 
+def _resolve_session_budget_max(
+    state: AgentState,
+    intent_metadata: IntentMetadata,
+) -> float | None:
+    """Persist budget across turns; refresh when the user states a new cap."""
+    budget = intent_metadata.get("budget_max")
+    if budget is not None and budget > 0:
+        return budget
+    return state.get("session_budget_max")
+
+
 async def analyze_intent(
     state: AgentState,
     *,
@@ -63,21 +75,27 @@ async def analyze_intent(
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
     intent_metadata = _query_preprocessor.process(user_message)
+    session_budget_max = _resolve_session_budget_max(state, intent_metadata)
+
+    def _with_budget(payload: dict[str, Any]) -> dict[str, Any]:
+        if session_budget_max is not None:
+            payload["session_budget_max"] = session_budget_max
+        return payload
 
     if not user_message.strip():
         logger.debug("analyze_intent: empty user message, defaulting to general")
-        return {"intent": "general", "intent_metadata": intent_metadata}
+        return _with_budget({"intent": "general", "intent_metadata": intent_metadata})
 
     if user_message.strip() == PROCEED_CHECKOUT_MESSAGE:
         logger.info("analyze_intent: proceed-to-checkout trigger from cart drawer")
-        return {"intent": "checkout", "intent_metadata": intent_metadata}
+        return _with_budget({"intent": "checkout", "intent_metadata": intent_metadata})
 
     guard_intent = _classify_routing_guard(user_message)
     if guard_intent is not None:
         logger.info("analyze_intent: guard routed message as %s", guard_intent)
-        return {"intent": guard_intent, "intent_metadata": intent_metadata}
+        return _with_budget({"intent": guard_intent, "intent_metadata": intent_metadata})
 
     logger.debug(
         "analyze_intent: shopping turn — deferring discovery/general to agent_loop planner",
     )
-    return {"intent": _SHOPPING_PATH_INTENT, "intent_metadata": intent_metadata}
+    return _with_budget({"intent": _SHOPPING_PATH_INTENT, "intent_metadata": intent_metadata})

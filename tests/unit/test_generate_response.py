@@ -13,6 +13,7 @@ from graphs.model_router import PRO_MODEL
 from graphs.nodes.generate_response import (
     AssistantReply,
     _build_discovery_template_reply,
+    _build_user_prompt,
     _cap_search_products_for_llm_context,
     _resolve_effective_tool_results,
     build_agent_tool_error_message,
@@ -348,6 +349,74 @@ def test_build_products_carousel_html_empty_when_no_results() -> None:
     assert build_products_carousel_html({SEARCH_PRODUCTS_TOOL: {"results": []}}) is None
 
 
+def test_build_products_carousel_html_budget_sorts_in_budget_first() -> None:
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                _product("expensive", "Premium Hamper", amount=12000.0),
+                _product("cheap", "Chocolate Box", amount=4500.0),
+                _product("hidden", "Luxury Combo", amount=20000.0),
+            ],
+            "applied_filters": {"q": "chocolate", "limit": 10},
+        },
+    }
+    html = build_products_carousel_html(tool_results, budget_max=8000.0, currency="LKR")
+    assert html is not None
+    cheap_idx = html.index('data-product-id="cheap"')
+    expensive_idx = html.index('data-product-id="expensive"')
+    hidden_idx = html.find('data-product-id="hidden"')
+    assert cheap_idx < expensive_idx
+    assert hidden_idx == -1
+
+
+def test_build_user_prompt_includes_formatted_budget_cap() -> None:
+    prompt = _build_user_prompt(
+        "cakes under 5000",
+        _SEARCH_TOOL_RESULTS,
+        budget_max=5000.0,
+        currency="LKR",
+    )
+    assert "Customer budget cap: Rs. 5,000." in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_response_carousel_respects_session_budget_max() -> None:
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(message="Here are gifts within your budget.")
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                _product("over", "Deluxe Hamper", amount=17000.0),
+                _product("in", "Flower Box", amount=6500.0),
+                _product("first", "Chocolate Treat", amount=3500.0),
+            ],
+        },
+    }
+    state: AgentState = {
+        "messages": [
+            HumanMessage(content="wife birthday chocolate flowers ~8000 LKR colombo"),
+        ],
+        "tool_results": tool_results,
+        "session_id": "sess-gen-budget",
+        "session_budget_max": 8000.0,
+        "currency": "LKR",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+    html = result["response_html"]
+    first_idx = html.index('data-testid="product-price"')
+    first_price_fragment = html[first_idx : first_idx + 120]
+    assert "3,500" in first_price_fragment or "3500" in first_price_fragment
+    assert 'data-product-id="over"' not in html
+
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    assert "Customer budget cap: Rs. 8,000." in call_kwargs["contents"]
+
+
 @pytest.mark.asyncio
 async def test_generate_response_checkout_review_uses_pro_model_and_embeds_summary() -> None:
     mock_client = MagicMock()
@@ -405,6 +474,7 @@ def test_select_response_system_instruction_utility_mode() -> None:
         "detected_vernacular": "en",
         "requires_delivery_validation": False,
         "target_city": None,
+        "budget_max": None,
     }
     prompt = select_response_system_instruction(metadata)
     assert prompt == UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION
@@ -418,6 +488,7 @@ def test_select_response_system_instruction_situational_tanglish() -> None:
         "detected_vernacular": "tanglish",
         "requires_delivery_validation": False,
         "target_city": None,
+        "budget_max": None,
     }
     prompt = select_response_system_instruction(metadata)
     assert prompt.startswith(LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION)
@@ -446,6 +517,7 @@ async def test_generate_response_utility_metadata_uses_ecommerce_prompt() -> Non
             "detected_vernacular": "en",
             "requires_delivery_validation": False,
             "target_city": None,
+            "budget_max": None,
         },
         "session_id": "sess-gen-utility",
     }
@@ -476,6 +548,7 @@ async def test_generate_response_situational_metadata_uses_concierge_prompt() ->
             "detected_vernacular": "tanglish",
             "requires_delivery_validation": False,
             "target_city": None,
+            "budget_max": None,
         },
         "session_id": "sess-gen-concierge",
     }

@@ -14,3 +14,4 @@ class IntentMetadata(TypedDict):
     detected_vernacular: Vernacular
     requires_delivery_validation: bool
     target_city: str | None
+    budget_max: float | None
