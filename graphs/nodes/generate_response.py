@@ -35,13 +35,22 @@ from lib.chat.system_prompts import (
     build_general_welcome_message,
     build_response_system_instruction,
 )
-from lib.checkout.tracking import extract_order_number, tracking_output_from_tool_results
+from lib.checkout.tracking import (
+    OrderReferenceKind,
+    build_missing_tracking_number_message,
+    build_tracking_failure_message,
+    classify_order_reference,
+    extract_order_number,
+    tracking_error_from_tool_results,
+    tracking_output_from_tool_results,
+)
 from lib.genai.errors import is_resource_exhausted
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import CheckDeliveryOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import format_currency
@@ -66,6 +75,7 @@ _TOOL_ERROR_ACTION_LABELS: dict[str, str] = {
     LIST_CATEGORIES_TOOL: "browse categories",
     CHECK_DELIVERY_TOOL: "check delivery",
     LIST_CITIES_TOOL: "list delivery cities",
+    TRACK_ORDER_TOOL: "look up that order",
 }
 
 _PAST_DELIVERY_ERROR_CODES = frozenset({"past_delivery_date", "validation_error"})
@@ -160,8 +170,20 @@ def build_agent_tool_error_message(
     tool: str,
     raw_message: str,
     error_code: str | None = None,
+    order_number: str | None = None,
+    reference_kind: OrderReferenceKind | None = None,
 ) -> str:
     """Tier-1 user-facing copy for agent-loop MCP failures (problem + cause + fix)."""
+    if tool == TRACK_ORDER_TOOL:
+        kind: OrderReferenceKind = reference_kind or (
+            classify_order_reference(order_number) if order_number else "unknown"
+        )
+        return build_tracking_failure_message(
+            order_number=order_number,
+            reference_kind=kind,
+            error_code=error_code,
+            raw_message=raw_message,
+        )
     if (
         error_code in _PAST_DELIVERY_ERROR_CODES
         and tool == CHECK_DELIVERY_TOOL
@@ -777,14 +799,63 @@ async def generate_response(
         tool_name = str(agent_tool_error["tool"])
         raw_message = str(agent_tool_error["message"])
         error_code = _error_code_from_tool_trace(state.get("tool_trace"), tool_name)
+        order_number = extract_order_number(user_message)
         error_reply = build_agent_tool_error_message(
             tool=tool_name,
             raw_message=raw_message,
             error_code=error_code,
+            order_number=order_number,
+            reference_kind=(classify_order_reference(order_number) if order_number else None),
         )
         return {
             "response_html": render_assistant_html(error_reply),
             "assistant_message": error_reply,
+        }
+
+    if state.get("intent") == "tracking":
+        tracking_reply = _build_tracking_assistant_message(tool_results)
+        if tracking_reply:
+            tracking_html = build_tracking_status_html(tool_results)
+            return {
+                "response_html": render_assistant_html(
+                    tracking_reply,
+                    tracking_status_html=tracking_html,
+                ),
+                "assistant_message": tracking_reply,
+            }
+
+        order_number = extract_order_number(user_message)
+        track_error = tracking_error_from_tool_results(tool_results)
+        if track_error:
+            failure_reply = build_tracking_failure_message(
+                order_number=order_number,
+                reference_kind=(
+                    classify_order_reference(order_number) if order_number else "unknown"
+                ),
+                error_code=track_error.get("error"),
+                raw_message=track_error.get("message"),
+            )
+            return {
+                "response_html": render_assistant_html(failure_reply),
+                "assistant_message": failure_reply,
+            }
+
+        if not order_number:
+            missing_number_reply = build_missing_tracking_number_message(user_message)
+            return {
+                "response_html": render_assistant_html(missing_number_reply),
+                "assistant_message": missing_number_reply,
+            }
+
+        failure_reply = build_tracking_failure_message(
+            order_number=order_number,
+            reference_kind=classify_order_reference(order_number),
+            error_code="order_not_found",
+            raw_message=None,
+        )
+        return {
+            "response_html": render_assistant_html(failure_reply),
+            "assistant_message": failure_reply,
         }
 
     if state.get("intent") == "cart":
@@ -800,28 +871,6 @@ async def generate_response(
             return {
                 "response_html": response_html,
                 "assistant_message": cart_reply,
-            }
-
-    if state.get("intent") == "tracking":
-        tracking_reply = _build_tracking_assistant_message(tool_results)
-        if tracking_reply:
-            tracking_html = build_tracking_status_html(tool_results)
-            return {
-                "response_html": render_assistant_html(
-                    tracking_reply,
-                    tracking_status_html=tracking_html,
-                ),
-                "assistant_message": tracking_reply,
-            }
-        if not extract_order_number(user_message):
-            missing_number_reply = (
-                "Please share your Kapruka order number from your confirmation email. "
-                "Use the post-payment number (for example VIMP34456CB2), not the "
-                "pre-payment checkout reference that starts with ORD-."
-            )
-            return {
-                "response_html": render_assistant_html(missing_number_reply),
-                "assistant_message": missing_number_reply,
             }
 
     if state.get("intent") == "checkout":

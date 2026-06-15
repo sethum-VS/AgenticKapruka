@@ -15,6 +15,8 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   category_flowers    ~8–20s  product carousel
   specific_product    ~8–20s  product carousel
   tracking_order      ~5–15s  order-tracking-status card, no carousel
+  tracking_ka         ~5–15s  KA legacy educate copy, no tracking card
+  tracking_status     ~5–15s  check-status phrasing + VIMP tracking card
   delivery_colombo    ~8–25s  delivery confirmation or clarifying date, no carousel
   budget_sort         ~8–20s  carousel first item within stated budget cap
   silk_disclaimer     ~8–20s  artificial floral note when silk products appear
@@ -42,6 +44,7 @@ class TurnScenario:
     expect_carousel: bool
     expect_clarifying: bool = False
     expect_tracking: bool = False
+    expect_tracking_educate: bool = False
     expect_delivery: bool = False
     max_first_carousel_price: float | None = None
     expect_artificial_disclaimer_if_silk: bool = False
@@ -80,6 +83,19 @@ SCENARIOS: tuple[TurnScenario, ...] = (
     TurnScenario(
         name="tracking_order",
         message="Track order VIMP34456CB2",
+        expect_carousel=False,
+        expect_tracking=True,
+    ),
+    TurnScenario(
+        name="tracking_ka",
+        message="Where is order KA123456?",
+        expect_carousel=False,
+        expect_tracking=False,
+        expect_tracking_educate=True,
+    ),
+    TurnScenario(
+        name="tracking_status",
+        message="check status of my order VIMP34456CB2",
         expect_carousel=False,
         expect_tracking=True,
     ),
@@ -202,6 +218,18 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
 
     if scenario.expect_tracking and not has_tracking:
         failures.append("expected order tracking status card")
+
+    if scenario.expect_tracking_educate:
+        educate_markers = (
+            "vimp",
+            "post-payment",
+            "confirmation email",
+            "legacy",
+        )
+        if not any(marker in lower for marker in educate_markers):
+            failures.append("expected KA legacy tracking educate copy")
+        if has_tracking:
+            failures.append("unexpected tracking card for KA legacy educate path")
 
     if scenario.expect_delivery:
         delivery_markers = (

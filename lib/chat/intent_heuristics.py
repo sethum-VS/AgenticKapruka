@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-Intent = Literal["discovery", "checkout", "tracking", "general", "cart"]
+from lib.checkout.tracking import KA_LEGACY_RE, ORD_REF_RE, VIMP_RE
 
-_ORDER_NUMBER = re.compile(r"\bVIMP[0-9A-Z]+\b", re.I)
+Intent = Literal["discovery", "checkout", "tracking", "general", "cart"]
 
 _CART_ADD_TO_PATTERN = re.compile(
     r"\badd\s+(.+?)\s+to\s+(?:my\s+)?cart\b",
@@ -19,7 +19,14 @@ _CART_PUT_IN_PATTERN = re.compile(
 )
 
 _TRACKING_GUARD_TOKENS: frozenset[str] = frozenset(
-    ("track", "where is my order", "order status", "shipped"),
+    (
+        "track",
+        "track my order",
+        "where is my order",
+        "order status",
+        "check status",
+        "shipped",
+    ),
 )
 
 _CHECKOUT_TRIGGER_TOKENS: frozenset[str] = frozenset(
@@ -72,9 +79,9 @@ def is_tracking_guard(message: str) -> bool:
     lowered = message.strip().lower()
     if not lowered:
         return False
-    return bool(_ORDER_NUMBER.search(message)) or any(
-        token in lowered for token in _TRACKING_GUARD_TOKENS
-    )
+    if VIMP_RE.search(message) or KA_LEGACY_RE.search(message) or ORD_REF_RE.search(message):
+        return True
+    return any(token in lowered for token in _TRACKING_GUARD_TOKENS)
 
 
 def is_checkout_trigger(message: str) -> bool:

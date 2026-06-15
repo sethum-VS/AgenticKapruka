@@ -68,6 +68,12 @@ def test_infer_discovery_for_product_search() -> None:
 def test_tracking_guard_matches_order_number_and_keywords() -> None:
     assert is_tracking_guard("where is order VIMP34456CB2")
     assert is_tracking_guard("track my order please")
+    assert is_tracking_guard("check status of my order")
+    assert is_tracking_guard("where is order KA123456")
+
+
+def test_tracking_guard_matches_ord_ref() -> None:
+    assert is_tracking_guard("track ORD-20260520-7823")
 
 
 def test_proceed_checkout_message_is_exact_match() -> None:
