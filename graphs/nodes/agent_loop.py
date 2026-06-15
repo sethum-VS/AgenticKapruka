@@ -54,13 +54,13 @@ ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
 )
 
 _TOOL_STATUS_MESSAGES: dict[str, str] = {
-    SEARCH_PRODUCTS_TOOL: "Searching catalog…",
+    SEARCH_PRODUCTS_TOOL: "Searching Kapruka…",
     CHECK_DELIVERY_TOOL: "Checking delivery…",
     LIST_CITIES_TOOL: "Listing delivery cities…",
     LIST_CATEGORIES_TOOL: "Browsing categories…",
     GET_PRODUCT_TOOL: "Fetching product details…",
 }
-_DEFAULT_STATUS_MESSAGE = "Searching catalog…"
+_DEFAULT_STATUS_MESSAGE = "Searching Kapruka…"
 
 PLANNER_SEARCH_RESULT_LIMIT = 5
 PLANNER_CATEGORY_NODE_LIMIT = 10

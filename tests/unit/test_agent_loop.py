@@ -551,7 +551,7 @@ async def test_agent_loop_emits_status_events() -> None:
         AgentPlannerStep(
             action="call_tool",
             tool_name=CHECK_DELIVERY_TOOL,
-            tool_args={"city": "Kandy", "date": "2026-06-15"},
+            tool_args={"city": "Kandy", "date": "2026-06-25"},
             rationale="check delivery",
         ),
         AgentPlannerStep(action="finish", rationale="done"),
@@ -575,7 +575,7 @@ async def test_agent_loop_emits_status_events() -> None:
         for call in mock_writer.call_args_list
         if call.args and call.args[0].get("type") == "status"
     ]
-    assert "Searching catalog…" in status_messages
+    assert "Searching Kapruka…" in status_messages
     assert "Checking delivery…" in status_messages
 
 

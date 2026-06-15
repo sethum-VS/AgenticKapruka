@@ -40,12 +40,13 @@ def test_parse_relative_tomorrow() -> None:
 
 def test_normalize_delivery_date_iso_passthrough() -> None:
     """Valid future ISO in tool args is returned unchanged."""
+    future_iso = "2026-06-25"
     resolved = normalize_delivery_date(
-        {"city": "Colombo", "delivery_date": "2026-06-15"},
+        {"city": "Colombo", "delivery_date": future_iso},
         "cakes for mom",
         today=_FRIDAY,
     )
-    assert resolved == "2026-06-15"
+    assert resolved == future_iso
 
 
 def test_normalize_delivery_date_from_user_message_when_args_past() -> None:
