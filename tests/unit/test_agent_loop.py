@@ -15,9 +15,11 @@ from graphs.nodes.agent_loop import (
     MAX_ITERATIONS,
     PLANNER_CATEGORY_NODE_LIMIT,
     PLANNER_SEARCH_RESULT_LIMIT,
+    UTILITY_GENERAL_MAX_ITERATIONS,
     AgentPlannerStep,
     _build_planner_system_instruction,
     _build_planner_user_prompt,
+    _max_iterations_for_state,
     agent_loop,
     build_planner_prior_iterations,
     format_planner_prior_iterations,
@@ -976,3 +978,81 @@ async def test_agent_loop_check_delivery_missing_date_still_asks_user() -> None:
     assert result["agent_loop_exit_reason"] == "ask_user"
     assert result["agent_clarifying_question"] == expected_question
     mock_service.check_delivery.assert_not_called()
+
+
+def test_planner_system_instruction_scopes_recipient_facts_without_reference() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="show me roses in Galle")],
+        "zep_memory_facts": [
+            "Customer shops for mom's birthday",
+            "Prefers chocolate gifts",
+        ],
+    }
+
+    instruction = _build_planner_system_instruction(state, tool_trace=[])
+
+    assert "mom" not in instruction.lower()
+    assert "Prefers chocolate gifts" in instruction
+
+
+def test_planner_system_instruction_keeps_recipient_facts_when_message_names_them() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="another cake for mom")],
+        "zep_memory_facts": ["Customer shops for mom's birthday"],
+    }
+
+    instruction = _build_planner_system_instruction(state, tool_trace=[])
+
+    assert "mom" in instruction.lower()
+
+
+def test_max_iterations_for_state_caps_utility_general_without_catalog() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="thanks, that helps")],
+        "intent_metadata": {"is_situational": False},
+    }
+    assert _max_iterations_for_state(state, "general") == UTILITY_GENERAL_MAX_ITERATIONS
+
+
+def test_max_iterations_for_state_keeps_three_for_discovery() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="thanks")],
+        "intent_metadata": {"is_situational": False},
+    }
+    assert _max_iterations_for_state(state, "discovery") == MAX_ITERATIONS
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_utility_general_iteration_cap_at_two() -> None:
+    """Utility/general turns without catalog need stop after two planner iterations."""
+    mock_service = _mock_kapruka_service()
+    mock_service.search_products.return_value = _SEARCH_EMPTY
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": f"query-{index}"},
+            refined_intent="general" if index == 0 else None,
+            rationale=f"search {index}",
+        )
+        for index in range(MAX_ITERATIONS + 2)
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="thanks for your help")],
+        "intent_metadata": {"is_situational": False},
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_exit_reason"] == "max_iterations"
+    assert len(result["tool_trace"]) == UTILITY_GENERAL_MAX_ITERATIONS
+    assert mock_service.search_products.call_count == UTILITY_GENERAL_MAX_ITERATIONS

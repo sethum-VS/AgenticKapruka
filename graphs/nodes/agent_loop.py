@@ -36,11 +36,12 @@ from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.utils.timezone import colombo_today_iso
-from lib.zep.memory import format_memory_facts_block
+from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_turn
 
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 3
+UTILITY_GENERAL_MAX_ITERATIONS = 2
 PLANNER_MODEL = FLASH_MODEL
 
 ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
@@ -307,6 +308,11 @@ _SHORT_CATEGORY_REPLY = re.compile(
     re.I,
 )
 _FLOWERS_REQUEST = re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)s?\b", re.I)
+_CATALOG_INTENT = re.compile(
+    r"\b(?:cake|flower|chocolate|gift|hamper|bouquet|roses?|product|search|find|show|"
+    r"deliver|track|VIMP)\b",
+    re.I,
+)
 
 
 def _search_has_products(result: Any) -> bool:
@@ -334,6 +340,29 @@ def _last_search_products_from_trace(
             products = [item for item in raw_results if isinstance(item, dict)]
             return products or None
     return None
+
+
+def _turn_needs_catalog(state: AgentState) -> bool:
+    """Return True when the user turn likely needs Kapruka catalog tool calls."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if _CATALOG_INTENT.search(user_message):
+        return True
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    return bool(
+        intent_metadata.get("requires_delivery_validation") or intent_metadata.get("target_city"),
+    )
+
+
+def _max_iterations_for_state(state: AgentState, refined_intent: Intent | None) -> int:
+    """Cap planner iterations for fast utility/general turns that need no catalog."""
+    if refined_intent != "general":
+        return MAX_ITERATIONS
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    if intent_metadata.get("is_situational"):
+        return MAX_ITERATIONS
+    if _turn_needs_catalog(state):
+        return MAX_ITERATIONS
+    return UTILITY_GENERAL_MAX_ITERATIONS
 
 
 def _should_force_finish_after_search(
@@ -431,7 +460,10 @@ def _build_planner_system_instruction(
     )
     zep_memory_facts = state.get("zep_memory_facts")
     if zep_memory_facts:
-        instruction += format_memory_facts_block(zep_memory_facts)
+        user_message = _extract_latest_user_message(state.get("messages") or [])
+        scoped_facts = scope_memory_facts_for_turn(zep_memory_facts, user_message)
+        if scoped_facts:
+            instruction += format_memory_facts_block(scoped_facts)
     hybrid_block = _format_hybrid_soft_hints(state)
     if hybrid_block:
         instruction += (
@@ -572,7 +604,11 @@ async def agent_loop(
 
     _emit_status(_DEFAULT_STATUS_MESSAGE)
 
+    iteration_limit = MAX_ITERATIONS
+
     for iteration in range(MAX_ITERATIONS):
+        if iteration >= iteration_limit:
+            break
         if force_finish:
             logger.debug(
                 "agent_loop: %s forcing finish at iteration %s",
@@ -595,6 +631,7 @@ async def agent_loop(
 
         if iteration == 0 and step.refined_intent in ("discovery", "general"):
             refined_intent = step.refined_intent
+            iteration_limit = _max_iterations_for_state(state, refined_intent)
 
         iteration_args: dict[str, Any] = (
             dict(step.tool_args or {}) if step.action == "call_tool" else {"action": step.action}

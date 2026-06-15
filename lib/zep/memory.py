@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_FACT_LIMIT: Final = 10
 _BULLET_PREFIX_RE = re.compile(r"^[-*•]\s+")
+_RECIPIENT_ENTITY_RE = re.compile(
+    r"\b(?:mom|mother|mum|mama|amma|dad|father|papa|thatha|wife|husband|"
+    r"girlfriend|boyfriend|partner|fianc[eé]e|sister|brother|son|daughter|"
+    r"grandma|grandmother|grandpa|grandfather|aunt|uncle|nana|nanna)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +64,21 @@ def extract_memory_facts(memory: ZepMemory, *, limit: int = DEFAULT_FACT_LIMIT) 
     if len(fact_strings) <= limit:
         return fact_strings
     return fact_strings[-limit:]
+
+
+def message_references_recipient(text: str) -> bool:
+    """Return True when the user message names a gift recipient or relation."""
+    return bool(_RECIPIENT_ENTITY_RE.search(text))
+
+
+def scope_memory_facts_for_turn(
+    facts: list[str],
+    user_message: str,
+) -> list[str]:
+    """Drop recipient-specific Zep facts when the current turn does not mention them."""
+    if not facts or message_references_recipient(user_message):
+        return facts
+    return [fact for fact in facts if not _RECIPIENT_ENTITY_RE.search(fact)]
 
 
 def format_memory_facts_block(facts: list[str]) -> str:

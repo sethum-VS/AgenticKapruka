@@ -15,6 +15,8 @@ from lib.zep.memory import (
     facts_from_context,
     format_memory_facts_block,
     get_session_memory_facts,
+    message_references_recipient,
+    scope_memory_facts_for_turn,
 )
 
 
@@ -47,6 +49,27 @@ def test_format_memory_facts_block_renders_bullets() -> None:
     assert "Prior session facts" in block
     assert "- Prefers roses" in block
     assert "- Budget under LKR 5000" in block
+
+
+def test_message_references_recipient_detects_relation_terms() -> None:
+    assert message_references_recipient("birthday cake for my mom") is True
+    assert message_references_recipient("show me roses") is False
+
+
+def test_scope_memory_facts_for_turn_strips_recipient_entities() -> None:
+    facts = [
+        "Customer shops for mom's birthday",
+        "Prefers chocolate gifts",
+        "Budget under LKR 5000",
+    ]
+    scoped = scope_memory_facts_for_turn(facts, "show me roses in Galle")
+    assert scoped == ["Prefers chocolate gifts", "Budget under LKR 5000"]
+
+
+def test_scope_memory_facts_for_turn_keeps_all_when_message_names_recipient() -> None:
+    facts = ["Customer shops for mom's birthday", "Prefers chocolate gifts"]
+    scoped = scope_memory_facts_for_turn(facts, "another cake for mom")
+    assert scoped == facts
 
 
 @pytest.mark.asyncio
