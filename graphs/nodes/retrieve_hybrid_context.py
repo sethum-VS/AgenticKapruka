@@ -10,6 +10,7 @@ from typing import Any, Literal
 from app.config import get_settings
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, Intent
+from lib.chat.intent_metadata import IntentMetadata
 from lib.debug.trace import trace_route_decision
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.embeddings.vertex_embeddings import embed_texts
@@ -18,6 +19,7 @@ from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
     VECTOR_CONFIDENCE_THRESHOLD,
     build_graph_hybrid_context,
+    enrich_flower_fruit_negative_hints,
     fetch_category_display_names,
     fetch_category_ids_for_occasions,
 )
@@ -37,6 +39,7 @@ RouteAfterAnalyzeIntent = Literal[
     "call_mcp_tools",
     "run_checkout_graph",
     "resolve_cart_product",
+    "resolve_delivery_context",
 ]
 
 _INTENTS_SKIP_HYBRID_CONTEXT: frozenset[Intent] = frozenset({"tracking"})
@@ -82,6 +85,21 @@ def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
     if intent in ("discovery", "general"):
         user_message = _extract_latest_user_message(state.get("messages") or [])
         if contains_product_id(user_message):
+            intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
+            has_city = bool(intent_metadata.get("target_city")) or bool(
+                intent_metadata.get("requires_delivery_validation"),
+            )
+            if has_city:
+                logger.debug(
+                    "route_after_analyze_intent: product ID + city → resolve_delivery_context",
+                )
+                trace_route_decision(
+                    from_node="analyze_intent",
+                    target="resolve_delivery_context",
+                    intent=intent,
+                    reason="product ID with delivery city",
+                )
+                return "resolve_delivery_context"
             logger.debug(
                 "route_after_analyze_intent: product ID fast-path for intent=%s",
                 intent,
@@ -199,6 +217,7 @@ async def retrieve_hybrid_context(
             )
 
     hybrid_context = merge_preferences_into_hybrid_context(hybrid_context, preferences)
+    hybrid_context = enrich_flower_fruit_negative_hints(user_message, hybrid_context)
 
     updates: dict[str, Any] = {"hybrid_context": hybrid_context}
     currency_hint = preferences.get("currency")

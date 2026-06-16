@@ -25,7 +25,10 @@ from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
-from lib.chat.product_curation import sort_and_filter_by_budget
+from lib.chat.product_curation import (
+    curate_carousel_products,
+    has_graph_hybrid_context,
+)
 from lib.chat.product_honesty import (
     artificial_floral_note_for_picks,
     reply_already_discloses_artificial_floral,
@@ -199,6 +202,23 @@ def build_agent_tool_error_message(
             f"{raw_message} "
             "Would you like to try a different date?"
         )
+    if error_code == "city_not_deliverable" and tool == CHECK_DELIVERY_TOOL:
+        return (
+            "We cannot deliver to that city. Please choose a Kapruka delivery area "
+            "(for example Colombo 03, Kandy, or Galle)."
+        )
+    if error_code == "validation_error":
+        lowered = raw_message.lower()
+        if tool == CHECK_DELIVERY_TOOL and (
+            "delivery_date" in lowered or "date" in lowered or "past" in lowered
+        ):
+            return delivery_date_clarifying_question()
+        if tool == CHECK_DELIVERY_TOOL and "city" in lowered:
+            return (
+                "Please choose a valid Kapruka delivery city "
+                "(for example Colombo 03, Kandy, or Galle)."
+            )
+        return "Please check your delivery details and try again."
 
     action = _TOOL_ERROR_ACTION_LABELS.get(tool, "complete that request")
     cause = raw_message.strip() or "Kapruka could not process the request."
@@ -255,9 +275,9 @@ def delivery_claim_guard(
     )
 
 
-def _last_check_delivery_result(
+def _last_check_delivery_invocation(
     tool_trace: list[ToolInvocation] | None,
-) -> dict[str, Any] | None:
+) -> ToolInvocation | None:
     if not tool_trace:
         return None
     for invocation in reversed(tool_trace):
@@ -265,34 +285,77 @@ def _last_check_delivery_result(
             continue
         result = invocation.get("result")
         if isinstance(result, dict) and not result.get("error"):
-            return result
+            return invocation
     return None
+
+
+def _canonical_city_from_check_delivery_invocation(invocation: ToolInvocation) -> str | None:
+    args = invocation.get("args")
+    if isinstance(args, dict):
+        raw_city = args.get("city")
+        if isinstance(raw_city, str) and raw_city.strip():
+            return raw_city.strip()
+    result = invocation.get("result")
+    if isinstance(result, dict):
+        raw_city = result.get("city")
+        if isinstance(raw_city, str) and raw_city.strip():
+            return raw_city.strip()
+    return None
+
+
+def _build_verified_delivery_fee_line(
+    *,
+    city: str,
+    checked_date: str,
+    rate: float,
+    currency: str,
+) -> str:
+    fee = format_currency(rate, currency)
+    return f"Delivery to {city} on {checked_date}: {fee} (verified with Kapruka)"
 
 
 def _apply_perishable_delivery_honesty(
     reply_text: str,
     tool_trace: list[ToolInvocation] | None,
 ) -> tuple[str, str | None]:
-    """Append perishable_warning copy and render amber delivery status partial when grounded."""
-    delivery = _last_check_delivery_result(tool_trace)
-    if delivery is None:
+    """Append verified delivery fee and perishable_warning; render delivery status partial."""
+    invocation = _last_check_delivery_invocation(tool_trace)
+    if invocation is None:
         return reply_text, None
 
-    warning = delivery.get("perishable_warning")
-    if not isinstance(warning, str) or not warning.strip():
+    delivery = invocation.get("result")
+    if not isinstance(delivery, dict):
         return reply_text, None
-
-    warning = warning.strip()
-    updated_reply = reply_text
-    if warning not in updated_reply:
-        updated_reply = f"{updated_reply}\n\n{warning}".strip()
 
     try:
         delivery_output = CheckDeliveryOutput.model_validate(delivery)
-        delivery_html = render_delivery_date_status(result=delivery_output)
     except ValidationError:
-        logger.warning("generate_response: invalid check_delivery payload for status partial")
-        return updated_reply, None
+        logger.warning("generate_response: invalid check_delivery payload for delivery honesty")
+        return reply_text, None
+
+    updated_reply = reply_text
+    delivery_html: str | None = None
+
+    if delivery_output.available:
+        city = _canonical_city_from_check_delivery_invocation(invocation)
+        if city:
+            fee_line = _build_verified_delivery_fee_line(
+                city=city,
+                checked_date=delivery_output.checked_date,
+                rate=delivery_output.rate,
+                currency=delivery_output.currency,
+            )
+            if "verified with Kapruka" not in updated_reply:
+                updated_reply = f"{updated_reply}\n\n{fee_line}".strip()
+        delivery_html = render_delivery_date_status(result=delivery_output)
+
+    warning = delivery_output.perishable_warning
+    if isinstance(warning, str) and warning.strip():
+        warning = warning.strip()
+        if warning not in updated_reply:
+            updated_reply = f"{updated_reply}\n\n{warning}".strip()
+        if delivery_html is None:
+            delivery_html = render_delivery_date_status(result=delivery_output)
 
     return updated_reply, delivery_html
 
@@ -395,14 +458,31 @@ def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, An
     return curated
 
 
+def _discovery_curation_query(
+    search_payload: dict[str, Any],
+    *,
+    user_message: str,
+) -> str:
+    query = _search_query_from_payload(search_payload)
+    return user_message.strip() or (query or "")
+
+
 def _budget_curated_products(
     products: list[dict[str, Any]],
     *,
+    query: str,
     budget_max: float | None,
     currency: str,
+    graph_context_available: bool,
 ) -> list[dict[str, Any]]:
-    """Apply budget sort/filter after cake curation."""
-    return sort_and_filter_by_budget(products, budget_max, currency)
+    """Apply puja relevance and budget-aware carousel ordering."""
+    return curate_carousel_products(
+        products,
+        query=query,
+        budget_max=budget_max,
+        currency=currency,
+        graph_context_available=graph_context_available,
+    )
 
 
 def _cap_search_products_for_llm_context(
@@ -411,6 +491,8 @@ def _cap_search_products_for_llm_context(
     limit: int = _LLM_CONTEXT_PRODUCT_LIMIT,
     budget_max: float | None = None,
     currency: str = "LKR",
+    user_message: str = "",
+    graph_context_available: bool = False,
 ) -> dict[str, Any] | None:
     """Slice curated kapruka_search_products results before Gemini synthesis."""
     if not tool_results:
@@ -426,8 +508,10 @@ def _cap_search_products_for_llm_context(
 
     curated = _budget_curated_products(
         _curated_search_results(search_payload),
+        query=_discovery_curation_query(search_payload, user_message=user_message),
         budget_max=budget_max,
         currency=currency,
+        graph_context_available=graph_context_available,
     )
     capped_results = curated[:limit]
     if capped_results == raw_results:
@@ -527,6 +611,8 @@ def extract_search_products(
     *,
     budget_max: float | None = None,
     currency: str = "LKR",
+    user_message: str = "",
+    graph_context_available: bool = False,
 ) -> list[dict[str, Any]]:
     """Return curated product dicts from kapruka_search_products tool_results, if any."""
     if not tool_results:
@@ -537,7 +623,13 @@ def extract_search_products(
         return []
 
     products = _curated_search_results(search_payload)
-    return _budget_curated_products(products, budget_max=budget_max, currency=currency)
+    return _budget_curated_products(
+        products,
+        query=_discovery_curation_query(search_payload, user_message=user_message),
+        budget_max=budget_max,
+        currency=currency,
+        graph_context_available=graph_context_available,
+    )
 
 
 def _build_cart_assistant_message(action: dict[str, Any]) -> str | None:
@@ -652,12 +744,16 @@ def build_products_carousel_html(
     *,
     budget_max: float | None = None,
     currency: str = "LKR",
+    user_message: str = "",
+    graph_context_available: bool = False,
 ) -> str | None:
     """Render product carousel partial when search_products returned results."""
     products = extract_search_products(
         tool_results,
         budget_max=budget_max,
         currency=currency,
+        user_message=user_message,
+        graph_context_available=graph_context_available,
     )
     if not products:
         return None
@@ -950,17 +1046,29 @@ async def generate_response(
                 }
 
     currency = state.get("currency") or "LKR"
-    session_budget_max = state.get("session_budget_max")
+    metadata = dict(state.get("intent_metadata") or {})
+    session_budget = state.get("session_budget_max")
+    turn_budget = metadata.get("budget_max")
+    budget_max: float | None = None
+    if isinstance(session_budget, (int, float)) and session_budget > 0:
+        budget_max = float(session_budget)
+    elif isinstance(turn_budget, (int, float)) and turn_budget > 0:
+        budget_max = float(turn_budget)
+    graph_context_available = has_graph_hybrid_context(state.get("hybrid_context") or {})
 
     products = extract_search_products(
         tool_results,
-        budget_max=session_budget_max,
+        budget_max=budget_max,
         currency=currency,
+        user_message=user_message,
+        graph_context_available=graph_context_available,
     )
     products_html = build_products_carousel_html(
         tool_results,
-        budget_max=session_budget_max,
+        budget_max=budget_max,
         currency=currency,
+        user_message=user_message,
+        graph_context_available=graph_context_available,
     )
 
     client = genai_client
@@ -969,10 +1077,12 @@ async def generate_response(
         user_message,
         _cap_search_products_for_llm_context(
             tool_results,
-            budget_max=session_budget_max,
+            budget_max=budget_max,
             currency=currency,
+            user_message=user_message,
+            graph_context_available=graph_context_available,
         ),
-        budget_max=session_budget_max,
+        budget_max=budget_max,
         currency=currency,
     )
 

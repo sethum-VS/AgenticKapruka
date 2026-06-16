@@ -2,6 +2,22 @@
 
 All notable changes to AgenticKapruka are documented here.
 
+## [0.0.14.0] - 2026-06-16
+
+### Added
+
+- Customer eval merge gate: six `verify_chat_loop.py` scenarios (cake, roses, gift budget, delivery follow-up, flowers/fruit Kandy, VIMP tracking)
+- Pre-flight `resolve_delivery_context` graph node with shared `lib/chat/city_resolution.py`
+- Broad gift search under budget before clarify (`gift_voucher_fallback` broaden step)
+- Verified delivery fee line in discovery replies after successful `check_delivery`
+- Cart currency refresh with Kapruka price re-fetch and OOB cart panel update
+- Zep memory scoping to reduce recipient context bleed on unrelated turns
+- Puja denylist and in-budget carousel curation for flower/fruit discovery (`lib/chat/product_curation.py`)
+
+### Fixed
+
+- E2E conftest reuses an existing healthy server on `:8080` instead of failing with address-in-use
+
 ## [0.0.13.1] - 2026-06-16
 
 ### Added

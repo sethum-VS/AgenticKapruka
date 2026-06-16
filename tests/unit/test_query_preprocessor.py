@@ -57,7 +57,7 @@ def test_extract_target_city_colombo_zone_without_delivery_verb() -> None:
 def test_query_preprocessor_extracts_colombo_zone_on_first_turn() -> None:
     metadata = _preprocessor.process("Birthday cake for my mom in Colombo 05")
     assert metadata["target_city"] == "Colombo 05"
-    assert metadata["requires_delivery_validation"] is False
+    assert metadata["requires_delivery_validation"] is True
 
 
 def test_query_preprocessor_utility_transactional() -> None:
@@ -85,6 +85,12 @@ def test_query_preprocessor_situational_breakup() -> None:
     assert metadata["detected_vernacular"] == "en"
     assert metadata["requires_delivery_validation"] is False
     assert metadata["target_city"] is None
+
+
+def test_query_preprocessor_perishable_gift_with_city_requires_delivery() -> None:
+    metadata = _preprocessor.process("Birthday cake for my mom in Colombo")
+    assert metadata["target_city"] == "Colombo"
+    assert metadata["requires_delivery_validation"] is True
 
 
 def test_classify_situational_for_valentine_nerves() -> None:

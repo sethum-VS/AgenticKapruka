@@ -63,6 +63,16 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
                 },
             ]
             delivery_args = build_discovery_delivery_args(intent_metadata)
+            canonical_city = state.get("delivery_city_canonical")
+            if isinstance(canonical_city, str) and canonical_city.strip():
+                delivery_args["city"] = canonical_city.strip()
+            elif delivery_args.get("city") and intent_metadata:
+                target = intent_metadata.get("target_city")
+                if isinstance(target, str) and target.strip():
+                    delivery_args["city"] = target.strip()
+            state_date = state.get("delivery_date")
+            if isinstance(state_date, str) and state_date.strip():
+                delivery_args["delivery_date"] = state_date.strip()
             if delivery_args:
                 calls.append({"name": CHECK_DELIVERY_TOOL, "args": delivery_args})
             return calls

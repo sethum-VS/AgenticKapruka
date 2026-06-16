@@ -21,36 +21,49 @@ def base_url() -> str:
     return E2E_BASE_URL
 
 
+def _e2e_health_ok() -> bool:
+    try:
+        response = httpx.get(
+            f"{E2E_BASE_URL}/health",
+            timeout=5.0,
+            follow_redirects=True,
+        )
+        return response.status_code in {200, 503}
+    except httpx.HTTPError:
+        return False
+
+
 @pytest.fixture(scope="session", autouse=True)
 def e2e_server() -> Iterator[None]:
     """Start the mocked E2E uvicorn server before Playwright tests."""
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "tests.e2e.e2e_server"],
-        env=os.environ.copy(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    deadline = time.monotonic() + 45.0
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
+    proc: subprocess.Popen[bytes] | None = None
+    reuse_existing = _e2e_health_ok()
+
+    if not reuse_existing:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "tests.e2e.e2e_server"],
+            env=os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.monotonic() + 45.0
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                stderr = proc.stderr.read().decode() if proc.stderr else ""
+                proc.wait(timeout=5)
+                pytest.fail(f"E2E server exited early: {stderr}")
+            if _e2e_health_ok():
+                break
+            time.sleep(0.25)
+        else:
+            proc.kill()
             stderr = proc.stderr.read().decode() if proc.stderr else ""
             proc.wait(timeout=5)
-            pytest.fail(f"E2E server exited early: {stderr}")
-        try:
-            response = httpx.get(f"{E2E_BASE_URL}/health", timeout=2.0)
-            if response.status_code in {200, 503}:
-                break
-        except httpx.HTTPError:
-            time.sleep(0.25)
-    else:
-        proc.kill()
-        stderr = proc.stderr.read().decode() if proc.stderr else ""
-        proc.wait(timeout=5)
-        pytest.fail(f"E2E server did not become reachable within 45s: {stderr}")
+            pytest.fail(f"E2E server did not become reachable within 45s: {stderr}")
 
     yield
 
-    if proc.poll() is None:
+    if proc is not None and proc.poll() is None:
         proc.terminate()
         try:
             proc.wait(timeout=10)

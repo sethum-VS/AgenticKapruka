@@ -362,3 +362,27 @@ async def test_rewrite_search_query_skips_when_occasion_already_in_query() -> No
 
     assert rewritten == "birthday cake for mom"
     mock_client.models.generate_content.assert_not_called()
+
+
+def test_enrich_flower_fruit_negative_hints_adds_exclude_categories() -> None:
+    from lib.neo4j.hybrid_context import enrich_flower_fruit_negative_hints
+
+    context = enrich_flower_fruit_negative_hints(
+        "flowers and fruit basket for Kandy",
+        {
+            "vector_hits": [{"id": "category:flowers", "score": 0.8}],
+            "hints": {"category": "Flowers"},
+        },
+    )
+    assert "Puja" in context["hints"]["exclude_categories"]
+    assert enrich_flower_fruit_negative_hints("birthday cake", context) == context
+
+
+def test_enrich_flower_fruit_negative_hints_skips_without_graph_context() -> None:
+    from lib.neo4j.hybrid_context import enrich_flower_fruit_negative_hints
+
+    context = enrich_flower_fruit_negative_hints(
+        "flowers and fruit basket",
+        {"hints": {"category": "Flowers"}},
+    )
+    assert "exclude_categories" not in context.get("hints", {})

@@ -21,6 +21,11 @@ from lib.chat.delivery_dates import (
     delivery_date_clarifying_question,
     normalize_delivery_date,
 )
+from lib.chat.product_curation import (
+    apply_puja_curation,
+    has_graph_hybrid_context,
+    is_flower_fruit_intent,
+)
 from lib.chat.search_broadening import apply_first_broaden
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
@@ -36,11 +41,12 @@ from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.utils.timezone import colombo_today_iso
-from lib.zep.memory import format_memory_facts_block
+from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_turn
 
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 3
+UTILITY_GENERAL_MAX_ITERATIONS = 2
 PLANNER_MODEL = FLASH_MODEL
 
 ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
@@ -92,8 +98,12 @@ action MUST be finish. Do not run auxiliary category browsing or extra searches
 unless the user explicitly requested them.
 
 Broad gifts example: Customer says "show me gifts" or "some gifts" with no
-occasion or recipient named → action MUST be ask_user to learn who the gift is
-for or what occasion before running kapruka_search_products.
+occasion, recipient, or budget named → action MUST be ask_user to learn who the
+gift is for or what occasion before running kapruka_search_products.
+
+Budgeted gift queries: When the customer names a budget (e.g. "gift ideas under
+Rs. 5,000") → action MUST be call_tool kapruka_search_products with
+q="gift voucher" and max_price from their budget before ask_user.
 
 Prior session facts (Zep) are conversational context only — not catalog truth.
 Hybrid context hints and preferences are soft hints; the explicit user message
@@ -297,11 +307,17 @@ _BROAD_GIFTS = re.compile(
     r"^(?:show me )?(?:some )?gifts?\s*[!.?]*$",
     re.I,
 )
+_GIFT_WORD = re.compile(r"\bgifts?\b", re.I)
 _SHORT_CATEGORY_REPLY = re.compile(
     r"^(?:cakes?|flowers?|chocolates?|roses?|bouquets?)\s*[!.?]*$",
     re.I,
 )
 _FLOWERS_REQUEST = re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)s?\b", re.I)
+_CATALOG_INTENT = re.compile(
+    r"\b(?:cake|flower|chocolate|gift|hamper|bouquet|roses?|product|search|find|show|"
+    r"deliver|track|VIMP)\b",
+    re.I,
+)
 
 
 def _search_has_products(result: Any) -> bool:
@@ -316,6 +332,8 @@ def _search_has_products(result: Any) -> bool:
 
 def _last_search_products_from_trace(
     tool_trace: list[ToolInvocation],
+    *,
+    state: AgentState | None = None,
 ) -> list[dict[str, Any]] | None:
     """Collect product dicts from the latest successful kapruka_search_products call."""
     for invocation in reversed(tool_trace):
@@ -325,10 +343,47 @@ def _last_search_products_from_trace(
         if not _search_has_products(result):
             continue
         raw_results = result.get("results")
-        if isinstance(raw_results, list):
-            products = [item for item in raw_results if isinstance(item, dict)]
-            return products or None
+        if not isinstance(raw_results, list):
+            continue
+        products = [item for item in raw_results if isinstance(item, dict)]
+        if not products:
+            return None
+        if state is None:
+            return products
+        user_message = _extract_latest_user_message(state.get("messages") or [])
+        hybrid_context = state.get("hybrid_context") or {}
+        return (
+            apply_puja_curation(
+                products,
+                query=user_message,
+                graph_context_available=has_graph_hybrid_context(hybrid_context),
+            )
+            or None
+        )
     return None
+
+
+def _turn_needs_catalog(state: AgentState) -> bool:
+    """Return True when the user turn likely needs Kapruka catalog tool calls."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if _CATALOG_INTENT.search(user_message):
+        return True
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    return bool(
+        intent_metadata.get("requires_delivery_validation") or intent_metadata.get("target_city"),
+    )
+
+
+def _max_iterations_for_state(state: AgentState, refined_intent: Intent | None) -> int:
+    """Cap planner iterations for fast utility/general turns that need no catalog."""
+    if refined_intent != "general":
+        return MAX_ITERATIONS
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    if intent_metadata.get("is_situational"):
+        return MAX_ITERATIONS
+    if _turn_needs_catalog(state):
+        return MAX_ITERATIONS
+    return UTILITY_GENERAL_MAX_ITERATIONS
 
 
 def _should_force_finish_after_search(
@@ -353,9 +408,12 @@ def _format_planner_query_rewrite_hints(
     user_message: str,
     *,
     message_count: int = 1,
+    budget_max: float | None = None,
+    graph_context_available: bool = False,
 ) -> str:
     """Soft search-query rewrite suggestions for broad cake and mom/birthday turns."""
     hints: list[str] = []
+    has_budget = budget_max is not None and budget_max > 0
     if message_count > 1 and _SHORT_CATEGORY_REPLY.match(user_message.strip()):
         hints.append(
             "Follow-up category reply after a prior clarifying turn: prefer action call_tool "
@@ -373,9 +431,20 @@ def _format_planner_query_rewrite_hints(
             "or combopack/combo gifts unless the customer specified another product type."
         )
     if _BROAD_GIFTS.match(user_message.strip()):
+        if has_budget:
+            hints.append(
+                f'Budgeted "gifts" query: prefer action call_tool with kapruka_search_products '
+                f'q="gift voucher" and max_price={budget_max} rather than ask_user.'
+            )
+        else:
+            hints.append(
+                'Vague "gifts" query with no occasion, recipient, or budget: prefer action '
+                "ask_user before kapruka_search_products."
+            )
+    elif has_budget and _GIFT_WORD.search(user_message):
         hints.append(
-            'Vague "gifts" query with no occasion or recipient: prefer action ask_user '
-            "before kapruka_search_products."
+            f"Budgeted gift query: prefer action call_tool with kapruka_search_products "
+            f'q="gift voucher" and max_price={budget_max} before ask_user.'
         )
     if _FLOWERS_REQUEST.search(user_message):
         hints.append(
@@ -383,6 +452,14 @@ def _format_planner_query_rewrite_hints(
             "fresh cut roses or bouquets. If results are only silk, artificial, soap, or "
             "paper florals, try one broader fresh-flowers search before finish."
         )
+    if is_flower_fruit_intent(user_message):
+        puja_avoid = (
+            "Flower/fruit request: avoid puja, pooja, watti, and religious offering products; "
+            "prefer fresh flowers, fruit baskets, and bouquets."
+        )
+        if graph_context_available:
+            puja_avoid += " Graph exclude_categories hint lists puja/religious categories to skip."
+        hints.append(puja_avoid)
     if not hints:
         return ""
     bullet_lines = "\n".join(f"- {hint}" for hint in hints)
@@ -413,7 +490,10 @@ def _build_planner_system_instruction(
     )
     zep_memory_facts = state.get("zep_memory_facts")
     if zep_memory_facts:
-        instruction += format_memory_facts_block(zep_memory_facts)
+        user_message = _extract_latest_user_message(state.get("messages") or [])
+        scoped_facts = scope_memory_facts_for_turn(zep_memory_facts, user_message)
+        if scoped_facts:
+            instruction += format_memory_facts_block(scoped_facts)
     hybrid_block = _format_hybrid_soft_hints(state)
     if hybrid_block:
         instruction += (
@@ -431,9 +511,14 @@ def _build_planner_user_prompt(state: AgentState) -> str:
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
     prompt = f"Customer message:\n{user_message}"
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    budget_max = intent_metadata.get("budget_max")
+    hybrid_context = state.get("hybrid_context") or {}
     rewrite_hints = _format_planner_query_rewrite_hints(
         user_message,
         message_count=len(messages),
+        budget_max=budget_max if isinstance(budget_max, (int, float)) else None,
+        graph_context_available=has_graph_hybrid_context(hybrid_context),
     )
     if rewrite_hints:
         prompt += f"\n\n{rewrite_hints}"
@@ -551,7 +636,11 @@ async def agent_loop(
 
     _emit_status(_DEFAULT_STATUS_MESSAGE)
 
+    iteration_limit = MAX_ITERATIONS
+
     for iteration in range(MAX_ITERATIONS):
+        if iteration >= iteration_limit:
+            break
         if force_finish:
             logger.debug(
                 "agent_loop: %s forcing finish at iteration %s",
@@ -574,6 +663,7 @@ async def agent_loop(
 
         if iteration == 0 and step.refined_intent in ("discovery", "general"):
             refined_intent = step.refined_intent
+            iteration_limit = _max_iterations_for_state(state, refined_intent)
 
         iteration_args: dict[str, Any] = (
             dict(step.tool_args or {}) if step.action == "call_tool" else {"action": step.action}
@@ -630,6 +720,12 @@ async def agent_loop(
 
         if tool_name == CHECK_DELIVERY_TOOL:
             user_message = _extract_latest_user_message(state.get("messages") or [])
+            canonical_city = state.get("delivery_city_canonical")
+            if isinstance(canonical_city, str) and canonical_city.strip():
+                enriched_args["city"] = canonical_city.strip()
+            state_date = state.get("delivery_date")
+            if isinstance(state_date, str) and state_date.strip():
+                enriched_args["delivery_date"] = state_date.strip()
             resolved_date = normalize_delivery_date(enriched_args, user_message)
             if resolved_date is None:
                 agent_clarifying_question = delivery_date_clarifying_question()
@@ -769,7 +865,7 @@ async def agent_loop(
     if search_broaden_applied:
         updates["search_broaden_applied"] = True
 
-    last_search_products = _last_search_products_from_trace(tool_trace)
+    last_search_products = _last_search_products_from_trace(tool_trace, state=state)
     if last_search_products:
         updates["last_search_products"] = last_search_products
 

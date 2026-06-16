@@ -10,6 +10,7 @@ from langchain_core.messages import BaseMessage
 from lib.chat.intent_metadata import IntentMetadata
 
 Intent = Literal["discovery", "checkout", "tracking", "general", "cart"]
+DeliveryCityStatus = Literal["resolved", "ambiguous", "not_found", "missing"]
 ModelTier = Literal["flash", "pro"]
 AgentLoopExitReason = Literal[
     "finish",
@@ -59,6 +60,12 @@ class AgentState(TypedDict):
     zep_thread_id: str | None
     currency: CurrencyCode | None
     session_budget_max: float | None
+    delivery_city_raw: str | None
+    delivery_city_canonical: str | None
+    delivery_city_status: DeliveryCityStatus | None
+    delivery_city_candidates: list[str] | None
+    delivery_date: str | None
+    delivery_context_ready: bool | None
     checkout_state: CheckoutStep | None
     response_html: str | None
     assistant_message: str | None

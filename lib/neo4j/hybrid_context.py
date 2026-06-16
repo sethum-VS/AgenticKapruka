@@ -15,6 +15,11 @@ from pydantic import BaseModel, ValidationError
 
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import select_rewrite_model
+from lib.chat.product_curation import (
+    PUJA_NEGATIVE_CATEGORY_HINTS,
+    has_graph_hybrid_context,
+    is_flower_fruit_intent,
+)
 from lib.embeddings.reranker import CrossEncoderService
 from lib.genai.fallback import generate_content_with_fallback
 from lib.neo4j.client import Neo4jClient
@@ -596,6 +601,20 @@ def strip_location_from_search_query(
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.-")
 
     return cleaned or stripped
+
+
+def enrich_flower_fruit_negative_hints(
+    query: str,
+    hybrid_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Add puja/religious exclude hints when GraphRAG is up and query is flower/fruit."""
+    context = dict(hybrid_context or {})
+    if not is_flower_fruit_intent(query) or not has_graph_hybrid_context(context):
+        return context
+    hints = dict(context.get("hints") or {})
+    hints["exclude_categories"] = ", ".join(PUJA_NEGATIVE_CATEGORY_HINTS)
+    context["hints"] = hints
+    return context
 
 
 def build_discovery_search_args(
