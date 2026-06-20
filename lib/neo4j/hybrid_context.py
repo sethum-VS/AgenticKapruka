@@ -401,10 +401,22 @@ _META_QUERY_TOKENS = frozenset(
         "with",
     }
 )
+_BIRTHDAY_OCCASION_RE = re.compile(r"\bbirthday\b", re.I)
+_BIRTHDAY_CAKE_INTENT = re.compile(
+    r"\bbirthday\s+cake\b|\bcake\b.*\bbirthday\b|\bbirthday\b.*\bcake\b",
+    re.I,
+)
+_CAKE_TERM = re.compile(r"\bcakes?\b", re.I)
+
+DESSERT_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
+    "Chocolate",
+    "Desserts",
+)
+
 _CATEGORY_SEARCH_TERMS: dict[str, str] = {
     "chocolates": "chocolate",
     "flowers": "flower",
-    "birthday": "cake",
+    "birthday": "birthday cake",
     "cakes": "cake",
     "gifts": "cake",
     "gift": "cake",
@@ -502,10 +514,67 @@ def _product_search_keyword(token: str) -> str:
     return normalized
 
 
+def is_birthday_cake_intent(query: str) -> bool:
+    """True when the customer turn targets birthday cakes (not chocolate-only gifts)."""
+    stripped = query.strip()
+    if not stripped:
+        return False
+    if _BIRTHDAY_CAKE_INTENT.search(stripped):
+        return True
+    return bool(_BIRTHDAY_OCCASION_RE.search(stripped) and _CAKE_TERM.search(stripped))
+
+
+def birthday_occasion_from_context(hybrid_context: dict[str, Any] | None) -> bool:
+    """True when graph/Zep hints mark the turn as a Birthday occasion."""
+    context = hybrid_context or {}
+    hints = context.get("hints") or {}
+    occasion = str(hints.get("occasion") or "").strip().lower()
+    if occasion == "birthday":
+        return True
+    preferences = context.get("preferences") or {}
+    favorite = str(preferences.get("favorite_category") or "").strip().lower()
+    return favorite == "birthday"
+
+
+def _should_demote_desserts_for_birthday(
+    query: str,
+    hybrid_context: dict[str, Any] | None,
+) -> bool:
+    """Demote generic desserts when the turn is birthday-cake scoped, not chocolate+flowers."""
+    if is_birthday_cake_intent(query):
+        return True
+    if not birthday_occasion_from_context(hybrid_context):
+        return False
+    stripped = query.strip()
+    if not stripped:
+        return False
+    if _CAKE_TERM.search(stripped):
+        return True
+    return _is_meta_catalog_query(stripped)
+
+
+def _merge_exclude_category_hints(existing: str, additions: tuple[str, ...]) -> str:
+    if not additions:
+        return existing
+    merged = additions if not existing else (*existing.split(", "), *additions)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in merged:
+        label = str(item).strip()
+        key = label.lower()
+        if not label or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(label)
+    return ", ".join(deduped)
+
+
 def _fallback_search_query(category: str | None) -> str:
     """Pick a broad Kapruka keyword that returns purchasable products."""
     if category:
         normalized = category.lower().strip()
+        if normalized == "birthday":
+            return "birthday cake"
         mapped = _CATEGORY_SEARCH_TERMS.get(normalized)
         if mapped:
             return mapped
@@ -515,6 +584,14 @@ def _fallback_search_query(category: str | None) -> str:
                 return first_word.rstrip("s")
             return first_word
     return "cake"
+
+
+def _birthday_biased_product_keyword(token: str, *, birthday_occasion: bool) -> str:
+    """Map a budget/meta token to a Kapruka keyword, preferring birthday cakes."""
+    normalized = token.lower().strip()
+    if birthday_occasion and normalized in {"cake", "cakes", "chocolate", "chocolates"}:
+        return "birthday cake"
+    return _product_search_keyword(token)
 
 
 DISCOVERY_SEARCH_TOOL = "kapruka_search_products"
@@ -617,6 +694,29 @@ def enrich_flower_fruit_negative_hints(
     return context
 
 
+def enrich_birthday_cake_hints(
+    query: str,
+    hybrid_context: dict[str, Any] | None,
+    *,
+    intent_metadata: IntentMetadata | None = None,
+) -> dict[str, Any]:
+    """Boost birthday cake category and demote dessert departments for cake-scoped turns."""
+    _ = intent_metadata
+    context = dict(hybrid_context or {})
+    if not _should_demote_desserts_for_birthday(query, context):
+        return context
+    hints = dict(context.get("hints") or {})
+    if birthday_occasion_from_context(context) or is_birthday_cake_intent(query):
+        hints.setdefault("occasion", "Birthday")
+    existing = str(hints.get("exclude_categories") or "")
+    hints["exclude_categories"] = _merge_exclude_category_hints(
+        existing,
+        DESSERT_NEGATIVE_CATEGORY_HINTS,
+    )
+    context["hints"] = hints
+    return context
+
+
 def build_discovery_search_args(
     user_message: str,
     hybrid_context: dict[str, Any] | None,
@@ -628,10 +728,14 @@ def build_discovery_search_args(
     context = hybrid_context or {}
     category = _resolve_mcp_category_filter(context)
     query = strip_location_from_search_query(user_message.strip(), intent_metadata)
+    birthday_occasion = birthday_occasion_from_context(context) or is_birthday_cake_intent(query)
+    fallback_category = category or ("Birthday" if birthday_occasion else None)
 
     args: dict[str, Any] = {"q": query, "currency": currency}
     if category:
         args["category"] = category
+    elif birthday_occasion and _should_demote_desserts_for_birthday(query, context):
+        args["category"] = "Birthday"
 
     if _PRICE_SORT_RE.search(query):
         args["sort"] = "price_asc"
@@ -642,12 +746,23 @@ def build_discovery_search_args(
         args["sort"] = "price_asc"
         product_tokens = _product_like_tokens(query)
         if product_tokens:
-            args["q"] = _product_search_keyword(product_tokens[0])
+            args["q"] = _birthday_biased_product_keyword(
+                product_tokens[0],
+                birthday_occasion=birthday_occasion,
+            )
         else:
-            args["q"] = _fallback_search_query(category)
+            args["q"] = _fallback_search_query(fallback_category)
 
     if _is_meta_catalog_query(query):
-        args["q"] = _fallback_search_query(category)
+        args["q"] = _fallback_search_query(fallback_category)
+
+    if (
+        birthday_occasion
+        and _should_demote_desserts_for_birthday(query, context)
+        and is_birthday_cake_intent(query)
+        and not _BIRTHDAY_CAKE_INTENT.search(args["q"])
+    ):
+        args["q"] = "birthday cake"
 
     return args
 

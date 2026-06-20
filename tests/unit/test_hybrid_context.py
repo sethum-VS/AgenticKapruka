@@ -14,6 +14,8 @@ from lib.neo4j.hybrid_context import (
     build_discovery_search_args,
     build_graph_hybrid_context,
     discovery_tool_manifest,
+    enrich_birthday_cake_hints,
+    is_birthday_cake_intent,
     occasion_rewrite_needed,
     requires_discovery_delivery_check,
     rerank_and_prune_traversal,
@@ -262,9 +264,44 @@ def test_build_discovery_search_args_parses_under_price_budget() -> None:
         currency="LKR",
     )
 
-    assert args["q"] == "cake"
+    assert args["q"] == "birthday cake"
     assert args["max_price"] == 2000.0
     assert args["sort"] == "price_asc"
+    assert args["category"] == "Birthday"
+
+
+def test_is_birthday_cake_intent_detects_explicit_and_occasion_cake() -> None:
+    assert is_birthday_cake_intent("Birthday cake for mom in Colombo")
+    assert is_birthday_cake_intent("cake for mom's birthday")
+    assert not is_birthday_cake_intent("wife birthday chocolate flowers ~8000 LKR")
+
+
+def test_enrich_birthday_cake_hints_demotes_desserts_for_birthday_cake() -> None:
+    context = enrich_birthday_cake_hints(
+        "Birthday cake for mom in Colombo",
+        {"hints": {"occasion": "Birthday"}},
+    )
+    assert context["hints"]["occasion"] == "Birthday"
+    assert "Chocolate" in context["hints"]["exclude_categories"]
+    assert "Desserts" in context["hints"]["exclude_categories"]
+
+
+def test_enrich_birthday_cake_hints_skips_chocolate_flowers_combo() -> None:
+    context = enrich_birthday_cake_hints(
+        "wife birthday chocolate flowers ~8000 LKR colombo",
+        {"hints": {"occasion": "Birthday"}},
+    )
+    assert "exclude_categories" not in context.get("hints", {})
+
+
+def test_build_discovery_search_args_birthday_occasion_meta_browse_prefers_birthday_cake() -> None:
+    args = build_discovery_search_args(
+        "show me any items",
+        {"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "birthday cake"
     assert args["category"] == "Birthday"
 
 

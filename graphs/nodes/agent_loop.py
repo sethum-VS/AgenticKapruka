@@ -40,6 +40,7 @@ from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.neo4j.hybrid_context import is_birthday_cake_intent
 from lib.utils.timezone import colombo_today_iso
 from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_turn
 
@@ -425,6 +426,15 @@ def _format_planner_query_rewrite_hints(
             'Broad "cakes" query: prefer kapruka_search_products with q="birthday cake" '
             "unless the customer named a specific cake type."
         )
+    if _BIRTHDAY_CAKE.search(user_message) or is_birthday_cake_intent(user_message):
+        birthday_hint = (
+            'Explicit birthday cake request: prefer kapruka_search_products with q="birthday cake" '
+            'and category="Birthday"; avoid generic chocolate or dessert-only searches that omit '
+            "cake products."
+        )
+        if graph_context_available:
+            birthday_hint += " Graph exclude_categories lists dessert departments to deprioritize."
+        hints.append(birthday_hint)
     if _MOM_BIRTHDAY.search(user_message):
         hints.append(
             "Mom/mother + birthday occasion: bias search q toward birthday cakes, flowers, "

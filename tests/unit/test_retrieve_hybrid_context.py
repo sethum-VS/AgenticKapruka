@@ -22,9 +22,9 @@ from lib.neo4j.vector_search import VectorSearchHit
 
 @pytest.mark.asyncio
 async def test_retrieve_hybrid_context_returns_empty_without_graph_or_zep() -> None:
-    """No Neo4j client or Zep facts yields empty hybrid_context."""
+    """No Neo4j client or Zep facts yields empty hybrid_context for generic turns."""
     state: AgentState = {
-        "messages": [HumanMessage(content="birthday cake for mom")],
+        "messages": [HumanMessage(content="show me gifts")],
         "intent": "discovery",
         "session_id": "sess-hybrid-001",
     }
@@ -32,6 +32,20 @@ async def test_retrieve_hybrid_context_returns_empty_without_graph_or_zep() -> N
     result = await retrieve_hybrid_context(state)
 
     assert result == {"hybrid_context": {}}
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_birthday_cake_hints_without_graph() -> None:
+    """Birthday cake turns still get dessert demotion hints when Neo4j is unavailable."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom")],
+        "intent": "discovery",
+        "session_id": "sess-hybrid-birthday",
+    }
+
+    result = await retrieve_hybrid_context(state)
+
+    assert "Chocolate" in result["hybrid_context"]["hints"]["exclude_categories"]
 
 
 @pytest.mark.asyncio
@@ -361,3 +375,29 @@ async def test_retrieve_hybrid_context_adds_puja_exclude_hints_for_flower_fruit(
 
     assert "exclude_categories" in updates["hybrid_context"]["hints"]
     assert "Puja" in updates["hybrid_context"]["hints"]["exclude_categories"]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_adds_birthday_dessert_exclude_hints() -> None:
+    graph_context = {
+        "hints": {"occasion": "Birthday"},
+        "vector_hits": [{"id": "category:cakes", "score": 0.7, "display_name": "Cakes"}],
+        "categories": [],
+        "occasions": [],
+        "product_types": [],
+        "direct_occasion_hits": [],
+    }
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    state: AgentState = {
+        "messages": [HumanMessage(content="Birthday cake for mom in Colombo")],
+        "intent": "discovery",
+    }
+
+    with patch(
+        "graphs.nodes.retrieve_hybrid_context._fetch_graph_hybrid_context",
+        new=AsyncMock(return_value=graph_context),
+    ):
+        updates = await retrieve_hybrid_context(state, neo4j_client=neo4j_client)
+
+    assert "Chocolate" in updates["hybrid_context"]["hints"]["exclude_categories"]
+    assert updates["hybrid_context"]["hints"]["occasion"] == "Birthday"

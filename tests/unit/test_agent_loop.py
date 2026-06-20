@@ -667,12 +667,27 @@ def test_planner_user_prompt_flowers_fresh_search_hint() -> None:
     assert "silk" in prompt.lower()
 
 
-def test_planner_user_prompt_skips_cakes_hint_when_birthday_cake_named() -> None:
+def test_planner_user_prompt_birthday_cake_biases_away_from_desserts() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="Birthday cake for mom in Colombo")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:cakes", "score": 0.8}],
+            "hints": {"occasion": "Birthday"},
+        },
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert 'q="birthday cake"' in prompt
+    assert "dessert" in prompt.lower()
+    assert "exclude_categories" in prompt
+
+
+def test_planner_user_prompt_skips_broad_cakes_hint_when_birthday_cake_named() -> None:
     state: AgentState = {
         "messages": [HumanMessage(content="I need a birthday cake for Saturday")],
     }
     prompt = _build_planner_user_prompt(state)
-    assert 'q="birthday cake"' not in prompt
+    assert 'Broad "cakes" query' not in prompt
+    assert 'q="birthday cake"' in prompt
 
 
 def test_planner_system_instruction_includes_hybrid_soft_hints_only() -> None:
