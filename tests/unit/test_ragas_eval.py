@@ -11,6 +11,7 @@ from evals.golden_dataset import GoldenCase, GoldenDataset
 from evals.ragas_eval import (
     DEFAULT_CONTEXT_PRECISION_THRESHOLD,
     GraphEvalRow,
+    _agent_loop_expected_tools,
     assert_context_precision_threshold,
     assert_expected_tool_usage,
     build_eval_genai_client,
@@ -49,6 +50,18 @@ def test_intent_for_case_maps_categories_to_general() -> None:
         reference_answer="Categories list.",
     )
     assert intent_for_case(case) == "general"
+
+
+def test_agent_loop_expected_tools_strips_preflight_check_delivery() -> None:
+    """Planner mock must not replay check_delivery when resolve_delivery_context preflight ran."""
+    case = GoldenCase(
+        id="disc-002-wedding-flowers",
+        scenario="discovery",
+        user_query="I need wedding flowers delivered in Colombo 03",
+        expected_tools=[CHECK_DELIVERY_TOOL, SEARCH_PRODUCTS_TOOL],
+        reference_answer="Delivery check then wedding flower search.",
+    )
+    assert _agent_loop_expected_tools(case) == [SEARCH_PRODUCTS_TOOL]
 
 
 def test_contexts_from_tool_results_serializes_payloads() -> None:

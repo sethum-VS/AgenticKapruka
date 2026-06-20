@@ -308,6 +308,27 @@ def _tool_args_for_e2e_message(tool_name: str, message: str) -> dict[str, Any]:
     return {}
 
 
+def _preflight_tools_for_eval_case(case: GoldenCase) -> list[str]:
+    """MCP tools resolve_delivery_context may append before agent_loop (PRD-138 preflight)."""
+    if case.scenario != "discovery":
+        return []
+    if normalize_delivery_date({}, case.user_query) is not None:
+        return []
+    metadata = QueryPreprocessor().process(case.user_query)
+    if metadata.get("requires_delivery_validation"):
+        return [CHECK_DELIVERY_TOOL]
+    return []
+
+
+def _agent_loop_expected_tools(case: GoldenCase) -> list[str]:
+    """Planner-mock tools only — excludes preflight already run in resolve_delivery_context."""
+    preflight = _preflight_tools_for_eval_case(case)
+    expected = list(case.expected_tools)
+    if preflight and len(expected) >= len(preflight) and expected[: len(preflight)] == preflight:
+        return expected[len(preflight) :]
+    return expected
+
+
 def _planner_step_for_eval_case(
     case: GoldenCase | None,
     *,
@@ -328,7 +349,7 @@ def _planner_step_for_eval_case(
             )
         return AgentPlannerStep(action="finish", rationale="catalog facts collected")
 
-    expected = case.expected_tools
+    expected = _agent_loop_expected_tools(case)
     if not expected:
         return AgentPlannerStep(
             action="finish",

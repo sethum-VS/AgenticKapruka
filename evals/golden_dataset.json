@@ -12,8 +12,8 @@
       "id": "disc-002-wedding-flowers",
       "scenario": "discovery",
       "user_query": "I need wedding flowers delivered in Colombo 03",
-      "expected_tools": ["kapruka_search_products"],
-      "reference_answer": "I'll look for wedding flower arrangements and bouquets available on Kapruka that can be delivered in Colombo 03, and share options with prices and stock status."
+      "expected_tools": ["kapruka_check_delivery", "kapruka_search_products"],
+      "reference_answer": "I'll confirm delivery availability for Colombo 03, then search Kapruka for wedding flower arrangements and bouquets with prices and stock status."
     },
     {
       "id": "disc-003-chocolate-gifts",
