@@ -675,7 +675,7 @@ async def agent_loop(
     rate_limit_key = client_ip or state.get("session_id") or "127.0.0.1"
     currency = _resolve_currency(state)
 
-    tool_trace: list[ToolInvocation] = list(state.get("tool_trace") or [])
+    tool_trace: list[ToolInvocation] = []
     tool_call_count = 0
     agent_clarifying_question: str | None = None
     agent_tool_error: dict[str, str] | None = None
