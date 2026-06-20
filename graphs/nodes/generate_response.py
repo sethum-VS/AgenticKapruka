@@ -99,6 +99,15 @@ _DELIVERY_QUOTED_RATE = re.compile(
     r"\b(?:rs\.?|lkr)\s*[\d,]+(?:\.\d+)?\s*(?:per\s+order|for\s+delivery|delivery)\b",
     re.I,
 )
+_CAROUSEL_NEGATION_PATTERN = re.compile(
+    r"\b(?:"
+    r"couldn'?t\s+find|could\s+not\s+find|"
+    r"no\s+fresh|"
+    r"none\s+within|"
+    r"no\s+options\s+under"
+    r")\b",
+    re.I,
+)
 
 CHECKOUT_REVIEW_SYSTEM_INSTRUCTION = (
     "You are the Kapruka gift shopping assistant at the final checkout review step.\n\n"
@@ -273,6 +282,20 @@ def delivery_claim_guard(
         "I have not verified Kapruka delivery for that location and date yet. "
         f"{delivery_date_clarifying_question()}"
     )
+
+
+def carousel_consistency_guard(
+    reply_text: str,
+    products: list[dict[str, Any]],
+    *,
+    user_message: str = "",
+) -> str:
+    """Replace contradictory empty-search copy when MCP search returned carousel products."""
+    if not products or not reply_text.strip():
+        return reply_text
+    if not _CAROUSEL_NEGATION_PATTERN.search(reply_text):
+        return reply_text
+    return _build_discovery_template_reply(products, user_message=user_message) or reply_text
 
 
 def _last_check_delivery_invocation(
@@ -1151,6 +1174,11 @@ async def generate_response(
     reply_text = delivery_claim_guard(
         reply_text,
         tool_trace,
+        user_message=user_message,
+    )
+    reply_text = carousel_consistency_guard(
+        reply_text,
+        products,
         user_message=user_message,
     )
     reply_text = _apply_artificial_floral_honesty(

@@ -22,6 +22,7 @@ from graphs.nodes.generate_response import (
     _resolve_effective_tool_results,
     build_agent_tool_error_message,
     build_products_carousel_html,
+    carousel_consistency_guard,
     delivery_claim_guard,
     extract_search_products,
     generate_response,
@@ -1210,6 +1211,75 @@ def test_delivery_claim_guard_city_date_asks_before_fee() -> None:
     assert "Colombo" in guarded
     assert "won't quote a fee" in guarded
     assert "Rs. 400" not in guarded
+
+
+def test_carousel_consistency_guard_rewrites_negated_reply_with_products() -> None:
+    """Eval B-03: negation copy is replaced when search_products returned carousel picks."""
+    products = [
+        _product("flower001", "6 Red Rose Bouquet", amount=4500.0),
+        _product("flower002", "Blush Roses Combo", amount=4800.0),
+    ]
+    reply = (
+        "I couldn't find any fresh roses within your budget on Kapruka. "
+        "You might try widening your search."
+    )
+    guarded = carousel_consistency_guard(
+        reply,
+        products,
+        user_message="fresh roses under 5000 LKR",
+    )
+    assert "couldn't find" not in guarded.lower()
+    assert "thoughtful Kapruka picks" in guarded
+    assert "6 Red Rose Bouquet" in guarded
+    assert "Blush Roses Combo" in guarded
+
+
+def test_carousel_consistency_guard_passes_through_positive_reply() -> None:
+    products = [_product("flower001", "6 Red Rose Bouquet", amount=4500.0)]
+    reply = "Here are some lovely rose options within your budget."
+    assert carousel_consistency_guard(reply, products) == reply
+
+
+def test_carousel_consistency_guard_skips_when_no_products() -> None:
+    reply = "I couldn't find any fresh roses within your budget."
+    assert carousel_consistency_guard(reply, []) == reply
+
+
+@pytest.mark.asyncio
+async def test_generate_response_roses_under_budget_guard_rewrites_llm_negation() -> None:
+    """Eval B-03: carousel and reply agree when LLM falsely claims no in-budget roses."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="I couldn't find any fresh roses under Rs. 5,000 on Kapruka right now.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                _product("flower001", "6 Red Rose Bouquet", amount=4500.0),
+                _product("flower002", "Premium Rose Arrangement", amount=4900.0),
+            ],
+        },
+    }
+    state: AgentState = {
+        "messages": [HumanMessage(content="fresh roses under 5000 LKR")],
+        "tool_results": tool_results,
+        "session_id": "sess-roses-budget",
+        "session_budget_max": 5000.0,
+        "currency": "LKR",
+        "intent": "discovery",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "couldn't find" not in result["assistant_message"].lower()
+    assert "no fresh" not in result["assistant_message"].lower()
+    assert "thoughtful Kapruka picks" in result["assistant_message"]
+    assert "6 Red Rose Bouquet" in result["assistant_message"]
+    assert 'data-testid="product-carousel"' in result["response_html"]
 
 
 def test_build_verified_city_delivery_line_omits_checked_date() -> None:
