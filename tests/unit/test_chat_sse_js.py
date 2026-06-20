@@ -24,6 +24,8 @@ def test_chat_sse_js_wires_post_stream_bridge() -> None:
     assert "htmx:afterRequest" in source
     assert 'form.classList.contains("htmx-request")' in source
     assert "submitButton.disabled = true" in source
+    assert 'messageInput.value = ""' in source
+    assert "new FormData(form)" in source
 
 
 def test_chat_sse_js_clears_loading_on_success_and_error() -> None:

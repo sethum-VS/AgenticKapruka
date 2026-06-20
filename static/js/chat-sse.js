@@ -141,6 +141,7 @@
       }
       if (messageInput) {
         messageInput.readOnly = true;
+        messageInput.value = "";
       }
     } else {
       form.classList.remove("htmx-request");
@@ -170,7 +171,7 @@
     });
   }
 
-  async function streamChatPost(form) {
+  async function streamChatPost(form, formData) {
     const listener = findSseListener(form);
     if (!listener) {
       throw new Error("Missing chat SSE listener element");
@@ -181,7 +182,6 @@
       .map((name) => name.trim())
       .filter(Boolean);
     const connectPath = form.dataset.chatStreamPath || CHAT_STREAM_PATH;
-    const formData = new FormData(form);
     const outboundMessage = formData.get("message");
     chatDebugLog(form, "send", {
       path: connectPath,
@@ -286,8 +286,9 @@
       if (form.classList.contains("htmx-request")) {
         return;
       }
+      const formData = new FormData(form);
       toggleRequestState(form, true);
-      void streamChatPost(form).catch((error) => {
+      void streamChatPost(form, formData).catch((error) => {
         console.error("chat SSE stream failed", error);
       });
     },
