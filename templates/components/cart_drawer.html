@@ -61,7 +61,7 @@
     x-transition:leave="transform transition ease-in duration-200"
     x-transition:leave-start="translate-x-0"
     x-transition:leave-end="translate-x-full"
-    class="fixed inset-y-0 right-0 z-50 flex w-full max-w-sm flex-col bg-white shadow-xl"
+    class="fixed inset-y-0 right-0 z-50 flex min-h-0 w-full max-w-sm flex-col bg-white shadow-xl"
     data-testid="cart-drawer-panel"
     role="dialog"
     aria-modal="true"
@@ -79,7 +79,7 @@
         <span aria-hidden="true" class="text-xl leading-none">&times;</span>
       </button>
     </div>
-    <div class="flex-1 overflow-y-auto bg-white px-4 py-4">
+    <div class="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-4">
       {% set items = cart_items %}
       {% include "checkout/cart_partial.html" %}
     </div>

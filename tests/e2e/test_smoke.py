@@ -50,6 +50,7 @@ def test_search_message_shows_product_card(page: Page, base_url: str) -> None:
 
 def test_add_to_cart_shows_item_in_drawer(page: Page, base_url: str) -> None:
     """Add-to-cart HTMX swap updates the cart drawer badge and line item."""
+    page.set_viewport_size({"width": 1280, "height": 800})
     page.goto(f"{base_url}/chat")
     _wait_for_alpine(page)
     _search_and_wait_for_product_card(page)
@@ -60,9 +61,12 @@ def test_add_to_cart_shows_item_in_drawer(page: Page, base_url: str) -> None:
     page.wait_for_selector('[data-testid="cart-badge"]', state="visible", timeout=15_000)
 
     page.locator('[data-testid="cart-icon"]').click()
-    page.wait_for_selector('[data-testid="cart-line-item"]', timeout=10_000)
+    drawer = page.locator('[data-testid="cart-drawer-panel"]')
+    line_item = drawer.locator('[data-testid="cart-line-item"]')
+    line_item.wait_for(state="visible", timeout=10_000)
 
-    expect(page.locator('[data-testid="cart-line-item"]')).to_contain_text(_MOCK_PRODUCT_NAME)
+    expect(line_item).to_be_visible()
+    expect(line_item).to_contain_text(_MOCK_PRODUCT_NAME)
     expect(page.locator('[data-testid="cart-badge"]')).to_have_text("1")
 
 
