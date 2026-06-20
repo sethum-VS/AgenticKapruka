@@ -303,6 +303,15 @@ def _canonical_city_from_check_delivery_invocation(invocation: ToolInvocation) -
     return None
 
 
+def _is_city_only_check_delivery(invocation: ToolInvocation) -> bool:
+    """True when check_delivery ran with city only (preflight before date ask)."""
+    args = invocation.get("args")
+    if not isinstance(args, dict):
+        return False
+    delivery_date = args.get("delivery_date")
+    return not (isinstance(delivery_date, str) and delivery_date.strip())
+
+
 def _build_verified_delivery_fee_line(
     *,
     city: str,
@@ -312,6 +321,16 @@ def _build_verified_delivery_fee_line(
 ) -> str:
     fee = format_currency(rate, currency)
     return f"Delivery to {city} on {checked_date}: {fee} (verified with Kapruka)"
+
+
+def _build_verified_city_delivery_line(
+    *,
+    city: str,
+    rate: float,
+    currency: str,
+) -> str:
+    fee = format_currency(rate, currency)
+    return f"Delivery to {city}: {fee} flat rate per order (verified with Kapruka)"
 
 
 def _apply_perishable_delivery_honesty(
@@ -339,15 +358,23 @@ def _apply_perishable_delivery_honesty(
     if delivery_output.available:
         city = _canonical_city_from_check_delivery_invocation(invocation)
         if city:
-            fee_line = _build_verified_delivery_fee_line(
-                city=city,
-                checked_date=delivery_output.checked_date,
-                rate=delivery_output.rate,
-                currency=delivery_output.currency,
-            )
+            if _is_city_only_check_delivery(invocation):
+                fee_line = _build_verified_city_delivery_line(
+                    city=city,
+                    rate=delivery_output.rate,
+                    currency=delivery_output.currency,
+                )
+            else:
+                fee_line = _build_verified_delivery_fee_line(
+                    city=city,
+                    checked_date=delivery_output.checked_date,
+                    rate=delivery_output.rate,
+                    currency=delivery_output.currency,
+                )
             if "verified with Kapruka" not in updated_reply:
                 updated_reply = f"{updated_reply}\n\n{fee_line}".strip()
-        delivery_html = render_delivery_date_status(result=delivery_output)
+        if not _is_city_only_check_delivery(invocation):
+            delivery_html = render_delivery_date_status(result=delivery_output)
 
     warning = delivery_output.perishable_warning
     if isinstance(warning, str) and warning.strip():
@@ -889,8 +916,13 @@ async def generate_response(
         and clarifying_question.strip()
     ):
         question = clarifying_question.strip()
+        tool_trace = state.get("tool_trace")
+        question, delivery_status_html = _apply_perishable_delivery_honesty(question, tool_trace)
         return {
-            "response_html": render_assistant_html(question),
+            "response_html": render_assistant_html(
+                question,
+                delivery_status_html=delivery_status_html,
+            ),
             "assistant_message": question,
         }
 

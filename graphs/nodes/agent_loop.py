@@ -622,7 +622,7 @@ async def agent_loop(
     rate_limit_key = client_ip or state.get("session_id") or "127.0.0.1"
     currency = _resolve_currency(state)
 
-    tool_trace: list[ToolInvocation] = []
+    tool_trace: list[ToolInvocation] = list(state.get("tool_trace") or [])
     tool_call_count = 0
     agent_clarifying_question: str | None = None
     agent_tool_error: dict[str, str] | None = None
@@ -710,15 +710,6 @@ async def agent_loop(
         raw_args = normalize_planner_tool_args(tool_name, dict(step.tool_args or {}))
         enriched_args = inject_currency(tool_name, raw_args, currency)
 
-        if _is_duplicate_invocation(tool_trace, tool_name, enriched_args):
-            logger.debug(
-                "agent_loop: duplicate %s with identical args; forcing finish next iteration",
-                tool_name,
-            )
-            force_finish = True
-            force_finish_reason = "duplicate_guard"
-            continue
-
         if tool_name == CHECK_DELIVERY_TOOL:
             user_message = _extract_latest_user_message(state.get("messages") or [])
             canonical_city = state.get("delivery_city_canonical")
@@ -740,6 +731,15 @@ async def agent_loop(
                 break
             enriched_args = {**enriched_args, "delivery_date": resolved_date}
             enriched_args.pop("date", None)
+
+        if _is_duplicate_invocation(tool_trace, tool_name, enriched_args):
+            logger.debug(
+                "agent_loop: duplicate %s with identical args; forcing finish next iteration",
+                tool_name,
+            )
+            force_finish = True
+            force_finish_reason = "duplicate_guard"
+            continue
 
         _emit_status(_status_message_for_tool(tool_name))
 

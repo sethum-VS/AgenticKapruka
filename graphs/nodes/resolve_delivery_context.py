@@ -6,13 +6,14 @@ import logging
 from typing import Any, Literal
 
 from graphs.nodes.analyze_intent import _extract_latest_user_message
-from graphs.state import AgentState
+from graphs.state import AgentState, ToolInvocation
 from lib.chat.city_resolution import resolve_delivery_city
 from lib.chat.delivery_dates import is_delivery_date_only_message, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
-from lib.chat.query_preprocessor import extract_target_city
+from lib.chat.query_preprocessor import _has_delivery_intent, extract_target_city
 from lib.kapruka.product_id import contains_product_id
 from lib.kapruka.service import KaprukaService
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +62,52 @@ def _needs_city_resolution(state: AgentState, user_message: str) -> bool:
     if state.get("session_awaiting_delivery_date"):
         return True
     session_city = state.get("session_delivery_city_canonical")
-    return (
+    if (
         isinstance(session_city, str)
         and bool(session_city.strip())
         and is_delivery_date_only_message(user_message)
+    ):
+        return True
+    return (
+        isinstance(session_city, str)
+        and bool(session_city.strip())
+        and _has_delivery_intent(user_message)
     )
+
+
+def _should_run_delivery_preflight(
+    state: AgentState,
+    user_message: str,
+    intent_metadata: IntentMetadata | dict[str, Any],
+    *,
+    delivery_date: str | None,
+) -> bool:
+    """City-only kapruka_check_delivery before the agent loop asks for a date."""
+    if delivery_date is not None:
+        return False
+    if intent_metadata.get("requires_delivery_validation"):
+        return True
+    session_city = state.get("session_delivery_city_canonical")
+    return (
+        isinstance(session_city, str)
+        and bool(session_city.strip())
+        and _has_delivery_intent(user_message)
+    )
+
+
+async def _preflight_check_delivery(
+    *,
+    kapruka_service: KaprukaService,
+    client_ip: str,
+    city: str,
+) -> ToolInvocation:
+    """Run city-only check_delivery and return a tool_trace entry."""
+    output = await kapruka_service.check_delivery(client_ip, city=city)
+    return {
+        "name": CHECK_DELIVERY_TOOL,
+        "args": {"city": city},
+        "result": output.model_dump(),
+    }
 
 
 async def resolve_delivery_context(
@@ -103,12 +145,41 @@ async def resolve_delivery_context(
             raw_city,
             resolution.canonical,
         )
-        return {
+        resolved: dict[str, Any] = {
             **base,
             "delivery_city_canonical": resolution.canonical,
             "session_delivery_city_canonical": resolution.canonical,
             "delivery_context_ready": True,
         }
+        intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
+        canonical = resolution.canonical
+        if canonical and _should_run_delivery_preflight(
+            state,
+            user_message,
+            intent_metadata,
+            delivery_date=delivery_date,
+        ):
+            preflight = await _preflight_check_delivery(
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                city=canonical,
+            )
+            resolved["tool_trace"] = [preflight]
+            preflight_result = preflight.get("result")
+            if isinstance(preflight_result, dict) and not preflight_result.get("available"):
+                reason = preflight_result.get("reason")
+                customer_message = (
+                    str(reason).strip()
+                    if isinstance(reason, str) and reason.strip()
+                    else f"Kapruka cannot deliver to {canonical}."
+                )
+                return {
+                    **resolved,
+                    "delivery_context_ready": False,
+                    "agent_clarifying_question": customer_message,
+                    "agent_loop_exit_reason": "ask_user",
+                }
+        return resolved
 
     customer_message = resolution.customer_message or "Which city should we deliver to?"
     logger.info(

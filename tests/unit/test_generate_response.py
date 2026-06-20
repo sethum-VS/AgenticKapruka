@@ -15,6 +15,7 @@ from graphs.nodes.generate_response import (
     _apply_perishable_delivery_honesty,
     _build_discovery_template_reply,
     _build_user_prompt,
+    _build_verified_city_delivery_line,
     _build_verified_delivery_fee_line,
     _cap_search_products_for_llm_context,
     _format_product_line,
@@ -1209,6 +1210,83 @@ def test_delivery_claim_guard_city_date_asks_before_fee() -> None:
     assert "Colombo" in guarded
     assert "won't quote a fee" in guarded
     assert "Rs. 400" not in guarded
+
+
+def test_build_verified_city_delivery_line_omits_checked_date() -> None:
+    line = _build_verified_city_delivery_line(
+        city="Kandy",
+        rate=500.0,
+        currency="LKR",
+    )
+    assert line == "Delivery to Kandy: Rs. 500 flat rate per order (verified with Kapruka)"
+    assert " on " not in line
+
+
+def test_apply_perishable_delivery_honesty_preflight_city_only_without_date_copy() -> None:
+    """Preflight tool_trace renders city fee line without claiming a delivery date."""
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {"city": "Kandy"},
+            "result": {
+                "city": "Kandy",
+                "now": "2026-06-12T12:00:00+05:30",
+                "checked_date": "2026-06-12",
+                "available": True,
+                "rate": 500.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": None,
+            },
+        },
+    ]
+    reply, delivery_html = _apply_perishable_delivery_honesty(
+        delivery_date_clarifying_question(),
+        tool_trace,
+    )
+    assert "Delivery to Kandy: Rs. 500 flat rate per order (verified with Kapruka)" in reply
+    assert "on 2026-06-12" not in reply
+    assert delivery_html is None
+
+
+@pytest.mark.asyncio
+async def test_generate_response_preflight_trace_renders_deliverable_before_date_ask() -> None:
+    """Preflight check_delivery in tool_trace surfaces fee without agent_loop check_delivery."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="can you deliver?")],
+        "intent": "discovery",
+        "session_delivery_city_canonical": "Kandy",
+        "agent_clarifying_question": delivery_date_clarifying_question(),
+        "agent_loop_exit_reason": "ask_user",
+        "tool_trace": [
+            {
+                "name": CHECK_DELIVERY_TOOL,
+                "args": {"city": "Kandy"},
+                "result": {
+                    "city": "Kandy",
+                    "now": "2026-06-12T12:00:00+05:30",
+                    "checked_date": "2026-06-12",
+                    "available": True,
+                    "rate": 500.0,
+                    "currency": "LKR",
+                    "reason": None,
+                    "next_available_date": None,
+                    "perishable_warning": None,
+                },
+            },
+        ],
+        "session_id": "sess-preflight-reply",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    message = result["assistant_message"]
+    assert "Delivery to Kandy: Rs. 500 flat rate per order (verified with Kapruka)" in message
+    assert delivery_date_clarifying_question() in message
+    assert "on 2026-06-12" not in message
+    mock_client.models.generate_content.assert_not_called()
 
 
 def test_build_verified_delivery_fee_line_uses_format_currency() -> None:

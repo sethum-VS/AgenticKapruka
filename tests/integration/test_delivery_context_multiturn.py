@@ -126,7 +126,6 @@ def _planner_steps_for_multiturn() -> list[AgentPlannerStep]:
             tool_args={"q": "birthday cake"},
             rationale="search cakes",
         ),
-        AgentPlannerStep(action="finish", rationale="cakes found"),
         AgentPlannerStep(
             action="call_tool",
             tool_name=CHECK_DELIVERY_TOOL,
@@ -182,7 +181,11 @@ async def test_kandy_cake_deliver_tomorrow_multiturn_check_delivery(
 
         turn2 = await graph.ainvoke(append_message_state("can you deliver?"), config)
         assert turn2.get("session_awaiting_delivery_date") is True
-        mock_service.check_delivery.assert_not_awaited()
+        turn2_trace = turn2.get("tool_trace") or []
+        turn2_checks = [inv for inv in turn2_trace if inv["name"] == CHECK_DELIVERY_TOOL]
+        assert len(turn2_checks) == 1
+        assert turn2_checks[0]["args"] == {"city": "Kandy"}
+        assert "verified with Kapruka" in (turn2.get("assistant_message") or "")
 
         turn3 = await graph.ainvoke(append_message_state("tomorrow"), config)
 
@@ -193,9 +196,9 @@ async def test_kandy_cake_deliver_tomorrow_multiturn_check_delivery(
     assert check_calls[-1]["args"]["delivery_date"] == "2026-06-13"
     assert turn3.get("session_awaiting_delivery_date") is False
 
-    mock_service.check_delivery.assert_awaited_once()
-    await_args = mock_service.check_delivery.await_args
-    assert await_args is not None
-    assert await_args.args[0] == _CLIENT_IP
-    assert await_args.kwargs["city"] == "Kandy"
-    assert await_args.kwargs["delivery_date"] == "2026-06-13"
+    mock_service.check_delivery.assert_awaited()
+    assert mock_service.check_delivery.await_count >= 2
+    dated_call = mock_service.check_delivery.await_args_list[-1]
+    assert dated_call.args[0] == _CLIENT_IP
+    assert dated_call.kwargs["city"] == "Kandy"
+    assert dated_call.kwargs["delivery_date"] == "2026-06-13"
