@@ -34,6 +34,11 @@ def test_first_applicable_broaden_step_gift_query_prefers_voucher_fallback() -> 
     assert first_applicable_broaden_step(args) == "gift_voucher_fallback"
 
 
+def test_broaden_simplify_q_skips_birthday_category_filter() -> None:
+    args = {"q": "birthday cake for mom", "category": "Birthday", "currency": "LKR"}
+    assert broaden_search_args(args, "simplify_q") is None
+
+
 def test_broaden_simplify_q_birthday_cake_to_cake() -> None:
     args = {"q": "birthday cake for mom", "currency": "LKR", "max_price": 30.0}
     broadened = broaden_search_args(args, "simplify_q")

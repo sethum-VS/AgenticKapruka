@@ -418,7 +418,11 @@ async def test_agent_loop_duplicate_tool_guard_forces_finish() -> None:
         side_effect=planner_steps,
     ):
         result = await agent_loop(
-            _base_state(),
+            {
+                "messages": [HumanMessage(content="chocolate gift hamper for anniversary")],
+                "session_id": "sess-agent-loop-dup",
+                "currency": "LKR",
+            },
             kapruka_service=mock_service,
             client_ip=_CLIENT_IP,
         )
@@ -667,12 +671,27 @@ def test_planner_user_prompt_flowers_fresh_search_hint() -> None:
     assert "silk" in prompt.lower()
 
 
-def test_planner_user_prompt_skips_cakes_hint_when_birthday_cake_named() -> None:
+def test_planner_user_prompt_birthday_cake_biases_away_from_desserts() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="Birthday cake for mom in Colombo")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:cakes", "score": 0.8}],
+            "hints": {"occasion": "Birthday"},
+        },
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert 'q="birthday cake"' in prompt
+    assert "dessert" in prompt.lower()
+    assert "exclude_categories" in prompt
+
+
+def test_planner_user_prompt_skips_broad_cakes_hint_when_birthday_cake_named() -> None:
     state: AgentState = {
         "messages": [HumanMessage(content="I need a birthday cake for Saturday")],
     }
     prompt = _build_planner_user_prompt(state)
-    assert 'q="birthday cake"' not in prompt
+    assert 'Broad "cakes" query' not in prompt
+    assert 'q="birthday cake"' in prompt
 
 
 def test_planner_system_instruction_includes_hybrid_soft_hints_only() -> None:
@@ -858,8 +877,52 @@ async def test_agent_loop_empty_search_runs_one_broaden_retry() -> None:
     assert result["search_broaden_applied"] is True
     assert len(result["tool_trace"]) == 2
     assert result["tool_trace"][0]["args"]["q"] == "birthday cake"
-    assert result["tool_trace"][1]["args"]["q"] == "cake"
+    assert "max_price" not in result["tool_trace"][1]["args"]
+    assert result["tool_trace"][1]["args"]["q"] == "birthday cake"
     assert result["last_search_products"] is not None
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_search_merge_overrides_planner_dessert_query() -> None:
+    """Eval B-07: deterministic discovery args override planner dessert-only searches."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "chocolate lava cake", "max_price": 3000.0},
+            rationale="search catalog",
+        ),
+        AgentPlannerStep(
+            action="finish",
+            rationale="done",
+        ),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [
+            HumanMessage(
+                content=("birthday cake for my wife she loves chocolate budget 3000 Kandy"),
+            ),
+        ],
+        "hybrid_context": {"hints": {"occasion": "Birthday"}},
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    search_args = result["tool_trace"][0]["args"]
+    assert search_args["q"] == "chocolate birthday cake"
+    assert search_args["category"] == "Birthday"
+    assert search_args["max_price"] == 3000.0
+    mock_service.search_products.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -900,7 +963,8 @@ async def test_agent_loop_empty_search_broaden_guard_at_most_one_retry() -> None
     assert mock_service.search_products.call_count == 3
     assert result["search_broaden_applied"] is True
     assert len(result["tool_trace"]) == 3
-    assert result["tool_trace"][1]["args"]["q"] == "cake"
+    assert result["tool_trace"][1]["args"]["q"] == "birthday cake"
+    assert "max_price" not in result["tool_trace"][1]["args"]
     assert result["tool_trace"][2]["args"]["q"] == "flowers"
 
 
@@ -978,6 +1042,120 @@ async def test_agent_loop_check_delivery_missing_date_still_asks_user() -> None:
     assert result["agent_loop_exit_reason"] == "ask_user"
     assert result["agent_clarifying_question"] == expected_question
     mock_service.check_delivery.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_check_delivery_uses_session_city_when_ephemeral_reset() -> None:
+    """Session canonical city fills in when per-turn delivery_city_canonical was cleared."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Colombo", "delivery_date": "2026-06-15"},
+            rationale="check delivery",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="can you deliver?")],
+        "session_delivery_city_canonical": "Kandy",
+    }
+
+    with (
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["tool_trace"][0]["args"]["city"] == "Kandy"
+    mock_service.check_delivery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_check_delivery_missing_date_sets_session_awaiting_flag() -> None:
+    """Asking for delivery date persists session_awaiting_delivery_date for the next turn."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Kandy"},
+            rationale="check delivery",
+        ),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="can you deliver?")],
+        "session_delivery_city_canonical": "Kandy",
+    }
+
+    with (
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["session_awaiting_delivery_date"] is True
+    mock_service.check_delivery.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_check_delivery_success_clears_session_awaiting_flag() -> None:
+    """Successful check_delivery clears session_awaiting_delivery_date."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Kandy", "delivery_date": "2026-06-13"},
+            rationale="check delivery",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="tomorrow")],
+        "session_delivery_city_canonical": "Kandy",
+        "session_awaiting_delivery_date": True,
+        "delivery_date": "2026-06-13",
+    }
+
+    with (
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["session_awaiting_delivery_date"] is False
+    assert result["tool_trace"][0]["args"]["city"] == "Kandy"
+    assert result["tool_trace"][0]["args"]["delivery_date"] == "2026-06-13"
 
 
 def test_planner_system_instruction_scopes_recipient_facts_without_reference() -> None:

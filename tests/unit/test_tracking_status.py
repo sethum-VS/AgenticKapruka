@@ -77,6 +77,22 @@ def test_render_tracking_status_includes_timeline_steps() -> None:
     assert "VIMP34456CB2" in normalized
 
 
+def test_render_tracking_status_recipient_phone_without_html_artifacts() -> None:
+    """Eval B-06: tracking partial must not render Kapruka HTML tag leaks in phone."""
+    payload = {
+        **_TRACK_ORDER_JSON,
+        "recipient": {**_TRACK_ORDER_JSON["recipient"], "phone": "0716608447<BR"},
+    }
+    tracking = TrackOrderOutput.model_validate(payload)
+    html = render_tracking_status(tracking=tracking)
+    normalized = normalize_html_snapshot(html)
+
+    assert 'data-testid="tracking-recipient-phone"' in normalized
+    assert "0716608447" in normalized
+    assert "<BR" not in normalized.upper()
+    assert "<br" not in normalized
+
+
 def test_build_tracking_status_html_from_tool_results() -> None:
     html = build_tracking_status_html({TRACK_ORDER_TOOL: _TRACK_ORDER_JSON})
     assert html is not None

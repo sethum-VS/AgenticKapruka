@@ -6,6 +6,7 @@ import re
 from datetime import date, timedelta
 from typing import Any
 
+from lib.chat.query_preprocessor import extract_target_city
 from lib.utils.timezone import colombo_today, colombo_today_iso, is_past_colombo_date
 
 _ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
@@ -136,6 +137,13 @@ def normalize_delivery_date(
         return parsed.isoformat()
 
     return None
+
+
+def is_delivery_date_only_message(text: str, *, today: date | None = None) -> bool:
+    """True when the message names a delivery date but no destination city."""
+    if normalize_delivery_date({}, text, today=today) is None:
+        return False
+    return extract_target_city(text) is None
 
 
 def delivery_date_clarifying_question() -> str:

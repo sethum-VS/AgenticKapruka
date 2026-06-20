@@ -10,7 +10,9 @@ from collections.abc import Iterator
 
 import httpx
 import pytest
+from playwright.sync_api import Page
 from tests.e2e.e2e_app import E2E_PORT
+from tests.e2e.helpers import reset_e2e_session
 
 E2E_BASE_URL = f"http://localhost:{E2E_PORT}"
 
@@ -31,6 +33,12 @@ def _e2e_health_ok() -> bool:
         return response.status_code in {200, 503}
     except httpx.HTTPError:
         return False
+
+
+@pytest.fixture(autouse=True)
+def _isolated_e2e_session(page: Page, base_url: str) -> None:
+    """Fresh fakeredis checkpoint + session cookie before each browser E2E test."""
+    reset_e2e_session(page, base_url)
 
 
 @pytest.fixture(scope="session", autouse=True)

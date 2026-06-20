@@ -27,6 +27,7 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   cake_mom_colombo    ~8–25s  carousel OR zone clarify OR delivery copy; no API errors
   roses_galle_tomorrow ~8–25s delivery markers for Galle; no API errors
   gift_ideas_5000     ~8–20s  gift/voucher carousel first item ≤5000 LKR
+  roses_under_budget  ~8–20s  in-budget rose carousel; reply must not negate results (Eval B-03)
   flowers_fruit_kandy ~8–20s  in-budget carousel; no puja/pooja in top slots
   track_vimp_regression ~5–15s order-tracking card (regression after eval block)
 
@@ -219,6 +220,21 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         max_first_carousel_price=5000.0,
         expect_carousel_keywords=("gift", "voucher"),
         forbidden_substrings=_API_ERROR_FORBIDDEN,
+    ),
+    TurnScenario(
+        name="roses_under_budget",
+        message="fresh roses under 5000 LKR",
+        expect_carousel=True,
+        max_first_carousel_price=5000.0,
+        expect_carousel_keywords=("rose",),
+        forbidden_substrings=(
+            *_API_ERROR_FORBIDDEN,
+            "couldn't find",
+            "could not find",
+            "no fresh",
+            "none within",
+            "no options under",
+        ),
     ),
     TurnScenario(
         name="flowers_fruit_kandy",

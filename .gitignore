@@ -73,11 +73,13 @@ ralph-iter.*
 .dev/
 .cursorrules
 
-# Release notes — maintained locally, not pushed to GitHub
+# Local documents and release notes — maintained locally, not pushed to GitHub
 CHANGELOG.md
+AGENTS.md
 
 # Ralph loops — local agent workflow (not pushed to GitHub)
 scripts/ralph*.sh
+scripts/agy-ralph*.sh
 RALPH_PROMPT.md
 prd.json
 progress.txt

@@ -130,6 +130,37 @@ def test_base_html_includes_cart_drawer() -> None:
     assert 'data-testid="cart-icon"' in html
 
 
+def test_cart_drawer_flex_scroll_containers_have_min_h_0() -> None:
+    """Aside and inner scroll area need min-h-0 so line items scroll on desktop."""
+    html = render_cart_drawer(items=[])
+
+    assert 'data-testid="cart-drawer-panel"' in html
+    assert "flex min-h-0 w-full max-w-sm flex-col" in html
+    assert 'class="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-4"' in html
+
+
+def test_cart_panel_swap_target_inside_scroll_wrapper() -> None:
+    """HTMX outerHTML on #cart-panel replaces only cart_partial, not the scroll shell."""
+    items = [
+        StoredCartItem(
+            product_id="cake001",
+            quantity=1,
+            icing_text=None,
+            name="Vanilla Cake",
+            price_amount=3500.0,
+            price_currency="LKR",
+        ),
+    ]
+    drawer_html = render_cart_drawer(items=items)
+    partial_html = render_cart_partial(items=items)
+
+    scroll_idx = drawer_html.index("overflow-y-auto")
+    panel_idx = drawer_html.index('\n  id="cart-panel"')
+    assert scroll_idx < panel_idx
+    assert '\n  id="cart-panel"' in partial_html
+    assert "overflow-y-auto" not in partial_html
+
+
 def test_cart_drawer_embeds_cart_partial_markup() -> None:
     items = [
         StoredCartItem(

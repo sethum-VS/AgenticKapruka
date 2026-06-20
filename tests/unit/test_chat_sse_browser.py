@@ -257,6 +257,73 @@ def test_chat_sse_clears_sending_and_pending_bubble_on_error() -> None:
 
 
 @pytest.mark.browser
+def test_chat_sse_clears_input_immediately_while_sending() -> None:
+    """Textarea clears on submit while Sending… stays visible until the stream completes."""
+    sse_body = (
+        "event: message\n"
+        'data: <div id="user-msg">You said hello</div>\n\n'
+        "event: message\n"
+        'data: <div id="assistant-final">Done</div>\n\n'
+    )
+    held_routes: list[Route] = []
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def hold_stream(route: Route) -> None:
+            held_routes.append(route)
+
+        page.route("http://localhost/chat/stream", hold_stream)
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+
+        page.fill("#chat-message", "Hello")
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const input = document.getElementById('chat-message');
+              const indicator = document.getElementById('chat-loading');
+              const form = document.getElementById('chat-form');
+              return input
+                && input.value === ''
+                && input.readOnly
+                && indicator
+                && indicator.classList.contains('htmx-request')
+                && form
+                && form.classList.contains('htmx-request');
+            }""",
+            timeout=1000,
+        )
+
+        assert len(held_routes) == 1
+        held_routes[0].fulfill(
+            status=200,
+            headers={"Content-Type": "text/event-stream"},
+            body=sse_body,
+        )
+        page.wait_for_function(
+            """() => {
+              const form = document.getElementById('chat-form');
+              const indicator = document.getElementById('chat-loading');
+              const input = document.getElementById('chat-message');
+              const button = document.querySelector('#chat-form button[type="submit"]');
+              return form
+                && !form.classList.contains('htmx-request')
+                && indicator
+                && !indicator.classList.contains('htmx-request')
+                && input
+                && !input.readOnly
+                && button
+                && !button.disabled;
+            }""",
+            timeout=1000,
+        )
+
+        browser.close()
+
+
+@pytest.mark.browser
 def test_chat_suggestion_chip_fills_input_and_submits() -> None:
     """Clicking a welcome suggestion chip fills the input and starts the chat stream."""
     captured_bodies: list[str] = []

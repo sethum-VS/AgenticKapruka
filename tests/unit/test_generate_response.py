@@ -15,12 +15,14 @@ from graphs.nodes.generate_response import (
     _apply_perishable_delivery_honesty,
     _build_discovery_template_reply,
     _build_user_prompt,
+    _build_verified_city_delivery_line,
     _build_verified_delivery_fee_line,
     _cap_search_products_for_llm_context,
     _format_product_line,
     _resolve_effective_tool_results,
     build_agent_tool_error_message,
     build_products_carousel_html,
+    carousel_consistency_guard,
     delivery_claim_guard,
     extract_search_products,
     generate_response,
@@ -1209,6 +1211,152 @@ def test_delivery_claim_guard_city_date_asks_before_fee() -> None:
     assert "Colombo" in guarded
     assert "won't quote a fee" in guarded
     assert "Rs. 400" not in guarded
+
+
+def test_carousel_consistency_guard_rewrites_negated_reply_with_products() -> None:
+    """Eval B-03: negation copy is replaced when search_products returned carousel picks."""
+    products = [
+        _product("flower001", "6 Red Rose Bouquet", amount=4500.0),
+        _product("flower002", "Blush Roses Combo", amount=4800.0),
+    ]
+    reply = (
+        "I couldn't find any fresh roses within your budget on Kapruka. "
+        "You might try widening your search."
+    )
+    guarded = carousel_consistency_guard(
+        reply,
+        products,
+        user_message="fresh roses under 5000 LKR",
+    )
+    assert "couldn't find" not in guarded.lower()
+    assert "thoughtful Kapruka picks" in guarded
+    assert "6 Red Rose Bouquet" in guarded
+    assert "Blush Roses Combo" in guarded
+
+
+def test_carousel_consistency_guard_passes_through_positive_reply() -> None:
+    products = [_product("flower001", "6 Red Rose Bouquet", amount=4500.0)]
+    reply = "Here are some lovely rose options within your budget."
+    assert carousel_consistency_guard(reply, products) == reply
+
+
+def test_carousel_consistency_guard_skips_when_no_products() -> None:
+    reply = "I couldn't find any fresh roses within your budget."
+    assert carousel_consistency_guard(reply, []) == reply
+
+
+@pytest.mark.asyncio
+async def test_generate_response_roses_under_budget_guard_rewrites_llm_negation() -> None:
+    """Eval B-03: carousel and reply agree when LLM falsely claims no in-budget roses."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="I couldn't find any fresh roses under Rs. 5,000 on Kapruka right now.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                _product("flower001", "6 Red Rose Bouquet", amount=4500.0),
+                _product("flower002", "Premium Rose Arrangement", amount=4900.0),
+            ],
+        },
+    }
+    state: AgentState = {
+        "messages": [HumanMessage(content="fresh roses under 5000 LKR")],
+        "tool_results": tool_results,
+        "session_id": "sess-roses-budget",
+        "session_budget_max": 5000.0,
+        "currency": "LKR",
+        "intent": "discovery",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "couldn't find" not in result["assistant_message"].lower()
+    assert "no fresh" not in result["assistant_message"].lower()
+    assert "thoughtful Kapruka picks" in result["assistant_message"]
+    assert "6 Red Rose Bouquet" in result["assistant_message"]
+    assert 'data-testid="product-carousel"' in result["response_html"]
+
+
+def test_build_verified_city_delivery_line_omits_checked_date() -> None:
+    line = _build_verified_city_delivery_line(
+        city="Kandy",
+        rate=500.0,
+        currency="LKR",
+    )
+    assert line == "Delivery to Kandy: Rs. 500 flat rate per order (verified with Kapruka)"
+    assert " on " not in line
+
+
+def test_apply_perishable_delivery_honesty_preflight_city_only_without_date_copy() -> None:
+    """Preflight tool_trace renders city fee line without claiming a delivery date."""
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {"city": "Kandy"},
+            "result": {
+                "city": "Kandy",
+                "now": "2026-06-12T12:00:00+05:30",
+                "checked_date": "2026-06-12",
+                "available": True,
+                "rate": 500.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": None,
+            },
+        },
+    ]
+    reply, delivery_html = _apply_perishable_delivery_honesty(
+        delivery_date_clarifying_question(),
+        tool_trace,
+    )
+    assert "Delivery to Kandy: Rs. 500 flat rate per order (verified with Kapruka)" in reply
+    assert "on 2026-06-12" not in reply
+    assert delivery_html is None
+
+
+@pytest.mark.asyncio
+async def test_generate_response_preflight_trace_renders_deliverable_before_date_ask() -> None:
+    """Preflight check_delivery in tool_trace surfaces fee without agent_loop check_delivery."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="can you deliver?")],
+        "intent": "discovery",
+        "session_delivery_city_canonical": "Kandy",
+        "agent_clarifying_question": delivery_date_clarifying_question(),
+        "agent_loop_exit_reason": "ask_user",
+        "tool_trace": [
+            {
+                "name": CHECK_DELIVERY_TOOL,
+                "args": {"city": "Kandy"},
+                "result": {
+                    "city": "Kandy",
+                    "now": "2026-06-12T12:00:00+05:30",
+                    "checked_date": "2026-06-12",
+                    "available": True,
+                    "rate": 500.0,
+                    "currency": "LKR",
+                    "reason": None,
+                    "next_available_date": None,
+                    "perishable_warning": None,
+                },
+            },
+        ],
+        "session_id": "sess-preflight-reply",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    message = result["assistant_message"]
+    assert "Delivery to Kandy: Rs. 500 flat rate per order (verified with Kapruka)" in message
+    assert delivery_date_clarifying_question() in message
+    assert "on 2026-06-12" not in message
+    mock_client.models.generate_content.assert_not_called()
 
 
 def test_build_verified_delivery_fee_line_uses_format_currency() -> None:

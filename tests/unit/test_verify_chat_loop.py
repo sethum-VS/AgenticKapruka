@@ -115,12 +115,43 @@ def test_roses_galle_tomorrow_rejects_unknown_city() -> None:
     assert any("Unknown city" in item for item in failures)
 
 
+def test_roses_under_budget_forbids_negation_with_carousel() -> None:
+    """Eval B-03: carousel present — reply must not claim no in-budget roses."""
+    scenario = TurnScenario(
+        name="roses_under_budget",
+        message="fresh roses under 5000 LKR",
+        expect_carousel=True,
+        max_first_carousel_price=5000.0,
+        expect_carousel_keywords=("rose",),
+        forbidden_substrings=(
+            *_vcl._API_ERROR_FORBIDDEN,
+            "couldn't find",
+            "could not find",
+            "no fresh",
+            "none within",
+            "no options under",
+        ),
+    )
+    ok_html = (
+        "<p>Here are a few thoughtful Kapruka picks: 6 Red Rose Bouquet.</p>"
+        + _carousel_html("6 Red Rose Bouquet", first_price="4,500")
+    )
+    assert _evaluate_turn(scenario, ok_html) == []
+
+    contradictory = "<p>I couldn't find any fresh roses under your budget.</p>" + _carousel_html(
+        "6 Red Rose Bouquet", first_price="4,500"
+    )
+    failures = _evaluate_turn(scenario, contradictory)
+    assert any("forbidden substring" in item for item in failures)
+
+
 def test_customer_eval_scenarios_registered() -> None:
     names = {scenario.name for scenario in _vcl.SCENARIOS}
     expected = {
         "cake_mom_colombo",
         "roses_galle_tomorrow",
         "gift_ideas_5000",
+        "roses_under_budget",
         "delivery_followup",
         "flowers_fruit_kandy",
         "track_vimp_regression",

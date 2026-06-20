@@ -13,6 +13,13 @@ _FLOWER_FRUIT_INTENT = re.compile(
     re.I,
 )
 _PUJA_DENYLIST = re.compile(r"\b(?:puja|pooja|pooj?a|watti|religious)\b", re.I)
+_BIRTHDAY_PRODUCT_RE = re.compile(r"\bbirthday\b", re.I)
+_CAKE_ID_PREFIX = re.compile(r"^cake", re.I)
+_DESSERT_CATEGORY_RE = re.compile(r"\b(?:chocolate|desserts?)\b", re.I)
+_GENERIC_DESSERT_RE = re.compile(
+    r"\b(?:lava\s+cake|dessert|mousse|brownie|loaf\s+cake|pudding|tiramisu)\b",
+    re.I,
+)
 
 PUJA_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
     "Puja",
@@ -64,6 +71,69 @@ def _product_text_blob(product: dict[str, Any]) -> str:
 def product_matches_puja_denylist(product: dict[str, Any]) -> bool:
     """True when product name, summary, or category matches puja/religious denylist."""
     return bool(_PUJA_DENYLIST.search(_product_text_blob(product)))
+
+
+def _product_category_text(product: dict[str, Any]) -> str:
+    category = product.get("category")
+    if isinstance(category, dict):
+        parts = [str(category.get(key) or "") for key in ("name", "slug", "id")]
+        return " ".join(parts)
+    return ""
+
+
+def product_is_birthday_cake_product(product: dict[str, Any]) -> bool:
+    """True when Kapruka metadata marks the item as a birthday cake."""
+    if _BIRTHDAY_PRODUCT_RE.search(_product_category_text(product)):
+        return True
+    name = str(product.get("name") or "")
+    if _BIRTHDAY_PRODUCT_RE.search(name):
+        return True
+    product_id = str(product.get("id") or "")
+    return bool(_CAKE_ID_PREFIX.match(product_id) and _BIRTHDAY_PRODUCT_RE.search(name))
+
+
+def product_is_generic_dessert(product: dict[str, Any]) -> bool:
+    """True for chocolate/dessert items that are not birthday cakes."""
+    if product_is_birthday_cake_product(product):
+        return False
+    if _DESSERT_CATEGORY_RE.search(_product_category_text(product)):
+        return True
+    return bool(_GENERIC_DESSERT_RE.search(_product_text_blob(product)))
+
+
+def apply_birthday_cake_curation(
+    products: list[dict[str, Any]],
+    *,
+    query: str,
+    hybrid_context: dict[str, Any] | None = None,
+    graph_context_available: bool = False,
+) -> list[dict[str, Any]]:
+    """Prefer birthday-category cakes and demote generic desserts for birthday turns."""
+    from lib.neo4j.hybrid_context import is_birthday_cake_scoped_turn
+
+    if not is_birthday_cake_scoped_turn(query, hybrid_context):
+        return list(products)
+
+    birthday: list[dict[str, Any]] = []
+    neutral: list[dict[str, Any]] = []
+    desserts: list[dict[str, Any]] = []
+    for product in products:
+        if product_is_birthday_cake_product(product):
+            birthday.append(product)
+        elif product_is_generic_dessert(product):
+            desserts.append(product)
+        else:
+            neutral.append(product)
+
+    if birthday:
+        ordered = birthday + neutral
+        if graph_context_available:
+            return ordered + desserts
+        return ordered
+
+    if graph_context_available:
+        return neutral + desserts
+    return neutral
 
 
 def demote_puja_products(
@@ -152,19 +222,42 @@ def curate_carousel_products(
     budget_max: float | None,
     currency: str,
     graph_context_available: bool = False,
+    hybrid_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Apply puja relevance curation then budget-aware carousel ordering."""
-    if not is_flower_fruit_intent(query):
-        return sort_and_filter_by_budget(products, budget_max, currency)
+    """Apply birthday/puja relevance curation then budget-aware carousel ordering."""
+    from lib.neo4j.hybrid_context import is_birthday_cake_scoped_turn
 
-    if graph_context_available:
-        preferred = [product for product in products if not product_matches_puja_denylist(product)]
-        demoted = [product for product in products if product_matches_puja_denylist(product)]
+    scoped = apply_birthday_cake_curation(
+        products,
+        query=query,
+        hybrid_context=hybrid_context,
+        graph_context_available=graph_context_available,
+    )
+    if is_birthday_cake_scoped_turn(query, hybrid_context):
+        birthday_items = [
+            product for product in scoped if product_is_birthday_cake_product(product)
+        ]
+        other_items = [
+            product for product in scoped if not product_is_birthday_cake_product(product)
+        ]
         return sort_and_filter_by_budget(
-            preferred,
+            birthday_items,
             budget_max,
             currency,
-        ) + sort_and_filter_by_budget(demoted, budget_max, currency)
+        ) + sort_and_filter_by_budget(other_items, budget_max, currency)
+    if is_flower_fruit_intent(query):
+        if graph_context_available:
+            preferred = [
+                product for product in scoped if not product_matches_puja_denylist(product)
+            ]
+            demoted = [product for product in scoped if product_matches_puja_denylist(product)]
+            return sort_and_filter_by_budget(
+                preferred,
+                budget_max,
+                currency,
+            ) + sort_and_filter_by_budget(demoted, budget_max, currency)
 
-    filtered = filter_puja_products(products, query)
-    return sort_and_filter_by_budget(filtered, budget_max, currency)
+        filtered = filter_puja_products(scoped, query)
+        return sort_and_filter_by_budget(filtered, budget_max, currency)
+
+    return sort_and_filter_by_budget(scoped, budget_max, currency)

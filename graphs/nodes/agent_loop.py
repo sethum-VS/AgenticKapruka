@@ -22,6 +22,7 @@ from lib.chat.delivery_dates import (
     normalize_delivery_date,
 )
 from lib.chat.product_curation import (
+    apply_birthday_cake_curation,
     apply_puja_curation,
     has_graph_hybrid_context,
     is_flower_fruit_intent,
@@ -40,6 +41,10 @@ from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.neo4j.hybrid_context import (
+    is_birthday_cake_intent,
+    merge_planner_search_args,
+)
 from lib.utils.timezone import colombo_today_iso
 from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_turn
 
@@ -353,14 +358,53 @@ def _last_search_products_from_trace(
         user_message = _extract_latest_user_message(state.get("messages") or [])
         hybrid_context = state.get("hybrid_context") or {}
         return (
-            apply_puja_curation(
-                products,
+            apply_birthday_cake_curation(
+                apply_puja_curation(
+                    products,
+                    query=user_message,
+                    graph_context_available=has_graph_hybrid_context(hybrid_context),
+                ),
                 query=user_message,
+                hybrid_context=hybrid_context,
                 graph_context_available=has_graph_hybrid_context(hybrid_context),
             )
             or None
         )
     return None
+
+
+def _curate_search_trace_result(
+    result: Any,
+    *,
+    state: AgentState,
+) -> dict[str, Any] | Any:
+    """Rewrite search trace payload so carousel/LLM see birthday-cake curated hits."""
+    if not isinstance(result, dict) or not _search_has_products(result):
+        return result
+    raw_results = result.get("results")
+    if not isinstance(raw_results, list):
+        return result
+    products = [item for item in raw_results if isinstance(item, dict)]
+    if not products:
+        return result
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    hybrid_context = state.get("hybrid_context") or {}
+    graph_up = has_graph_hybrid_context(hybrid_context)
+    curated = apply_birthday_cake_curation(
+        apply_puja_curation(
+            products,
+            query=user_message,
+            graph_context_available=graph_up,
+        ),
+        query=user_message,
+        hybrid_context=hybrid_context,
+        graph_context_available=graph_up,
+    )
+    if curated == products:
+        return result
+    updated = dict(result)
+    updated["results"] = curated
+    return updated
 
 
 def _turn_needs_catalog(state: AgentState) -> bool:
@@ -425,6 +469,15 @@ def _format_planner_query_rewrite_hints(
             'Broad "cakes" query: prefer kapruka_search_products with q="birthday cake" '
             "unless the customer named a specific cake type."
         )
+    if _BIRTHDAY_CAKE.search(user_message) or is_birthday_cake_intent(user_message):
+        birthday_hint = (
+            'Explicit birthday cake request: prefer kapruka_search_products with q="birthday cake" '
+            'and category="Birthday"; avoid generic chocolate or dessert-only searches that omit '
+            "cake products."
+        )
+        if graph_context_available:
+            birthday_hint += " Graph exclude_categories lists dessert departments to deprioritize."
+        hints.append(birthday_hint)
     if _MOM_BIRTHDAY.search(user_message):
         hints.append(
             "Mom/mother + birthday occasion: bias search q toward birthday cakes, flowers, "
@@ -622,10 +675,11 @@ async def agent_loop(
     rate_limit_key = client_ip or state.get("session_id") or "127.0.0.1"
     currency = _resolve_currency(state)
 
-    tool_trace: list[ToolInvocation] = []
+    tool_trace: list[ToolInvocation] = list(state.get("tool_trace") or [])
     tool_call_count = 0
     agent_clarifying_question: str | None = None
     agent_tool_error: dict[str, str] | None = None
+    session_awaiting_delivery_date: bool | None = None
     agent_loop_done = False
     force_finish = False
     force_finish_reason: str | None = None
@@ -633,6 +687,7 @@ async def agent_loop(
     planner_iterations = 0
     refined_intent: Intent | None = None
     search_broaden_applied = False
+    discovery_search_merged = False
 
     _emit_status(_DEFAULT_STATUS_MESSAGE)
 
@@ -709,18 +764,23 @@ async def agent_loop(
         raw_args = normalize_planner_tool_args(tool_name, dict(step.tool_args or {}))
         enriched_args = inject_currency(tool_name, raw_args, currency)
 
-        if _is_duplicate_invocation(tool_trace, tool_name, enriched_args):
-            logger.debug(
-                "agent_loop: duplicate %s with identical args; forcing finish next iteration",
-                tool_name,
+        if tool_name == SEARCH_PRODUCTS_TOOL and not discovery_search_merged:
+            enriched_args = merge_planner_search_args(
+                enriched_args,
+                user_message=_extract_latest_user_message(state.get("messages") or []),
+                hybrid_context=state.get("hybrid_context") or {},
+                currency=currency,
+                intent_metadata=state.get("intent_metadata"),
             )
-            force_finish = True
-            force_finish_reason = "duplicate_guard"
-            continue
+            discovery_search_merged = True
 
         if tool_name == CHECK_DELIVERY_TOOL:
             user_message = _extract_latest_user_message(state.get("messages") or [])
             canonical_city = state.get("delivery_city_canonical")
+            if not (isinstance(canonical_city, str) and canonical_city.strip()):
+                session_city = state.get("session_delivery_city_canonical")
+                if isinstance(session_city, str) and session_city.strip():
+                    canonical_city = session_city.strip()
             if isinstance(canonical_city, str) and canonical_city.strip():
                 enriched_args["city"] = canonical_city.strip()
             state_date = state.get("delivery_date")
@@ -729,11 +789,21 @@ async def agent_loop(
             resolved_date = normalize_delivery_date(enriched_args, user_message)
             if resolved_date is None:
                 agent_clarifying_question = delivery_date_clarifying_question()
+                session_awaiting_delivery_date = True
                 exit_reason = "ask_user"
                 agent_loop_done = True
                 break
             enriched_args = {**enriched_args, "delivery_date": resolved_date}
             enriched_args.pop("date", None)
+
+        if _is_duplicate_invocation(tool_trace, tool_name, enriched_args):
+            logger.debug(
+                "agent_loop: duplicate %s with identical args; forcing finish next iteration",
+                tool_name,
+            )
+            force_finish = True
+            force_finish_reason = "duplicate_guard"
+            continue
 
         _emit_status(_status_message_for_tool(tool_name))
 
@@ -744,6 +814,8 @@ async def agent_loop(
             client_ip=rate_limit_key,
             currency=currency,
         )
+        if tool_name == SEARCH_PRODUCTS_TOOL:
+            result = _curate_search_trace_result(result, state=state)
         tool_trace.append(
             {
                 "name": tool_name,
@@ -772,6 +844,11 @@ async def agent_loop(
             )
             break
 
+        if tool_name == CHECK_DELIVERY_TOOL and not (
+            isinstance(result, dict) and result.get("error")
+        ):
+            session_awaiting_delivery_date = False
+
         if (
             tool_name == SEARCH_PRODUCTS_TOOL
             and not _search_has_products(result)
@@ -792,6 +869,7 @@ async def agent_loop(
                     client_ip=rate_limit_key,
                     currency=currency,
                 )
+                broaden_result = _curate_search_trace_result(broaden_result, state=state)
                 tool_trace.append(
                     {
                         "name": SEARCH_PRODUCTS_TOOL,
@@ -864,6 +942,8 @@ async def agent_loop(
         updates["intent"] = refined_intent
     if search_broaden_applied:
         updates["search_broaden_applied"] = True
+    if session_awaiting_delivery_date is not None:
+        updates["session_awaiting_delivery_date"] = session_awaiting_delivery_date
 
     last_search_products = _last_search_products_from_trace(tool_trace, state=state)
     if last_search_products:
