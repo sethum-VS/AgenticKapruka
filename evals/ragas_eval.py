@@ -418,8 +418,11 @@ def build_eval_genai_client(
     intent_response = MagicMock()
     intent_response.parsed = IntentClassification(intent=default_intent)
     intent_response.text = json.dumps({"intent": default_intent})
-    planner_turn_contents: str | None = None
-    planner_turn_index = 0
+    planner_state: dict[str, Any] = {"contents": None, "index": 0}
+
+    def reset_planner_state() -> None:
+        planner_state["contents"] = None
+        planner_state["index"] = 0
 
     def generate_content(
         *,
@@ -428,7 +431,6 @@ def build_eval_genai_client(
         config: types.GenerateContentConfig | None = None,
         **kwargs: Any,
     ) -> MagicMock:
-        nonlocal planner_turn_contents, planner_turn_index
         _ = model, kwargs
         response = MagicMock()
         if config is not None and config.response_schema is IntentClassification:
@@ -438,15 +440,15 @@ def build_eval_genai_client(
             return response
 
         if config is not None and config.response_schema is AgentPlannerStep:
-            if contents != planner_turn_contents:
-                planner_turn_contents = contents
-                planner_turn_index = 0
+            if contents != planner_state["contents"]:
+                planner_state["contents"] = contents
+                planner_state["index"] = 0
             step = _planner_step_for_eval_case(
                 case,
-                planner_call_index=planner_turn_index,
+                planner_call_index=planner_state["index"],
                 user_contents=contents,
             )
-            planner_turn_index += 1
+            planner_state["index"] += 1
             response.parsed = step
             response.text = step.model_dump_json()
             return response
@@ -464,6 +466,7 @@ def build_eval_genai_client(
         return response
 
     client.models.generate_content.side_effect = generate_content
+    client.reset_planner_state = reset_planner_state  # type: ignore[attr-defined]
     return client
 
 

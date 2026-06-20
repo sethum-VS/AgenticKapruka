@@ -26,6 +26,7 @@ from lib.redis.client import RedisClient
 E2E_PORT = 8080
 _mcp_client: MockMCPHttpClient | None = None
 _redis_client: RedisClient | None = None
+_genai_client: Any = None
 
 
 async def _fakeredis_asetup(self: AsyncRedisSaver) -> None:
@@ -50,7 +51,7 @@ def get_e2e_mcp_client() -> MockMCPHttpClient:
 
 def create_e2e_app() -> FastAPI:
     """Build FastAPI app with in-memory Redis, mock MCP, and mock Gemini."""
-    global _mcp_client, _redis_client
+    global _mcp_client, _redis_client, _genai_client
 
     _apply_e2e_env()
     AsyncRedisSaver.asetup = _fakeredis_asetup  # type: ignore[method-assign]
@@ -58,6 +59,7 @@ def create_e2e_app() -> FastAPI:
     fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
     _redis_client = RedisClient("redis://localhost:6379/0", client=fake)
     _mcp_client = MockMCPHttpClient()
+    _genai_client = build_eval_genai_client(None)
     kapruka_service = KaprukaService(_redis_client, _mcp_client)
 
     application = create_app()
@@ -77,7 +79,7 @@ def create_e2e_app() -> FastAPI:
         return ShoppingGraphDeps(
             kapruka_service=kapruka_service,
             client_ip=client_ip_from_request(request),
-            genai_client=build_eval_genai_client(None),
+            genai_client=_genai_client,
             zep_client=None,
             redis_client=redis,
         )
@@ -93,6 +95,17 @@ def create_e2e_app() -> FastAPI:
     async def e2e_mcp_calls_reset() -> dict[str, str]:
         """Clear the mock MCP call log between HybridRAG E2E cases."""
         _mcp_client.call_log.clear()
+        return {"status": "ok"}
+
+    @application.post("/e2e/reset", include_in_schema=False)
+    async def e2e_reset() -> dict[str, str]:
+        """Reset shared E2E state: MCP log, fakeredis checkpoints, mock planner."""
+        _mcp_client.call_log.clear()
+        if _redis_client is not None and _redis_client._client is not None:
+            await _redis_client._client.flushdb()
+        reset_planner = getattr(_genai_client, "reset_planner_state", None)
+        if callable(reset_planner):
+            reset_planner()
         return {"status": "ok"}
 
     return application
