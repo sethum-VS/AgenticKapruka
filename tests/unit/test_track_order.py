@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from lib.kapruka.errors import KaprukaNotFoundError
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.tools.track_order import TOOL_NAME, track_order
-from lib.kapruka.types import TrackOrderOutput
+from lib.kapruka.types import TrackOrderOutput, TrackOrderRecipient
 
 _TRACK_ORDER_JSON: dict[str, Any] = {
     "order_number": "VIMP34456CB2",
@@ -147,3 +147,26 @@ async def test_track_order_parses_money_shaped_amount_from_mcp(
     result = await track_order(mcp_client, order_number="VIMP34456CB2")
 
     assert result.amount == "LKR 4,970"
+
+
+def test_track_order_recipient_strips_html_from_phone() -> None:
+    """Eval B-06: Kapruka API phone field may leak HTML tags."""
+    recipient = TrackOrderRecipient.model_validate(
+        {
+            "name": "Test User",
+            "phone": "0716608447<BR",
+            "address": "123 Main St",
+            "city": "Colombo",
+        }
+    )
+    assert recipient.phone == "0716608447"
+
+
+def test_track_order_output_strips_html_from_recipient_phone() -> None:
+    """Full track-order payload coerces dirty recipient phone before render."""
+    payload = {
+        **_TRACK_ORDER_JSON,
+        "recipient": {**_TRACK_ORDER_JSON["recipient"], "phone": "0716608447<BR>"},
+    }
+    result = TrackOrderOutput.model_validate(payload)
+    assert result.recipient.phone == "0716608447"

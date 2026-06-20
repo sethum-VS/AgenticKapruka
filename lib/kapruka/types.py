@@ -384,6 +384,15 @@ class TrackOrderRecipient(BaseModel):
     address: str
     city: str
 
+    @field_validator("phone")
+    @classmethod
+    def strip_html_from_phone(cls, value: str) -> str:
+        """Kapruka track-order API may append HTML tags (e.g. ``0716608447<BR``)."""
+        phone = re.sub(r"<[^>]+>", "", value)
+        if "<" in phone:
+            phone = phone.split("<", 1)[0]
+        return phone.strip()
+
 
 class TrackOrderProgressEvent(BaseModel):
     """Single step in an order progress timeline."""
