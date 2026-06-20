@@ -323,6 +323,47 @@ def test_build_discovery_search_args_strips_trailing_city_from_query() -> None:
     assert args["category"] == "Birthday"
 
 
+def test_canonical_birthday_cake_search_q_prefers_chocolate_variant() -> None:
+    from lib.neo4j.hybrid_context import canonical_birthday_cake_search_q
+
+    assert canonical_birthday_cake_search_q("She loves chocolate birthday cake") == (
+        "chocolate birthday cake"
+    )
+    assert canonical_birthday_cake_search_q("birthday cake for mom") == "birthday cake"
+
+
+def test_build_discovery_search_args_chocolate_birthday_cake_eval_scenario() -> None:
+    args = build_discovery_search_args(
+        (
+            "Hi! I'm looking for a birthday cake for my wife's 30th birthday. "
+            "She loves chocolate. Budget around Rs. 3000. We're in Kandy."
+        ),
+        {"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+    assert args["q"] == "chocolate birthday cake"
+    assert args["category"] == "Birthday"
+    assert args["max_price"] == 3000.0
+
+
+def test_merge_planner_search_args_overrides_planner_catalog_fields() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "chocolate lava cake", "limit": 20, "currency": "LKR"},
+        user_message=(
+            "Hi! I'm looking for a birthday cake for my wife. She loves chocolate. "
+            "Budget around Rs. 3000. We're in Kandy."
+        ),
+        hybrid_context={"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+    assert merged["q"] == "chocolate birthday cake"
+    assert merged["category"] == "Birthday"
+    assert merged["max_price"] == 3000.0
+    assert merged["limit"] == 20
+
+
 def test_build_discovery_search_args_meta_browse_tolerates_itmes_typo() -> None:
     args = build_discovery_search_args(
         "show me any itmes",

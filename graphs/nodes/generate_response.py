@@ -524,14 +524,16 @@ def _budget_curated_products(
     budget_max: float | None,
     currency: str,
     graph_context_available: bool,
+    hybrid_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Apply puja relevance and budget-aware carousel ordering."""
+    """Apply birthday/puja relevance and budget-aware carousel ordering."""
     return curate_carousel_products(
         products,
         query=query,
         budget_max=budget_max,
         currency=currency,
         graph_context_available=graph_context_available,
+        hybrid_context=hybrid_context,
     )
 
 
@@ -543,6 +545,7 @@ def _cap_search_products_for_llm_context(
     currency: str = "LKR",
     user_message: str = "",
     graph_context_available: bool = False,
+    hybrid_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Slice curated kapruka_search_products results before Gemini synthesis."""
     if not tool_results:
@@ -562,6 +565,7 @@ def _cap_search_products_for_llm_context(
         budget_max=budget_max,
         currency=currency,
         graph_context_available=graph_context_available,
+        hybrid_context=hybrid_context,
     )
     capped_results = curated[:limit]
     if capped_results == raw_results:
@@ -663,6 +667,7 @@ def extract_search_products(
     currency: str = "LKR",
     user_message: str = "",
     graph_context_available: bool = False,
+    hybrid_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Return curated product dicts from kapruka_search_products tool_results, if any."""
     if not tool_results:
@@ -679,6 +684,7 @@ def extract_search_products(
         budget_max=budget_max,
         currency=currency,
         graph_context_available=graph_context_available,
+        hybrid_context=hybrid_context,
     )
 
 
@@ -796,6 +802,7 @@ def build_products_carousel_html(
     currency: str = "LKR",
     user_message: str = "",
     graph_context_available: bool = False,
+    hybrid_context: dict[str, Any] | None = None,
 ) -> str | None:
     """Render product carousel partial when search_products returned results."""
     products = extract_search_products(
@@ -804,6 +811,7 @@ def build_products_carousel_html(
         currency=currency,
         user_message=user_message,
         graph_context_available=graph_context_available,
+        hybrid_context=hybrid_context,
     )
     if not products:
         return None
@@ -1110,6 +1118,7 @@ async def generate_response(
     elif isinstance(turn_budget, (int, float)) and turn_budget > 0:
         budget_max = float(turn_budget)
     graph_context_available = has_graph_hybrid_context(state.get("hybrid_context") or {})
+    hybrid_context = state.get("hybrid_context") or {}
 
     products = extract_search_products(
         tool_results,
@@ -1117,6 +1126,7 @@ async def generate_response(
         currency=currency,
         user_message=user_message,
         graph_context_available=graph_context_available,
+        hybrid_context=hybrid_context,
     )
     products_html = build_products_carousel_html(
         tool_results,
@@ -1124,6 +1134,7 @@ async def generate_response(
         currency=currency,
         user_message=user_message,
         graph_context_available=graph_context_available,
+        hybrid_context=hybrid_context,
     )
 
     client = genai_client
@@ -1136,6 +1147,7 @@ async def generate_response(
             currency=currency,
             user_message=user_message,
             graph_context_available=graph_context_available,
+            hybrid_context=hybrid_context,
         ),
         budget_max=budget_max,
         currency=currency,

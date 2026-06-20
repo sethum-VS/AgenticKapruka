@@ -46,6 +46,8 @@ def broaden_search_args(args: dict[str, Any], step: BroadenStep) -> dict[str, An
         return {**args, "q": "voucher"}
 
     if step == "simplify_q":
+        if str(args.get("category") or "").strip().lower() == "birthday":
+            return None
         new_q = q
         changed = False
         for pattern, replacement in _SIMPLIFY_Q_REPLACEMENTS:

@@ -418,7 +418,11 @@ async def test_agent_loop_duplicate_tool_guard_forces_finish() -> None:
         side_effect=planner_steps,
     ):
         result = await agent_loop(
-            _base_state(),
+            {
+                "messages": [HumanMessage(content="chocolate gift hamper for anniversary")],
+                "session_id": "sess-agent-loop-dup",
+                "currency": "LKR",
+            },
             kapruka_service=mock_service,
             client_ip=_CLIENT_IP,
         )
@@ -873,8 +877,52 @@ async def test_agent_loop_empty_search_runs_one_broaden_retry() -> None:
     assert result["search_broaden_applied"] is True
     assert len(result["tool_trace"]) == 2
     assert result["tool_trace"][0]["args"]["q"] == "birthday cake"
-    assert result["tool_trace"][1]["args"]["q"] == "cake"
+    assert "max_price" not in result["tool_trace"][1]["args"]
+    assert result["tool_trace"][1]["args"]["q"] == "birthday cake"
     assert result["last_search_products"] is not None
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_search_merge_overrides_planner_dessert_query() -> None:
+    """Eval B-07: deterministic discovery args override planner dessert-only searches."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "chocolate lava cake", "max_price": 3000.0},
+            rationale="search catalog",
+        ),
+        AgentPlannerStep(
+            action="finish",
+            rationale="done",
+        ),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [
+            HumanMessage(
+                content=("birthday cake for my wife she loves chocolate budget 3000 Kandy"),
+            ),
+        ],
+        "hybrid_context": {"hints": {"occasion": "Birthday"}},
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    search_args = result["tool_trace"][0]["args"]
+    assert search_args["q"] == "chocolate birthday cake"
+    assert search_args["category"] == "Birthday"
+    assert search_args["max_price"] == 3000.0
+    mock_service.search_products.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -915,7 +963,8 @@ async def test_agent_loop_empty_search_broaden_guard_at_most_one_retry() -> None
     assert mock_service.search_products.call_count == 3
     assert result["search_broaden_applied"] is True
     assert len(result["tool_trace"]) == 3
-    assert result["tool_trace"][1]["args"]["q"] == "cake"
+    assert result["tool_trace"][1]["args"]["q"] == "birthday cake"
+    assert "max_price" not in result["tool_trace"][1]["args"]
     assert result["tool_trace"][2]["args"]["q"] == "flowers"
 
 
