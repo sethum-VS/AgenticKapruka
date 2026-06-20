@@ -52,6 +52,7 @@ def test_cart_drawer_js_registers_alpine_component() -> None:
 def test_cart_drawer_empty_state() -> None:
     html = render_cart_drawer(items=[])
 
+    assert 'class="contents"' in html
     assert 'data-testid="cart-drawer"' in html
     assert 'x-data="cartDrawer(0)"' in html
     assert 'data-testid="cart-icon"' in html

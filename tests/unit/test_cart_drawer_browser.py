@@ -10,7 +10,7 @@ pytest.importorskip("playwright.sync_api")
 
 from playwright.sync_api import Page, sync_playwright
 
-from app.templating import render_cart_drawer
+from app.templating import get_templates, render_cart_drawer
 from lib.redis.cart import StoredCartItem
 
 CART_DRAWER_JS = (
@@ -53,7 +53,7 @@ def _wait_for_alpine(page: Page) -> None:
     page.wait_for_function(
         """() => {
           const root = document.querySelector('[data-testid="cart-drawer"]');
-          return window.Alpine && root?._x_dataStack;
+          return window.Alpine && root?._x_dataStack && document.getElementById('cart-panel');
         }"""
     )
 
@@ -129,6 +129,51 @@ def test_cart_drawer_closes_on_escape_key() -> None:
             }"""
         )
         assert _drawer_open_state(page) is False
+
+        browser.close()
+
+
+@pytest.mark.browser
+def test_cart_drawer_full_height_outside_blurred_header() -> None:
+    """Drawer must span the viewport even when the trigger lives in a backdrop-blur header."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 720})
+        panel_html = get_templates().env.get_template("components/cart_drawer_panel.html").render(
+            cart_items=[]
+        )
+        trigger_html = get_templates().env.get_template(
+            "components/cart_drawer_trigger.html"
+        ).render(cart_item_count=0)
+        css = APP_CSS.read_text(encoding="utf-8")
+        page.set_content(
+            f"""<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>{css}</style>
+    <script>{CART_DRAWER_JS}</script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  </head>
+  <body class="bg-commerce-cream">
+    <div class="contents" data-testid="cart-drawer" x-data="cartDrawer(0)" @keydown.escape.window="open && close()">
+      {panel_html}
+      <header class="border-b bg-white/80 backdrop-blur-sm">
+        <div class="flex justify-end p-3">{trigger_html}</div>
+      </header>
+    </div>
+  </body>
+</html>"""
+        )
+        _wait_for_alpine(page)
+        page.locator('[data-testid="cart-icon"]').click()
+        page.wait_for_selector('[data-testid="cart-drawer-panel"]', state="visible")
+
+        panel_height = page.locator('[data-testid="cart-drawer-panel"]').evaluate(
+            "el => el.getBoundingClientRect().height"
+        )
+        viewport_height = page.evaluate("() => window.innerHeight")
+        assert panel_height >= viewport_height - 2
 
         browser.close()
 
