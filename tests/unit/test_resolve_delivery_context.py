@@ -135,5 +135,47 @@ async def test_resolve_delivery_context_resolved_sets_canonical_and_date() -> No
 
     assert result["delivery_city_canonical"] == "Galle"
     assert result["delivery_date"] == "2026-06-13"
+    assert result["session_delivery_city_canonical"] == "Galle"
     assert result["delivery_context_ready"] is True
     assert result.get("agent_clarifying_question") is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_delivery_context_date_only_turn_reuses_session_city() -> None:
+    """Date-only follow-up restores ephemeral city from session_delivery_city_canonical."""
+    service = AsyncMock(spec=KaprukaService)
+    state: AgentState = {
+        "messages": [HumanMessage(content="tomorrow")],
+        "session_id": "sess-resolve-kandy-date",
+        "session_delivery_city_canonical": "Kandy",
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "en",
+            "requires_delivery_validation": False,
+            "target_city": None,
+            "budget_max": None,
+        },
+    }
+    resolved = CityResolution(status="resolved", canonical="Kandy")
+
+    with (
+        patch(
+            "graphs.nodes.resolve_delivery_context.resolve_delivery_city",
+            new=AsyncMock(return_value=resolved),
+        ),
+        patch(
+            "graphs.nodes.resolve_delivery_context.normalize_delivery_date",
+            return_value="2026-06-13",
+        ),
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+    ):
+        result = await resolve_delivery_context(
+            state,
+            kapruka_service=service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["delivery_city_canonical"] == "Kandy"
+    assert result["session_delivery_city_canonical"] == "Kandy"
+    assert result["delivery_date"] == "2026-06-13"
+    assert result["delivery_context_ready"] is True

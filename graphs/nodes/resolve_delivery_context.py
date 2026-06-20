@@ -8,7 +8,7 @@ from typing import Any, Literal
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.chat.city_resolution import resolve_delivery_city
-from lib.chat.delivery_dates import normalize_delivery_date
+from lib.chat.delivery_dates import is_delivery_date_only_message, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.query_preprocessor import extract_target_city
 from lib.kapruka.product_id import contains_product_id
@@ -35,13 +35,19 @@ def route_after_resolve_delivery_context(state: AgentState) -> RouteAfterResolve
     return "agent_loop"
 
 
-def _raw_city_from_state(state: AgentState, user_message: str) -> str | None:
+def _resolve_session_delivery_city(state: AgentState, user_message: str) -> str | None:
+    """Prefer an explicit city this turn; otherwise reuse the session canonical city."""
     intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
     target_city = intent_metadata.get("target_city")
     if isinstance(target_city, str) and target_city.strip():
         return target_city.strip()
     extracted = extract_target_city(user_message)
-    return extracted.strip() if extracted else None
+    if extracted:
+        return extracted.strip()
+    session_city = state.get("session_delivery_city_canonical")
+    if isinstance(session_city, str) and session_city.strip():
+        return session_city.strip()
+    return None
 
 
 def _needs_city_resolution(state: AgentState, user_message: str) -> bool:
@@ -50,7 +56,16 @@ def _needs_city_resolution(state: AgentState, user_message: str) -> bool:
         return True
     if intent_metadata.get("target_city"):
         return True
-    return extract_target_city(user_message) is not None
+    if extract_target_city(user_message) is not None:
+        return True
+    if state.get("session_awaiting_delivery_date"):
+        return True
+    session_city = state.get("session_delivery_city_canonical")
+    return (
+        isinstance(session_city, str)
+        and bool(session_city.strip())
+        and is_delivery_date_only_message(user_message)
+    )
 
 
 async def resolve_delivery_context(
@@ -69,7 +84,7 @@ async def resolve_delivery_context(
         msg = "kapruka_service is required for resolve_delivery_context"
         raise ValueError(msg)
 
-    raw_city = _raw_city_from_state(state, user_message)
+    raw_city = _resolve_session_delivery_city(state, user_message)
     rate_limit_key = client_ip or state.get("session_id") or "127.0.0.1"
     resolution = await resolve_delivery_city(kapruka_service, rate_limit_key, raw_city)
 
@@ -91,6 +106,7 @@ async def resolve_delivery_context(
         return {
             **base,
             "delivery_city_canonical": resolution.canonical,
+            "session_delivery_city_canonical": resolution.canonical,
             "delivery_context_ready": True,
         }
 

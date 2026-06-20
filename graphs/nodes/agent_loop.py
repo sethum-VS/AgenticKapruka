@@ -626,6 +626,7 @@ async def agent_loop(
     tool_call_count = 0
     agent_clarifying_question: str | None = None
     agent_tool_error: dict[str, str] | None = None
+    session_awaiting_delivery_date: bool | None = None
     agent_loop_done = False
     force_finish = False
     force_finish_reason: str | None = None
@@ -721,6 +722,10 @@ async def agent_loop(
         if tool_name == CHECK_DELIVERY_TOOL:
             user_message = _extract_latest_user_message(state.get("messages") or [])
             canonical_city = state.get("delivery_city_canonical")
+            if not (isinstance(canonical_city, str) and canonical_city.strip()):
+                session_city = state.get("session_delivery_city_canonical")
+                if isinstance(session_city, str) and session_city.strip():
+                    canonical_city = session_city.strip()
             if isinstance(canonical_city, str) and canonical_city.strip():
                 enriched_args["city"] = canonical_city.strip()
             state_date = state.get("delivery_date")
@@ -729,6 +734,7 @@ async def agent_loop(
             resolved_date = normalize_delivery_date(enriched_args, user_message)
             if resolved_date is None:
                 agent_clarifying_question = delivery_date_clarifying_question()
+                session_awaiting_delivery_date = True
                 exit_reason = "ask_user"
                 agent_loop_done = True
                 break
@@ -771,6 +777,11 @@ async def agent_loop(
                 result.get("error"),
             )
             break
+
+        if tool_name == CHECK_DELIVERY_TOOL and not (
+            isinstance(result, dict) and result.get("error")
+        ):
+            session_awaiting_delivery_date = False
 
         if (
             tool_name == SEARCH_PRODUCTS_TOOL
@@ -864,6 +875,8 @@ async def agent_loop(
         updates["intent"] = refined_intent
     if search_broaden_applied:
         updates["search_broaden_applied"] = True
+    if session_awaiting_delivery_date is not None:
+        updates["session_awaiting_delivery_date"] = session_awaiting_delivery_date
 
     last_search_products = _last_search_products_from_trace(tool_trace, state=state)
     if last_search_products:

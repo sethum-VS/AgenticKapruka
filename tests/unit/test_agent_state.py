@@ -50,6 +50,8 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
         "zep_thread_id",
         "currency",
         "session_budget_max",
+        "session_delivery_city_canonical",
+        "session_awaiting_delivery_date",
         "delivery_city_raw",
         "delivery_city_canonical",
         "delivery_city_status",

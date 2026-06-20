@@ -980,6 +980,120 @@ async def test_agent_loop_check_delivery_missing_date_still_asks_user() -> None:
     mock_service.check_delivery.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_agent_loop_check_delivery_uses_session_city_when_ephemeral_reset() -> None:
+    """Session canonical city fills in when per-turn delivery_city_canonical was cleared."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Colombo", "delivery_date": "2026-06-15"},
+            rationale="check delivery",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="can you deliver?")],
+        "session_delivery_city_canonical": "Kandy",
+    }
+
+    with (
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["tool_trace"][0]["args"]["city"] == "Kandy"
+    mock_service.check_delivery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_check_delivery_missing_date_sets_session_awaiting_flag() -> None:
+    """Asking for delivery date persists session_awaiting_delivery_date for the next turn."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Kandy"},
+            rationale="check delivery",
+        ),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="can you deliver?")],
+        "session_delivery_city_canonical": "Kandy",
+    }
+
+    with (
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["session_awaiting_delivery_date"] is True
+    mock_service.check_delivery.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_check_delivery_success_clears_session_awaiting_flag() -> None:
+    """Successful check_delivery clears session_awaiting_delivery_date."""
+    mock_service = _mock_kapruka_service()
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Kandy", "delivery_date": "2026-06-13"},
+            rationale="check delivery",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="tomorrow")],
+        "session_delivery_city_canonical": "Kandy",
+        "session_awaiting_delivery_date": True,
+        "delivery_date": "2026-06-13",
+    }
+
+    with (
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["session_awaiting_delivery_date"] is False
+    assert result["tool_trace"][0]["args"]["city"] == "Kandy"
+    assert result["tool_trace"][0]["args"]["delivery_date"] == "2026-06-13"
+
+
 def test_planner_system_instruction_scopes_recipient_facts_without_reference() -> None:
     state: AgentState = {
         "messages": [HumanMessage(content="show me roses in Galle")],

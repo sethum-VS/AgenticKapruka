@@ -60,6 +60,8 @@ class AgentState(TypedDict):
     zep_thread_id: str | None
     currency: CurrencyCode | None
     session_budget_max: float | None
+    session_delivery_city_canonical: str | None
+    session_awaiting_delivery_date: bool | None
     delivery_city_raw: str | None
     delivery_city_canonical: str | None
     delivery_city_status: DeliveryCityStatus | None

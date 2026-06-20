@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from lib.chat.delivery_dates import (
     delivery_date_clarifying_question,
+    is_delivery_date_only_message,
     normalize_delivery_date,
     parse_relative_delivery_date,
     validate_delivery_date_iso,
@@ -91,3 +92,15 @@ def test_delivery_date_clarifying_question_includes_today() -> None:
         question = delivery_date_clarifying_question()
     assert "2026-06-12" in question
     assert "next Saturday" in question
+
+
+def test_is_delivery_date_only_message_true_for_tomorrow() -> None:
+    assert is_delivery_date_only_message("tomorrow", today=_FRIDAY) is True
+
+
+def test_is_delivery_date_only_message_false_when_city_present() -> None:
+    assert is_delivery_date_only_message("deliver to Kandy tomorrow", today=_FRIDAY) is False
+
+
+def test_is_delivery_date_only_message_false_without_date() -> None:
+    assert is_delivery_date_only_message("can you deliver?", today=_FRIDAY) is False

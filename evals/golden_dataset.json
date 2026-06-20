@@ -203,6 +203,13 @@
       "user_query": "tell me about cake00ka002034",
       "expected_tools": ["kapruka_get_product"],
       "reference_answer": "I'll fetch Kapruka product cake00ka002034 directly — name, price, stock, and description — without running a catalog search."
+    },
+    {
+      "id": "deliv-001-kandy-multiturn-session-city",
+      "scenario": "checkout",
+      "user_query": "Turn 1: birthday cake in Kandy. Turn 2: can you deliver? Turn 3: tomorrow",
+      "expected_tools": ["kapruka_search_products", "kapruka_check_delivery"],
+      "reference_answer": "Session-scoped delivery city Kandy must persist across turns so the third message calls kapruka_check_delivery with city=Kandy and the resolved tomorrow date without re-asking for the destination."
     }
   ]
 }
