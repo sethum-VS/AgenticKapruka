@@ -5,9 +5,11 @@ from __future__ import annotations
 from lib.chat.product_curation import (
     apply_anniversary_curation,
     apply_birthday_cake_curation,
+    apply_gift_curation,
     apply_puja_curation,
     carousel_focus_guard,
     curate_carousel_products,
+    demote_off_focus_products,
     demote_puja_products,
     filter_puja_products,
     has_graph_hybrid_context,
@@ -245,7 +247,7 @@ def test_refine_last_search_by_budget_filters_chocolate_and_drops_over_budget() 
     )
     assert refined[0]["id"] == "choc1"
     assert "choc2" not in {item["id"] for item in refined}
-    assert refined[-1]["id"] == "card"
+    assert "card" not in {item["id"] for item in refined}
 
 
 def test_refine_last_search_by_budget_returns_none_without_focus_match() -> None:
@@ -301,3 +303,28 @@ def test_product_matches_focus_chocolate_tokens() -> None:
         _product("x", 100.0, name="Greeting Card"),
         "chocolate",
     )
+
+
+def test_apply_gift_curation_promotes_hampers_over_convenience_candy() -> None:
+    products = [
+        _product("curry", 800.0, name="Curry Powder Gift Pack"),
+        _product("kitkat", 1200.0, name="KitKat Minis"),
+        _product("ferrero", 4500.0, name="Ferrero Rocher Chocolate Gift Box"),
+        _product("hamper", 5500.0, name="Birthday Chocolate Hamper"),
+    ]
+    curated = apply_gift_curation(
+        products,
+        session_product_focus="chocolate",
+        user_message="wife birthday chocolate under 6000",
+    )
+    assert curated[0]["id"] in {"hamper", "ferrero"}
+    assert curated[-1]["id"] in {"curry", "kitkat"}
+
+
+def test_demote_off_focus_products_keeps_matches_first() -> None:
+    products = [
+        _product("card", 1200.0, name="Greeting Card"),
+        _product("choc", 4500.0, name="Chocolate Truffles"),
+    ]
+    demoted = demote_off_focus_products(products, "chocolate")
+    assert demoted[0]["id"] == "choc"

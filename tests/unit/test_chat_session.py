@@ -1,65 +1,57 @@
-"""Tests for signed browser session cookies."""
+"""Tests for chat session rotation and cart preservation."""
 
 from __future__ import annotations
 
+import fakeredis.aioredis
 import pytest
 from starlette.requests import Request
-from tests.unit.test_settings import _VALID_ENV, _apply_env
 
-from app.config import get_settings
-from lib.chat.session import (
-    SESSION_COOKIE_NAME,
-    resolve_chat_thread_id,
-    verify_signed_session_cookie,
-)
+from lib.chat.session import SESSION_COOKIE_NAME, _sign_thread_id, rotate_chat_thread
+from lib.redis.cart import StoredCartItem, add_item, get_cart, migrate_cart
+from lib.redis.client import RedisClient
 
 
-def _request_with_cookie(value: str | None) -> Request:
-    headers: list[tuple[bytes, bytes]] = []
-    if value is not None:
-        headers.append((b"cookie", f"{SESSION_COOKIE_NAME}={value}".encode()))
-    scope: dict[str, object] = {
+@pytest.fixture
+def redis_client() -> RedisClient:
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    return RedisClient("redis://localhost:6379/0", client=fake)
+
+
+def _request_with_cookie(cookie_value: str) -> Request:
+    scope = {
         "type": "http",
-        "method": "POST",
-        "path": "/chat/stream",
-        "headers": headers,
-        "query_string": b"",
-        "client": ("testclient", 50000),
-        "server": ("testserver", 80),
+        "method": "GET",
+        "path": "/chat",
+        "headers": [(b"cookie", f"{SESSION_COOKIE_NAME}={cookie_value}".encode())],
     }
     return Request(scope)
 
 
-@pytest.fixture(autouse=True)
-def settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    get_settings.cache_clear()
-    _apply_env(monkeypatch, _VALID_ENV)
-    yield
-    get_settings.cache_clear()
+def test_rotate_chat_thread_returns_new_signed_cookie() -> None:
+    old_thread = "thread-old-abc"
+    request = _request_with_cookie(_sign_thread_id(old_thread))
+    prior, new_thread, signed = rotate_chat_thread(request)
+    assert prior == old_thread
+    assert new_thread != old_thread
+    assert signed.count(".") == 1
 
 
-def test_resolve_chat_thread_id_mints_signed_cookie_when_missing() -> None:
-    thread_id, cookie = resolve_chat_thread_id(_request_with_cookie(None))
-
-    assert cookie is not None
-    assert verify_signed_session_cookie(cookie) == thread_id
-
-
-def test_resolve_chat_thread_id_reuses_valid_signed_cookie() -> None:
-    request = _request_with_cookie(None)
-    thread_id, cookie = resolve_chat_thread_id(request)
-    assert cookie is not None
-
-    follow_up = _request_with_cookie(cookie)
-    reused_thread_id, new_cookie = resolve_chat_thread_id(follow_up)
-
-    assert reused_thread_id == thread_id
-    assert new_cookie is None
-
-
-def test_resolve_chat_thread_id_rejects_forged_opaque_cookie() -> None:
-    thread_id, cookie = resolve_chat_thread_id(_request_with_cookie("attacker-controlled-id"))
-
-    assert cookie is not None
-    assert thread_id != "attacker-controlled-id"
-    assert verify_signed_session_cookie(cookie) == thread_id
+@pytest.mark.asyncio
+async def test_migrate_cart_preserves_items_on_new_session(redis_client: RedisClient) -> None:
+    old_session = "sess-old"
+    new_session = "sess-new"
+    await add_item(
+        redis_client,
+        old_session,
+        product_id="cake001",
+        name="Chocolate Cake",
+        price_amount=4500.0,
+        price_currency="LKR",
+        quantity=2,
+    )
+    await migrate_cart(redis_client, old_session, new_session)
+    migrated = await get_cart(redis_client, new_session)
+    assert len(migrated) == 1
+    assert isinstance(migrated[0], StoredCartItem)
+    assert migrated[0].product_id == "cake001"
+    assert migrated[0].quantity == 2

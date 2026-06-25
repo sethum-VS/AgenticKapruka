@@ -90,6 +90,8 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'data-testid="cart-icon"' in html
     assert 'id="cart-panel"' in html
     assert 'data-testid="header-currency"' in html
+    assert 'data-testid="new-chat-button"' in html
+    assert 'hx-post="/chat/new"' in html
     assert 'hx-post="/session/currency"' in html
     assert 'hx-swap="none"' in html
     for code in SUPPORTED_CURRENCY_CODES:

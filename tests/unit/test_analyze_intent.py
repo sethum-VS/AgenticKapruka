@@ -297,7 +297,8 @@ async def test_analyze_intent_topic_pivot_clears_session_budget() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     assert result.get("session_budget_max") is None
-    assert result["session_product_focus"] == "cake"
+    assert result.get("last_visible_products") is None
+    assert result.get("last_search_products") is None
 
 
 @pytest.mark.asyncio
@@ -316,6 +317,8 @@ async def test_analyze_intent_topic_pivot_clears_hybrid_hints_and_search_query()
     result = await analyze_intent(state, genai_client=mock_client)
 
     assert result.get("session_search_query") is None
+    assert result.get("last_visible_products") is None
+    assert result.get("last_search_products") is None
     assert result["intent_metadata"]["topic_pivot"] is True
     hints = result["hybrid_context"]["hints"]
     assert "occasion" not in hints

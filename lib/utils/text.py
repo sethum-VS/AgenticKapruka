@@ -8,6 +8,14 @@ import re
 _MANGLED_NUMERIC_ENTITY = re.compile(r"[Nn]#(\d+);")
 _DOUBLE_ENCODED_ENTITY = re.compile(r"&amp;#(\d+);")
 _MOJIBAKE_MARKERS = re.compile(r"â€|Ã.|Â.")
+_MOJIBAKE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("\u00e2\u20ac\u2122", "'"),
+    ("\u00e2\u20ac\u02dc", "'"),
+    ("\u00e2\u20ac\u201c", '"'),
+    ("\u00e2\u20ac\u009d", '"'),
+    ("\u00e2\u20ac\u2013", "–"),
+    ("\u00e2\u20ac\u2014", "—"),
+)
 
 
 def decode_html_entities(value: str) -> str:
@@ -24,17 +32,22 @@ def decode_html_entities(value: str) -> str:
 
 def repair_utf8_mojibake(value: str) -> str:
     """Repair common UTF-8 mojibake (latin1 misread as utf-8) when safe."""
-    if not value or not any(ord(char) > 127 for char in value):
+    if not value:
         return value
+    repaired = value
+    for broken, fixed in _MOJIBAKE_REPLACEMENTS:
+        repaired = repaired.replace(broken, fixed)
+    if not any(ord(char) > 127 for char in repaired):
+        return repaired
     try:
-        repaired = value.encode("latin1").decode("utf-8")
+        latin_repaired = repaired.encode("latin1").decode("utf-8")
     except (UnicodeEncodeError, UnicodeDecodeError):
-        return value
-    if repaired == value:
-        return value
-    if any(ord(char) > 127 for char in repaired) and _MOJIBAKE_MARKERS.search(repaired):
-        return value
-    return repaired
+        return repaired
+    if latin_repaired == repaired:
+        return repaired
+    if any(ord(char) > 127 for char in latin_repaired) and _MOJIBAKE_MARKERS.search(latin_repaired):
+        return repaired
+    return latin_repaired
 
 
 def normalize_catalog_text(value: str) -> str:

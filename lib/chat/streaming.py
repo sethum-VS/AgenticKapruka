@@ -80,6 +80,7 @@ async def iter_chat_sse_events(
     if isinstance(configurable, dict):
         thread_id = str(configurable.get("thread_id") or "")
 
+    done_emitted = False
     try:
         async with asyncio.timeout(CHAT_TURN_TIMEOUT_SECONDS):
             async for chunk in graph.astream(state, config, stream_mode=["updates", "custom"]):
@@ -137,6 +138,7 @@ async def iter_chat_sse_events(
                         response_html_chars=len(response_html or ""),
                     )
                     yield format_sse_event("", event="done")
+                    done_emitted = True
     except TimeoutError:
         trace_error("graph.astream exceeded wall-clock timeout", TimeoutError())
         logger.warning(
@@ -149,6 +151,7 @@ async def iter_chat_sse_events(
             timeout_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{timeout_html}'
         yield format_sse_event(timeout_html)
         yield format_sse_event("", event="done")
+        done_emitted = True
     except Exception as exc:
         trace_error("graph.astream failed", exc)
         logger.exception("chat stream failed during graph.astream")
@@ -162,3 +165,12 @@ async def iter_chat_sse_events(
             error_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{error_html}'
         yield format_sse_event(error_html)
         yield format_sse_event("", event="done")
+        done_emitted = True
+    finally:
+        if not done_emitted:
+            cleanup = (
+                f'<div id="{pending_id}" hx-swap-oob="delete"></div>' if stream_started else ""
+            )
+            if cleanup:
+                yield format_sse_event(cleanup)
+            yield format_sse_event("", event="done")

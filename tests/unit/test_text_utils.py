@@ -59,3 +59,27 @@ def test_product_result_decodes_html_entities_in_name() -> None:
         url="https://www.kapruka.com/example",
     )
     assert product.name == "Cadbury Milk Chocolate Chunks 135g – 30 Minis"
+
+
+def test_normalize_catalog_text_fixes_apostrophe_mojibake() -> None:
+    raw = "Lindt Lindor â€™ Assorted"
+    normalized = normalize_catalog_text(raw)
+    assert "â€™" not in normalized
+    assert "'" in normalized or "’" in normalized
+
+
+def test_product_card_template_normalizes_mojibake_name() -> None:
+    from app.templating import render_product_carousel
+
+    product = {
+        "id": "gift001",
+        "name": f"Comfort Gift Set {_MOJIBAKE_EN_DASH} Pink",
+        "price": {"amount": 4500.0, "currency": "LKR"},
+        "in_stock": True,
+        "stock_level": "high",
+        "url": "https://www.kapruka.com/example",
+        "image_url": None,
+    }
+    html = render_product_carousel([product])
+    assert _MOJIBAKE_EN_DASH not in html
+    assert "–" in html

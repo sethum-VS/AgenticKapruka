@@ -18,6 +18,11 @@ def test_classify_utility_for_transactional_search() -> None:
     assert classify_query_mode("Show me birthday cakes under 5000 rupees") == "utility"
 
 
+def test_classify_utility_for_transactional_apology() -> None:
+    message = "I'm sorry — I ordered the wrong cake. Can you help me find a replacement?"
+    assert classify_query_mode(message) == "utility"
+
+
 def test_classify_situational_for_breakup() -> None:
     message = "I broke up with my girlfriend and feel heartbroken"
     assert classify_query_mode(message) == "situational"

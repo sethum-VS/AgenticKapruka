@@ -24,10 +24,16 @@ from lib.chat.page_context import (
     resolve_page_cart,
     resolve_page_currency,
 )
-from lib.chat.session import SESSION_COOKIE_NAME, cookie_params, resolve_chat_thread_id
+from lib.chat.session import (
+    SESSION_COOKIE_NAME,
+    cookie_params,
+    resolve_chat_thread_id,
+    rotate_chat_thread,
+)
 from lib.chat.sse import format_sse_event
 from lib.chat.streaming import iter_chat_sse_events
 from lib.debug.trace import is_debug_trace_enabled, trace_error, trace_turn_start
+from lib.redis.cart import migrate_cart
 from lib.redis.client import RedisClient
 from lib.redis.session import get_session_currency
 from lib.zep.session import get_or_create_session
@@ -37,6 +43,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 RedisDep = Annotated[RedisClient, Depends(get_redis)]
+
+_CHAT_NEW_EMPTY_STATE_HTML = (
+    '<div id="chat-messages" hx-swap-oob="innerHTML">'
+    '<div id="chat-empty-state" class="flex flex-1 flex-col items-center justify-center '
+    'px-4 py-12 text-center">'
+    '<div class="card-commerce max-w-md p-8">'
+    '<p class="mb-1 text-sm font-medium uppercase tracking-wide text-kapruka-600">'
+    "Welcome</p>"
+    '<h2 class="mb-2 text-xl font-semibold text-commerce-ink">'
+    "What would you like to send today?</h2>"
+    '<p class="mb-6 text-sm leading-relaxed text-commerce-muted">'
+    "Ask me to find birthday cakes, fresh flowers, thoughtful combos, or check delivery "
+    "to any city in Sri Lanka."
+    "</p></div></div></div>"
+)
 
 _STREAM_SETUP_ERROR_HTML = (
     '<div class="flex justify-start">'
@@ -142,6 +163,7 @@ async def chat_stream(
             trace_error(f"chat stream setup failed (session={thread_id})", exc)
             logger.exception("chat stream failed for session %s", thread_id)
             yield format_sse_event(_STREAM_SETUP_ERROR_HTML)
+            yield format_sse_event("", event="done")
 
     headers = {
         "Cache-Control": "no-cache",
@@ -155,4 +177,15 @@ async def chat_stream(
     )
     if new_cookie is not None:
         response.set_cookie(SESSION_COOKIE_NAME, new_cookie, **cookie_params())
+    return response
+
+
+@router.post("/new")
+async def chat_new(request: Request, redis_client: RedisDep) -> Response:
+    """Rotate chat thread and clear conversation context; cart items are preserved."""
+    prior_thread_id, new_thread_id, signed_cookie = rotate_chat_thread(request)
+    if prior_thread_id:
+        await migrate_cart(redis_client, prior_thread_id, new_thread_id)
+    response = Response(content=_CHAT_NEW_EMPTY_STATE_HTML, media_type="text/html")
+    response.set_cookie(SESSION_COOKIE_NAME, signed_cookie, **cookie_params())
     return response

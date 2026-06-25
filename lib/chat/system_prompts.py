@@ -152,6 +152,13 @@ _PROFESSIONAL_TONE_RULE = (
 _DELIVERY_CONTEXT_SUPPRESS_RULE = (
     "- Do not mention delivery city or date unless the customer asked about delivery "
     "in this turn.\n"
+    "- Ignore prior-turn delivery tool results when synthesizing this reply.\n"
+)
+
+_EMPATHY_PREAMBLE_RULE = (
+    "\nWhen the customer shares emotional distress (breakup, loss, apology), open with "
+    "a brief acknowledgment (for example, \"I'm sorry to hear that…\") before "
+    "clarifying questions or recommendations.\n"
 )
 
 
@@ -191,12 +198,13 @@ def select_response_system_instruction(
     if intent == "general":
         return GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION
     if intent_metadata and intent_metadata.get("is_situational"):
+        instruction = LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION + _EMPATHY_PREAMBLE_RULE
         hint = intent_metadata.get("vernacular_score_hint", 0.0)
         if isinstance(hint, (int, float)) and hint >= 0.3:
             vernacular = intent_metadata.get("detected_vernacular", "en")
             guidance = _VERNACULAR_GUIDANCE.get(vernacular, _VERNACULAR_GUIDANCE["en"])
-            return LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION + guidance
-        return LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION + _PROFESSIONAL_TONE_RULE
+            return instruction + guidance
+        return instruction
     return UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION
 
 

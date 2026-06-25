@@ -14,7 +14,16 @@ _FLOWER_FRUIT_INTENT = re.compile(
 )
 _PUJA_DENYLIST = re.compile(r"\b(?:puja|pooja|pooj?a|watti|religious)\b", re.I)
 _PRODUCE_DENYLIST = re.compile(
-    r"\b(?:coconut|banana|grocery|vegetable|potato|onion|tomato|carrot)\b",
+    r"\b(?:coconut|banana|grocery|vegetable|potato|onion|tomato|carrot|"
+    r"curry powder|kitkat|ritzbury)\b",
+    re.I,
+)
+_GIFT_PROMOTE_RE = re.compile(
+    r"\b(?:hamper|hampers|combo|combopack|bouquet|ferrero|chocolate bouquet|gift box)\b",
+    re.I,
+)
+_GIFT_DEMOTE_RE = re.compile(
+    r"\b(?:curry powder|kitkat|ritzbury|grocery|spice|convenience)\b",
     re.I,
 )
 _BIRTHDAY_PRODUCT_RE = re.compile(r"\bbirthday\b", re.I)
@@ -273,6 +282,72 @@ def carousel_focus_guard(
     return (matches / len(sample)) >= min_ratio
 
 
+def demote_off_focus_products(
+    products: list[dict[str, Any]],
+    session_product_focus: str | None,
+) -> list[dict[str, Any]]:
+    """Keep in-focus items first; demote off-focus tail instead of dropping all results."""
+    if not session_product_focus or not products:
+        return list(products)
+    matching = [
+        product
+        for product in products
+        if product_matches_focus(product, session_product_focus)
+    ]
+    if not matching:
+        return list(products)
+    demoted = [
+        product
+        for product in products
+        if not product_matches_focus(product, session_product_focus)
+    ]
+    return matching + demoted
+
+
+def _gift_curation_active(
+    *,
+    session_product_focus: str | None,
+    user_message: str,
+    hybrid_context: dict[str, Any] | None = None,
+) -> bool:
+    if session_product_focus in ("chocolate", "gift"):
+        return True
+    if _BIRTHDAY_PRODUCT_RE.search(user_message):
+        return True
+    hints = (hybrid_context or {}).get("hints") or {}
+    occasion = hints.get("occasion")
+    return isinstance(occasion, str) and "birthday" in occasion.lower()
+
+
+def apply_gift_curation(
+    products: list[dict[str, Any]],
+    *,
+    session_product_focus: str | None = None,
+    user_message: str = "",
+    hybrid_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Promote hampers/combos; demote grocery/spice/convenience candy on gift turns."""
+    if not products or not _gift_curation_active(
+        session_product_focus=session_product_focus,
+        user_message=user_message,
+        hybrid_context=hybrid_context,
+    ):
+        return list(products)
+
+    promoted: list[dict[str, Any]] = []
+    neutral: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        blob = _product_text_blob(product)
+        if _GIFT_DEMOTE_RE.search(blob) or _PRODUCE_DENYLIST.search(blob):
+            demoted.append(product)
+        elif _GIFT_PROMOTE_RE.search(blob):
+            promoted.append(product)
+        else:
+            neutral.append(product)
+    return promoted + neutral + demoted
+
+
 def refine_last_search_by_budget(
     last_search_products: list[dict[str, Any]],
     *,
@@ -308,7 +383,9 @@ def refine_last_search_by_budget(
             for product in in_budget
             if not product_matches_focus(product, session_product_focus)
         ]
-        return matching + demoted
+        if demoted and any(_GIFT_DEMOTE_RE.search(_product_text_blob(item)) for item in demoted):
+            return None
+        return matching
 
     return in_budget
 
@@ -414,6 +491,12 @@ def curate_carousel_products(
     scoped = apply_anniversary_curation(
         scoped,
         query=query,
+        hybrid_context=hybrid_context,
+    )
+    scoped = apply_gift_curation(
+        scoped,
+        session_product_focus=session_product_focus,
+        user_message=query,
         hybrid_context=hybrid_context,
     )
     scoped = demote_produce_for_vague_gifts(scoped, query)

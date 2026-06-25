@@ -1130,7 +1130,7 @@ def test_build_agent_tool_error_message_rate_limit() -> None:
         raw_message="Rate limit exceeded",
         error_code="429",
     )
-    assert "catalog is busy" in message.lower()
+    assert "checking our catalog" in message.lower()
 
 
 def test_build_agent_tool_error_message_city_not_deliverable() -> None:
@@ -1268,6 +1268,42 @@ def test_delivery_claim_guard_city_date_asks_before_fee() -> None:
     assert "Colombo" in guarded
     assert "won't quote a fee" in guarded
     assert "Rs. 400" not in guarded
+
+
+def test_delivery_claim_guard_skips_discovery_only_turns() -> None:
+    reply = "I have not verified Kapruka delivery for that location and date yet."
+    guarded = delivery_claim_guard(
+        reply,
+        tool_trace=[],
+        user_message="anniversary gifts",
+        delivery_context_relevant=False,
+    )
+    assert guarded == reply
+
+
+def test_rate_limit_banner_html_embedded_in_tool_error_response() -> None:
+    from graphs.nodes.generate_response import _rate_limit_banner_html
+
+    banner = _rate_limit_banner_html(
+        {
+            "tool": SEARCH_PRODUCTS_TOOL,
+            "error": "rate_limit_exceeded",
+            "message": "Rate limit exceeded",
+            "retry_after_seconds": "30",
+        },
+    )
+    assert banner is not None
+    assert 'data-testid="rate-limit-banner"' in banner
+    html = render_assistant_html(
+        build_agent_tool_error_message(
+            tool=SEARCH_PRODUCTS_TOOL,
+            raw_message="Rate limit exceeded",
+            error_code="rate_limit_exceeded",
+        ),
+        rate_limit_banner_html=banner,
+    )
+    assert "Rate limit exceeded" not in html
+    assert "checking our catalog" in html.lower()
 
 
 def test_carousel_consistency_guard_rewrites_negated_reply_with_products() -> None:

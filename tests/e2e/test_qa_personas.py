@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import Page, expect
 from tests.e2e.helpers import (
@@ -34,6 +36,11 @@ def test_persona_clueless_gift_giver_budget_and_delivery(
     budget_reply = _chat_turn(page, "Keep it under 6000 rupees.")
     delivery_reply = _chat_turn(page, "can you deliver to Kandy this Sunday?")
 
+    expect(page.locator('[data-testid="product-carousel"]')).to_have_count(1)
+    carousel_text = page.inner_text('[data-testid="product-carousel"]')
+    assert "26,310" not in carousel_text
+    assert "curry" not in carousel_text.lower()
+
     tools = fetch_mcp_tools(page, base_url)
     if tools:
         assert "kapruka_search_products" in tools
@@ -46,12 +53,24 @@ def test_persona_clueless_gift_giver_budget_and_delivery(
 
 
 def test_persona_context_pivot_cakes_not_vouchers(page: Page, base_url: str) -> None:
-    """Context Pivot: cakes edible after nevermind pivot without voucher pivot."""
+    """Context Pivot: New chat clears budget; cakes edible after nevermind pivot."""
     page.goto(f"{base_url}/chat")
     wait_for_alpine(page)
     reset_e2e_session(page, base_url)
 
     _chat_turn(page, "chocolates for wife under 6000")
+    page.click('[data-testid="new-chat-button"]')
+    page.wait_for_function(
+        """() => {
+          const empty = document.getElementById('chat-empty-state');
+          const carousels = document.querySelectorAll('[data-testid="product-carousel"]');
+          return empty && carousels.length === 0;
+        }"""
+    )
+    anniversary_reply = _chat_turn(page, "anniversary gifts for my wife")
+    assert "over budget" not in anniversary_reply.lower()
+    assert "verified with kapruka" not in anniversary_reply.lower()
+
     reply = _chat_turn(page, "Nevermind. Cakes.")
 
     assert "decorating" not in reply.lower()
@@ -102,3 +121,4 @@ def test_persona_breakup_omits_stale_kandy_delivery(page: Page, base_url: str) -
     lowered = breakup_reply.lower()
     assert "kandy" not in lowered
     assert "verified with kapruka" not in lowered
+    assert re.search(r"sorry|heartbroken|hear that|here for you", lowered)

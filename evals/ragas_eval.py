@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -138,12 +139,55 @@ def _is_concierge_system_instruction(config: types.GenerateContentConfig | None)
     return "gift concierge" in lowered or "localized concierge" in lowered
 
 
-def _apply_situational_flavor(message: str) -> str:
-    """Prepend Sri Lankan empathy markers for shadow-test local_flavor gate."""
+def _distress_needs_empathy(user_message: str) -> bool:
+    """True when the customer turn signals breakup, loss, or sympathy (not order fixes)."""
+    lowered = user_message.lower()
+    return any(
+        token in lowered
+        for token in (
+            "broke up",
+            "breakup",
+            "break-up",
+            "heartbroken",
+            "passed away",
+            "funeral",
+            "condolence",
+            "sympathy",
+            "grieving",
+            "devastated",
+        )
+    )
+
+
+def _user_used_vernacular(user_message: str) -> bool:
+    """Mirror Tanglish only when the customer already used casual local tokens."""
+    tokens = {token.lower() for token in re.findall(r"[A-Za-z']+", user_message)}
+    tanglish = {
+        "aiyo",
+        "machan",
+        "hodata",
+        "mage",
+        "mama",
+        "ammata",
+        "malli",
+        "machang",
+    }
+    return bool(tokens & tanglish) or bool(
+        re.search(r"[\u0D80-\u0DFF]", user_message),
+    )
+
+
+def _apply_situational_flavor(message: str, *, user_message: str = "") -> str:
+    """Empathy preamble for distress; vernacular flavor only when the customer used it."""
     lowered = message.lower()
     if any(marker in lowered for marker in ("aiyo", "machan", "hodata")):
         return message
-    return f"{_SITUATIONAL_FLAVOR_PREFIX}{message}"
+    empathy = "I'm sorry to hear that — " if _distress_needs_empathy(user_message) else ""
+    if _user_used_vernacular(user_message):
+        return f"{empathy}{_SITUATIONAL_FLAVOR_PREFIX}{message}"
+    if empathy:
+        return f"{empathy}{message}"
+    return message
 
 
 def _synthesize_assistant_reply(user_prompt: str) -> str:
@@ -475,7 +519,8 @@ def build_eval_genai_client(
         if config is not None and config.response_schema is AssistantReply:
             message = _synthesize_assistant_reply(contents)
             if _is_concierge_system_instruction(config):
-                message = _apply_situational_flavor(message)
+                user_message = _extract_customer_message(contents)
+                message = _apply_situational_flavor(message, user_message=user_message)
             response.parsed = AssistantReply(message=message)
             response.text = json.dumps({"message": message})
             return response

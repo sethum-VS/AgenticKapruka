@@ -25,8 +25,10 @@ from lib.chat.intent_heuristics import is_bare_category_pivot, is_budget_refinem
 from lib.chat.product_curation import (
     apply_anniversary_curation,
     apply_birthday_cake_curation,
+    apply_gift_curation,
     apply_puja_curation,
     carousel_focus_guard,
+    demote_off_focus_products,
     has_graph_hybrid_context,
     is_cake_accessory,
     is_flower_fruit_intent,
@@ -488,6 +490,25 @@ def _should_run_dual_gift_search(
     return bool(_GIFT_WORD.search(user_message))
 
 
+def _agent_tool_error_from_result(tool_name: str, result: dict[str, Any]) -> dict[str, str]:
+    error_message = result.get("message")
+    payload: dict[str, str] = {
+        "tool": tool_name,
+        "message": (
+            str(error_message).strip()
+            if isinstance(error_message, str) and error_message.strip()
+            else str(result.get("error"))
+        ),
+    }
+    error_code = result.get("error")
+    if error_code is not None:
+        payload["error"] = str(error_code)
+    retry_after = result.get("retry_after_seconds")
+    if isinstance(retry_after, (int, float)) and retry_after > 0:
+        payload["retry_after_seconds"] = str(int(retry_after))
+    return payload
+
+
 def _curate_search_trace_result(
     result: Any,
     *,
@@ -507,16 +528,21 @@ def _curate_search_trace_result(
     graph_up = has_graph_hybrid_context(hybrid_context)
     session_focus = state.get("session_product_focus")
     curated = apply_anniversary_curation(
-        apply_birthday_cake_curation(
-            apply_puja_curation(
-                products,
+        apply_gift_curation(
+            apply_birthday_cake_curation(
+                apply_puja_curation(
+                    products,
+                    query=user_message,
+                    graph_context_available=graph_up,
+                ),
                 query=user_message,
+                hybrid_context=hybrid_context,
                 graph_context_available=graph_up,
+                session_product_focus=session_focus,
             ),
-            query=user_message,
+            session_product_focus=session_focus if isinstance(session_focus, str) else None,
+            user_message=user_message,
             hybrid_context=hybrid_context,
-            graph_context_available=graph_up,
-            session_product_focus=session_focus,
         ),
         query=user_message,
         hybrid_context=hybrid_context,
@@ -1024,17 +1050,24 @@ async def agent_loop(
                     products,
                     session_focus if isinstance(session_focus, str) else None,
                 ):
+                    demoted = demote_off_focus_products(
+                        products,
+                        session_focus if isinstance(session_focus, str) else None,
+                    )
                     result = dict(result)
-                    result["results"] = []
+                    if carousel_focus_guard(
+                        demoted,
+                        session_focus if isinstance(session_focus, str) else None,
+                    ):
+                        result["results"] = demoted
+                    else:
+                        result["results"] = []
             tool_trace.append(
                 {"name": tool_name, "args": enriched_args, "result": result},
             )
             tool_call_count += 1
             if isinstance(result, dict) and result.get("error"):
-                agent_tool_error = {
-                    "tool": tool_name,
-                    "message": str(result.get("message") or result.get("error")),
-                }
+                agent_tool_error = _agent_tool_error_from_result(tool_name, result)
                 exit_reason = "tool_error"
                 agent_loop_done = True
                 break
@@ -1338,15 +1371,7 @@ async def agent_loop(
         tool_call_count += 1
 
         if isinstance(result, dict) and result.get("error"):
-            error_message = result.get("message")
-            agent_tool_error = {
-                "tool": tool_name,
-                "message": (
-                    str(error_message).strip()
-                    if isinstance(error_message, str) and error_message.strip()
-                    else str(result.get("error"))
-                ),
-            }
+            agent_tool_error = _agent_tool_error_from_result(tool_name, result)
             exit_reason = "tool_error"
             agent_loop_done = True
             logger.debug(
@@ -1394,15 +1419,10 @@ async def agent_loop(
                 )
                 tool_call_count += 1
                 if isinstance(broaden_result, dict) and broaden_result.get("error"):
-                    error_message = broaden_result.get("message")
-                    agent_tool_error = {
-                        "tool": SEARCH_PRODUCTS_TOOL,
-                        "message": (
-                            str(error_message).strip()
-                            if isinstance(error_message, str) and error_message.strip()
-                            else str(broaden_result.get("error"))
-                        ),
-                    }
+                    agent_tool_error = _agent_tool_error_from_result(
+                        SEARCH_PRODUCTS_TOOL,
+                        broaden_result,
+                    )
                     exit_reason = "tool_error"
                     agent_loop_done = True
                     logger.debug(

@@ -566,6 +566,7 @@ async def test_agent_loop_tool_error_exits_immediately() -> None:
     assert result["agent_tool_error"] == {
         "tool": CHECK_DELIVERY_TOOL,
         "message": "Choose a delivery date that is today or later.",
+        "error": "past_delivery_date",
     }
     assert len(result["tool_trace"]) == 1
     assert result["tool_trace"][0]["result"]["error"] == "past_delivery_date"

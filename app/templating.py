@@ -20,7 +20,7 @@ from lib.checkout.sender import SenderFormValues
 from lib.kapruka.types import LOCATION_TYPES, CheckDeliveryOutput, TrackOrderOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import SUPPORTED_CURRENCIES, format_currency
-from lib.utils.text import decode_html_entities
+from lib.utils.text import normalize_catalog_text
 from lib.utils.timezone import colombo_today_iso, format_delivery_date_friendly
 
 SUPPORTED_CURRENCY_CODES: tuple[str, ...] = tuple(sorted(SUPPORTED_CURRENCIES))
@@ -47,7 +47,8 @@ def _create_templates() -> Jinja2Templates:
     )
     env.filters["format_currency"] = format_currency
     env.filters["urlencode"] = urlencode_filter
-    env.filters["decode_html"] = decode_html_entities
+    env.filters["decode_html"] = normalize_catalog_text
+    env.filters["normalize_catalog"] = normalize_catalog_text
     env.filters["format_delivery_date"] = format_delivery_date_friendly
     return Jinja2Templates(env=env)
 

@@ -96,7 +96,17 @@ class KaprukaService:
                 delay,
             )
             await asyncio.sleep(delay)
-            result = await fetch()
+            try:
+                result = await fetch()
+            except KaprukaRateLimitError as retry_exc:
+                second_delay = min(retry_exc.retry_after_seconds, 10)
+                logger.info(
+                    "Kapruka rate limit on %s; second retry after %ss",
+                    tool_name,
+                    second_delay,
+                )
+                await asyncio.sleep(second_delay)
+                result = await fetch()
 
         await set_cached(self._redis, tool_name, cache_args, to_cache(result))
         return result

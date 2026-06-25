@@ -195,10 +195,10 @@ def _clear_context_on_pivot(
     user_message: str,
     state: AgentState,
     intent_metadata: IntentMetadata,
-) -> tuple[IntentMetadata, dict[str, Any] | None, bool]:
+) -> tuple[IntentMetadata, dict[str, Any] | None, bool, dict[str, Any]]:
     """Drop sticky occasion/search seeds when the customer pivots without a new occasion."""
     if not is_topic_pivot_message(user_message):
-        return intent_metadata, None, False
+        return intent_metadata, None, False, {}
 
     cleared_meta = cast(IntentMetadata, {**intent_metadata, "topic_pivot": True})
     hybrid = dict(state.get("hybrid_context") or {})
@@ -207,8 +207,29 @@ def _clear_context_on_pivot(
         hints.pop(key, None)
     hybrid["hints"] = hints
     hybrid["occasions"] = []
+
+    session_clear: dict[str, Any] = {
+        "last_visible_products": None,
+        "last_search_products": None,
+    }
+    from lib.chat.delivery_dates import normalize_delivery_date
+    from lib.chat.query_preprocessor import extract_target_city
+
+    city_missing = extract_target_city(user_message) is None
+    date_missing = normalize_delivery_date({}, user_message) is None
+    if city_missing and date_missing:
+        session_clear.update(
+            {
+                "session_delivery_city_canonical": None,
+                "session_delivery_date": None,
+                "session_awaiting_delivery_date": False,
+                "delivery_city_canonical": None,
+                "delivery_date": None,
+            },
+        )
+
     logger.info("analyze_intent: topic pivot — clearing hybrid occasion/search seeds")
-    return cleared_meta, hybrid, True
+    return cleared_meta, hybrid, True, session_clear
 
 
 def _off_topic_metadata(
@@ -249,10 +270,12 @@ async def analyze_intent(
         session_budget_currency,
         intent_metadata,
     )
-    intent_metadata, hybrid_context_update, topic_pivot = _clear_context_on_pivot(
+    intent_metadata, hybrid_context_update, topic_pivot, pivot_session_clear = (
+        _clear_context_on_pivot(
         user_message,
         state,
         intent_metadata,
+        )
     )
     session_product_focus = _resolve_session_product_focus(state, user_message)
     delivery_date, session_delivery_date = _resolve_delivery_dates(state, user_message)
@@ -268,6 +291,7 @@ async def analyze_intent(
         )
         if topic_pivot:
             result["session_search_query"] = None
+            result.update(pivot_session_clear)
             if hybrid_context_update is not None:
                 result["hybrid_context"] = hybrid_context_update
         return result
@@ -324,11 +348,17 @@ async def analyze_intent(
 
     if is_vague_gift_intent(user_message):
         logger.info("analyze_intent: vague gift query — asking for preferences")
+        question = GIFT_PREFERENCES_QUESTION
+        if intent_metadata.get("is_situational"):
+            question = (
+                "I'm sorry to hear you're going through this. "
+                f"{question}"
+            )
         return _with_budget(
             {
                 "intent": _SHOPPING_PATH_INTENT,
                 "intent_metadata": intent_metadata,
-                "agent_clarifying_question": GIFT_PREFERENCES_QUESTION,
+                "agent_clarifying_question": question,
                 "session_awaiting_gift_preferences": True,
             },
         )

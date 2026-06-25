@@ -67,7 +67,7 @@ def extract_last_assistant_html(page: Page) -> str:
 
 
 def extract_last_assistant_text(page: Page) -> str:
-    """Return visible text from the latest finalized assistant bubble."""
+    """Return prose-only text from the latest finalized assistant bubble."""
     assistants = page.locator('[aria-label="Assistant message"]')
     count = assistants.count()
     for index in range(count - 1, -1, -1):
@@ -75,7 +75,8 @@ def extract_last_assistant_text(page: Page) -> str:
         bubble_id = bubble.get_attribute("id") or ""
         if bubble_id.startswith("assistant-stream-"):
             continue
-        text = bubble.inner_text().strip()
+        prose = bubble.locator(".prose-assistant")
+        text = prose.inner_text().strip() if prose.count() else bubble.inner_text().strip()
         if text.lower() == "searching kapruka…":
             continue
         return text

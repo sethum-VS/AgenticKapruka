@@ -106,7 +106,7 @@ def test_build_eval_genai_client_adds_situational_flavor_for_concierge() -> None
     client = build_eval_genai_client("discovery")
     tool_block = json.dumps({SEARCH_PRODUCTS_TOOL: SEARCH_PRODUCTS_JSON}, indent=2)
     user_prompt = (
-        "Customer message:\nI broke up and need gentle flowers\n\n"
+        "Customer message:\nMachan, I broke up and need gentle flowers\n\n"
         "tool_results (sole source of truth for catalog facts):\n"
         f"{tool_block}"
     )

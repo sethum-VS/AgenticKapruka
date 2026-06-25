@@ -9,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from graphs.nodes.resolve_cart_product import match_products_by_phrase
 from graphs.state import AgentState
-from lib.kapruka.errors import KaprukaError
+from lib.kapruka.errors import KaprukaError, KaprukaRateLimitError
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
@@ -26,6 +26,7 @@ from lib.kapruka.types import (
     SearchProductsInput,
     TrackOrderInput,
 )
+from lib.redis.rate_limit import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +264,20 @@ async def invoke_tool(
 
     try:
         raw = await _dispatch_tool(kapruka_service, client_ip, name, validated)
+    except KaprukaRateLimitError as exc:
+        logger.warning("invoke_tool: %s rate limited", name, exc_info=True)
+        return {
+            "error": "rate_limit_exceeded",
+            "message": exc.message,
+            "retry_after_seconds": exc.retry_after_seconds,
+        }
+    except RateLimitExceeded as exc:
+        logger.warning("invoke_tool: %s app rate limit", name, exc_info=True)
+        return {
+            "error": "rate_limit_exceeded",
+            "message": str(exc),
+            "retry_after_seconds": exc.retry_after_seconds,
+        }
     except KaprukaError as exc:
         from app.middleware.errors import human_readable_message
 

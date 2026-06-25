@@ -11,6 +11,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types
+from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, ValidationError
 
 from app.templating import (
@@ -18,6 +19,7 @@ from app.templating import (
     render_cart_partial_oob,
     render_delivery_date_status,
     render_product_carousel,
+    render_rate_limit_banner,
     render_tracking_status,
 )
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
@@ -73,6 +75,7 @@ from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import CheckDeliveryOutput
+from lib.neo4j.hybrid_context import extract_budget
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import format_currency
 from lib.utils.text import decode_html_entities, normalize_catalog_text
@@ -176,6 +179,54 @@ def merge_tool_trace(tool_trace: list[ToolInvocation]) -> dict[str, Any]:
     return merged
 
 
+def _turn_has_fresh_search(tool_trace: list[ToolInvocation] | None) -> bool:
+    return any(invocation.get("name") == SEARCH_PRODUCTS_TOOL for invocation in (tool_trace or []))
+
+
+def _session_budget_applies(state: AgentState, user_message: str) -> bool:
+    if extract_budget(user_message) is not None:
+        return True
+    if is_budget_refinement_message(user_message):
+        return True
+    messages = state.get("messages") or []
+    user_turns = [message for message in messages if isinstance(message, HumanMessage)]
+    if len(user_turns) >= 2:
+        prior = user_turns[-2].content
+        if isinstance(prior, str) and extract_budget(prior) is not None:
+            return True
+    return False
+
+
+def _suppress_delivery_tool_results(
+    tool_results: dict[str, Any] | None,
+    *,
+    delivery_context_relevant: bool,
+) -> dict[str, Any] | None:
+    if delivery_context_relevant or not tool_results:
+        return tool_results
+    if CHECK_DELIVERY_TOOL not in tool_results:
+        return tool_results
+    filtered = dict(tool_results)
+    filtered.pop(CHECK_DELIVERY_TOOL, None)
+    return filtered
+
+
+def _rate_limit_banner_html(agent_tool_error: dict[str, str]) -> str | None:
+    error_code = agent_tool_error.get("error")
+    if error_code not in ("429", "rate_limit_exceeded"):
+        return None
+    raw_retry = agent_tool_error.get("retry_after_seconds")
+    retry_after = 30
+    if isinstance(raw_retry, str) and raw_retry.isdigit():
+        retry_after = max(1, int(raw_retry))
+    return render_rate_limit_banner(
+        title="Catalog is busy",
+        message="I'm checking our catalog — one moment.",
+        error_code="rate_limit_exceeded",
+        retry_after_seconds=retry_after,
+    )
+
+
 def _error_code_from_tool_trace(
     tool_trace: list[ToolInvocation] | None,
     tool_name: str,
@@ -219,9 +270,7 @@ def build_agent_tool_error_message(
     ):
         return delivery_date_clarifying_question()
     if error_code in ("429", "rate_limit_exceeded"):
-        return (
-            "Kapruka's catalog is busy right now — please try again in a moment."
-        )
+        return "I'm checking our catalog — one moment."
     if error_code == "date_not_deliverable":
         return (
             "That delivery date is not available. "
@@ -298,8 +347,11 @@ def delivery_claim_guard(
     user_message: str = "",
     delivery_city_status: str | None = None,
     delivery_city_confirmed: bool = False,
+    delivery_context_relevant: bool = True,
 ) -> str:
     """Replace ungrounded delivery fee/availability claims when check_delivery is absent."""
+    if not delivery_context_relevant:
+        return reply_text
     if not _reply_claims_delivery_facts(reply_text):
         return reply_text
     if _tool_trace_has_check_delivery(tool_trace):
@@ -405,7 +457,8 @@ def _build_verified_city_delivery_line(
 
 
 _PERISHABLE_GIFT_RE = re.compile(
-    r"\b(?:cake|cakes|flower|flowers|rose|roses|bouquet|fruit|chocolate|chocolates)\b",
+    r"\b(?:cake|cakes|flower|flowers|rose|roses|bouquet|fruit|chocolate|chocolates|"
+    r"gift|gifts|hamper|hampers)\b",
     re.I,
 )
 
@@ -426,7 +479,7 @@ def _turn_implies_perishable_gift(
     *,
     session_product_focus: str | None = None,
 ) -> bool:
-    if session_product_focus in ("cake", "flowers", "chocolate"):
+    if session_product_focus in ("cake", "flowers", "chocolate", "gift"):
         return True
     return bool(_PERISHABLE_GIFT_RE.search(user_message))
 
@@ -495,20 +548,13 @@ def _apply_perishable_delivery_honesty(
     warning = delivery_output.perishable_warning
     if isinstance(warning, str) and warning.strip():
         warning = warning.strip()
-        perishable_turn = _turn_implies_perishable_gift(
-            user_message,
-            session_product_focus=session_product_focus,
-        )
         dated_delivery = not _is_city_only_check_delivery(invocation)
-        ahead_booking = dated_delivery and _delivery_date_more_than_one_day_out(
-            delivery_output.checked_date,
-        )
-        should_append_warning = warning not in updated_reply and (
-            not ahead_booking or (perishable_turn and ahead_booking)
-        )
+        should_append_warning = warning not in updated_reply
         if should_append_warning:
             updated_reply = f"{updated_reply}\n\n{warning}".strip()
-        if delivery_html is None and dated_delivery:
+        if delivery_html is None and (
+            dated_delivery or (warning and _is_city_only_check_delivery(invocation))
+        ):
             delivery_html = render_delivery_date_status(result=delivery_output)
 
     return updated_reply, delivery_html
@@ -996,6 +1042,7 @@ def build_products_carousel_html(
     last_search_products: list[dict[str, Any]] | None = None,
     last_visible_products: list[dict[str, Any]] | None = None,
     visible_products: list[dict[str, Any]] | None = None,
+    allow_stale_fallback: bool = True,
 ) -> str | None:
     """Render product carousel partial when search_products returned results."""
     products = visible_products
@@ -1010,9 +1057,9 @@ def build_products_carousel_html(
             session_product_focus=session_product_focus,
             last_search_products=last_search_products,
         )
-    if not products and last_visible_products:
+    if not products and allow_stale_fallback and last_visible_products:
         products = last_visible_products
-    if not products and last_search_products:
+    if not products and allow_stale_fallback and last_search_products:
         if budget_max is not None and budget_max > 0:
             refined = refine_last_search_by_budget(
                 last_search_products,
@@ -1100,6 +1147,7 @@ def render_assistant_html(
     checkout_payment_html: str | None = None,
     tracking_status_html: str | None = None,
     delivery_status_html: str | None = None,
+    rate_limit_banner_html: str | None = None,
 ) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
@@ -1111,6 +1159,7 @@ def render_assistant_html(
         checkout_payment_html=checkout_payment_html,
         tracking_status_html=tracking_status_html,
         delivery_status_html=delivery_status_html,
+        rate_limit_banner_html=rate_limit_banner_html,
     )
 
 
@@ -1266,9 +1315,15 @@ async def generate_response(
             hybrid_context=state.get("hybrid_context") or {},
             session_product_focus=state.get("session_product_focus"),
             last_search_products=last_search or None,
+            allow_stale_fallback=not _turn_has_fresh_search(state.get("tool_trace")),
         )
+        rate_limit_banner = _rate_limit_banner_html(agent_tool_error)
         return {
-            "response_html": render_assistant_html(error_reply, products_html=products_html),
+            "response_html": render_assistant_html(
+                error_reply,
+                products_html=products_html,
+                rate_limit_banner_html=rate_limit_banner,
+            ),
             "assistant_message": error_reply,
         }
 
@@ -1410,16 +1465,21 @@ async def generate_response(
     session_budget = state.get("session_budget_max")
     turn_budget = metadata.get("budget_max")
     budget_max: float | None = None
-    if isinstance(session_budget, (int, float)) and session_budget > 0:
-        budget_max = float(session_budget)
-    elif isinstance(turn_budget, (int, float)) and turn_budget > 0:
-        budget_max = float(turn_budget)
+    if _session_budget_applies(state, user_message):
+        if isinstance(session_budget, (int, float)) and session_budget > 0:
+            budget_max = float(session_budget)
+        elif isinstance(turn_budget, (int, float)) and turn_budget > 0:
+            budget_max = float(turn_budget)
     graph_context_available = has_graph_hybrid_context(state.get("hybrid_context") or {})
     hybrid_context = state.get("hybrid_context") or {}
     session_product_focus = state.get("session_product_focus")
     delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
     last_search_products = list(state.get("last_search_products") or [])
     last_visible_products = list(state.get("last_visible_products") or [])
+    pivot_meta = state.get("intent_metadata") or {}
+    topic_pivot = bool(pivot_meta.get("topic_pivot")) if isinstance(pivot_meta, dict) else False
+    fresh_search = _turn_has_fresh_search(state.get("tool_trace"))
+    allow_stale_fallback = not topic_pivot and not fresh_search
 
     if is_product_detail_turn(user_message):
         matched = match_product_from_last_search(
@@ -1519,14 +1579,19 @@ async def generate_response(
         last_search_products=last_search_products or None,
         last_visible_products=last_visible_products or None,
         visible_products=visible_products,
+        allow_stale_fallback=allow_stale_fallback,
     )
 
+    effective_tool_results = _suppress_delivery_tool_results(
+        tool_results,
+        delivery_context_relevant=delivery_context_relevant,
+    )
     client = genai_client
     model = select_model(state)
     user_prompt = _build_user_prompt(
         user_message,
         _cap_search_products_for_llm_context(
-            tool_results,
+            effective_tool_results,
             budget_max=budget_max,
             currency=currency,
             user_message=user_message,
@@ -1579,6 +1644,7 @@ async def generate_response(
         user_message=user_message,
         delivery_city_status=state.get("delivery_city_status"),
         delivery_city_confirmed=bool(state.get("session_delivery_city_confirmed")),
+        delivery_context_relevant=delivery_context_relevant,
     )
     if delivery_context_relevant:
         reply_text = _apply_verified_dated_delivery_template(reply_text, tool_trace)
@@ -1617,4 +1683,7 @@ async def generate_response(
     }
     if visible_products:
         updates["last_visible_products"] = visible_products
+    if topic_pivot:
+        updates["last_visible_products"] = visible_products or None
+        updates["last_search_products"] = visible_products or None
     return updates

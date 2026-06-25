@@ -21,6 +21,18 @@
 </div>
 {% endblock %}
 
+{% block header_actions %}
+<button
+  type="button"
+  class="rounded-lg border border-commerce-parchment bg-white px-3 py-1.5 text-sm font-medium text-commerce-ink transition hover:border-kapruka-300 hover:bg-kapruka-50 focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+  hx-post="/chat/new"
+  hx-swap="none"
+  data-testid="new-chat-button"
+>
+  New chat
+</button>
+{% endblock %}
+
 {% block content %}
 <main
   id="app"

@@ -411,3 +411,95 @@ def test_chat_suggestion_chip_fills_input_and_submits() -> None:
         assert any("Birthday" in body and "Colombo" in body for body in captured_bodies if body)
 
         browser.close()
+
+
+@pytest.mark.browser
+def test_chat_sse_prunes_stale_carousels_after_new_carousel() -> None:
+    """Only the latest product carousel remains after a follow-up search."""
+    carousel_a = (
+        '<div class="flex justify-start" data-role="assistant-message">'
+        '<div role="assistant" aria-label="Assistant message">'
+        '<div class="assistant-products" data-slot="product-carousel">'
+        '<div data-testid="product-carousel" id="carousel-old">'
+        '<span data-testid="product-card">Old Rs. 26,310 Cake</span>'
+        "</div></div></div></div>"
+    )
+    carousel_b = (
+        '<div class="flex justify-start" data-role="assistant-message">'
+        '<div role="assistant" aria-label="Assistant message">'
+        '<div class="assistant-products" data-slot="product-carousel">'
+        '<div data-testid="product-carousel" id="carousel-new">'
+        '<span data-testid="product-card">New Chocolate Box</span>'
+        "</div></div></div></div>"
+    )
+    sse_body = (
+        "event: message\n"
+        f"data: {carousel_a}\n\n"
+        "event: message\n"
+        f"data: {carousel_b}\n\n"
+        "event: done\n"
+        "data: \n\n"
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def handle_stream(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+                body=sse_body,
+            )
+
+        page.route("http://localhost/chat/stream", handle_stream)
+        page.set_content(_chat_sse_harness_html())
+        _wait_for_alpine(page)
+
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const carousels = document.querySelectorAll('[data-testid="product-carousel"]');
+              return carousels.length === 1 && carousels[0].id === 'carousel-new';
+            }""",
+            timeout=1000,
+        )
+        assert "26,310" not in page.inner_text("#chat-messages")
+
+        browser.close()
+
+
+@pytest.mark.browser
+def test_chat_sse_done_clears_sending_without_response_html() -> None:
+    """Graph completion emits done even when no assistant HTML is streamed."""
+    sse_body = "event: done\n" "data: \n\n"
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def handle_stream(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+                body=sse_body,
+            )
+
+        page.route("http://localhost/chat/stream", handle_stream)
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const form = document.getElementById('chat-form');
+              const indicator = document.getElementById('chat-loading');
+              return form
+                && !form.classList.contains('htmx-request')
+                && indicator
+                && !indicator.classList.contains('htmx-request');
+            }""",
+            timeout=1000,
+        )
+
+        browser.close()

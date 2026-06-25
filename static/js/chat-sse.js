@@ -104,6 +104,37 @@
     return { events, remainder };
   }
 
+  function containsProductCarousel(html) {
+    return (
+      html.includes('data-testid="product-carousel"') ||
+      html.includes('data-slot="product-carousel"')
+    );
+  }
+
+  function pruneStaleCarousels(messagesRoot) {
+    const assistants = messagesRoot.querySelectorAll('[data-role="assistant-message"]');
+    if (assistants.length <= 1) {
+      return;
+    }
+    for (let index = 0; index < assistants.length - 1; index += 1) {
+      const bubble = assistants[index];
+      for (const slot of bubble.querySelectorAll(
+        '.assistant-products, [data-slot="product-carousel"], [data-testid="product-carousel"]',
+      )) {
+        const container = slot.closest(".assistant-products") || slot;
+        container.remove();
+      }
+    }
+    const remaining = messagesRoot.querySelectorAll('[data-testid="product-carousel"]');
+    if (remaining.length > 1) {
+      for (let index = 0; index < remaining.length - 1; index += 1) {
+        const carousel = remaining[index];
+        const container = carousel.closest(".assistant-products") || carousel.parentElement;
+        container?.remove();
+      }
+    }
+  }
+
   function swapListenerHtml(listener, html) {
     const targetSelector = listener.getAttribute("hx-target");
     const target = targetSelector ? document.querySelector(targetSelector) : null;
@@ -116,6 +147,10 @@
     // Activate hx-* on streamed fragments only (not the whole message log / form).
     for (const node of Array.from(target.children).slice(childCountBefore)) {
       htmx.process(node);
+    }
+    if (containsProductCarousel(html)) {
+      pruneStaleCarousels(target);
+      removePendingAssistantBubbles();
     }
     document.body.dispatchEvent(
       new CustomEvent("htmx:afterSwap", { detail: { target } }),

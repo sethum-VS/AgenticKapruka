@@ -7,6 +7,11 @@
     <div class="prose-assistant">
       <p>{{ message }}</p>
     </div>
+    {% if rate_limit_banner_html %}
+    <div class="mt-3" data-slot="rate-limit-banner">
+      {{ rate_limit_banner_html | safe }}
+    </div>
+    {% endif %}
     {% if products_html %}
     <div
       class="assistant-products mt-3 border-t border-commerce-parchment/60 pt-3"

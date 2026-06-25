@@ -19,18 +19,34 @@ _UTILITY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bVIMP[0-9A-Z]+\b"),
 )
 
-# Emotional / life-event cues — favor warmer, local tone.
+# Emotional / life-event cues — favor warmer, local tone (trump utility when matched).
+_EMOTIONAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(broke up|breakup|break-up|passed away|funeral|condolence|sympathy|"
+        r"sorry to hear|heartbroken|devastated|grieving)\b",
+        re.I,
+    ),
+)
+
+# Order-fix apologies are transactional — not distress / concierge empathy turns.
+_TRANSACTIONAL_APOLOGY = re.compile(
+    r"\bi'?m sorry\b.*\b(?:order(?:ed)?|wrong|mistake|replacement|help|fix|cake)\b",
+    re.I,
+)
+
 _SITUATIONAL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"\b(broke up|breakup|passed away|funeral|condolence|sorry|heartbroken|"
-        r"missing (?:her|him|them)|devastated|lonely|stressed|anxious|nervous)\b",
-        re.I,
-    ),
-    re.compile(r"\b(girlfriend|boyfriend|ex-|divorce|separated)\b", re.I),
-    re.compile(
-        r"\b(valentine(?:'?s)?|anniversary surprise|romantic surprise|surprise my partner)\b",
-        re.I,
-    ),
+    _EMOTIONAL_PATTERNS
+    + (
+        re.compile(
+            r"\b(missing (?:her|him|them)|lonely|stressed|anxious|nervous)\b",
+            re.I,
+        ),
+        re.compile(r"\b(girlfriend|boyfriend|ex-|divorce|separated)\b", re.I),
+        re.compile(
+            r"\b(valentine(?:'?s)?|anniversary surprise|romantic surprise|surprise my partner)\b",
+            re.I,
+        ),
+    )
 )
 
 # Sinhala script or common Tanglish tokens.
@@ -85,6 +101,12 @@ def classify_query_mode(text: str) -> QueryMode:
     stripped = text.strip()
     if not stripped:
         return "utility"
+
+    if _TRANSACTIONAL_APOLOGY.search(stripped):
+        return "utility"
+
+    if any(pattern.search(stripped) for pattern in _EMOTIONAL_PATTERNS):
+        return "situational"
 
     situational_hits = sum(1 for pattern in _SITUATIONAL_PATTERNS if pattern.search(stripped))
     utility_hits = sum(1 for pattern in _UTILITY_PATTERNS if pattern.search(stripped))
