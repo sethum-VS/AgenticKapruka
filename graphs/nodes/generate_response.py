@@ -7,11 +7,12 @@ import json
 import logging
 import re
 from datetime import date
-from typing import Any
+from typing import Any, cast
 
 from google import genai
 from google.genai import types
 from langchain_core.messages import HumanMessage
+from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ValidationError
 
 from app.templating import (
@@ -24,7 +25,6 @@ from app.templating import (
 )
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
-from langgraph.config import get_stream_writer
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
@@ -51,6 +51,7 @@ from lib.chat.product_honesty import (
 )
 from lib.chat.query_preprocessor import extract_target_city, is_delivery_context_relevant_turn
 from lib.chat.search_broadening import build_empty_search_reply
+from lib.chat.status_copy import PUTTING_TOGETHER_RECOMMENDATIONS
 from lib.chat.system_prompts import (
     build_farewell_message,
     build_general_welcome_message,
@@ -221,7 +222,7 @@ def _rate_limit_banner_html(agent_tool_error: dict[str, str]) -> str | None:
     if isinstance(raw_retry, str) and raw_retry.isdigit():
         retry_after = max(1, int(raw_retry))
     return render_rate_limit_banner(
-        title="Catalog is busy",
+        title="Still searching…",
         message="I'm checking our catalog — one moment.",
         error_code="rate_limit_exceeded",
         retry_after_seconds=retry_after,
@@ -743,6 +744,7 @@ def _budget_curated_products(
     graph_context_available: bool,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    session_recipient_hint: str | None = None,
     strict_budget: bool = False,
 ) -> list[dict[str, Any]]:
     """Apply birthday/puja relevance and budget-aware carousel ordering."""
@@ -754,8 +756,30 @@ def _budget_curated_products(
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
+        session_recipient_hint=session_recipient_hint,
         strict_budget=strict_budget,
     )
+
+
+def _refine_last_search_kwargs(
+    *,
+    budget_max: float,
+    currency: str,
+    user_message: str,
+    session_product_focus: str | None,
+    session_search_query: str | None = None,
+    session_recipient_hint: str | None = None,
+    hybrid_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "budget_max": budget_max,
+        "currency": currency,
+        "session_product_focus": session_product_focus,
+        "session_search_query": session_search_query,
+        "session_recipient_hint": session_recipient_hint,
+        "user_message": user_message,
+        "hybrid_context": hybrid_context,
+    }
 
 
 def _enrich_product_display_price(product: dict[str, Any]) -> dict[str, Any]:
@@ -781,6 +805,7 @@ def _cap_search_products_for_llm_context(
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
     session_search_query: str | None = None,
+    session_recipient_hint: str | None = None,
     strict_budget: bool = False,
 ) -> dict[str, Any] | None:
     """Slice curated kapruka_search_products results before Gemini synthesis."""
@@ -807,6 +832,7 @@ def _cap_search_products_for_llm_context(
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
+        session_recipient_hint=session_recipient_hint,
         strict_budget=strict_budget,
     )
     capped_results = [_enrich_product_display_price(product) for product in curated[:limit]]
@@ -951,10 +977,30 @@ def _prepend_situational_empathy(
 ) -> str:
     if not intent_metadata or not intent_metadata.get("is_situational"):
         return reply_text
-    lowered = reply_text.strip().lower()
-    if lowered.startswith(("i'm sorry", "sorry", "i am sorry")):
+    head = reply_text.strip().lower()[:120]
+    if any(
+        phrase in head
+        for phrase in ("sorry", "hear that", "heartbroken", "going through")
+    ):
         return reply_text
     return f"I'm sorry to hear you're going through this. {reply_text.strip()}"
+
+
+def _prepend_budget_confirmation(
+    reply_text: str,
+    intent_metadata: IntentMetadata | None,
+    *,
+    budget_max: float | None,
+    currency: str,
+) -> str:
+    if not intent_metadata or not intent_metadata.get("budget_confirmation_pending"):
+        return reply_text
+    if budget_max is None or budget_max <= 0:
+        return reply_text
+    cap = format_currency(budget_max, currency)
+    if "keeping under" in reply_text.lower() or cap.lower() in reply_text.lower():
+        return reply_text
+    return f"Still keeping under {cap}?\n\n{reply_text.strip()}"
 
 
 def _emit_synthesis_status() -> None:
@@ -963,7 +1009,7 @@ def _emit_synthesis_status() -> None:
     except RuntimeError:
         return
     if writer is not None:
-        writer({"type": "status", "message": "Putting together recommendations…"})
+        writer({"type": "status", "message": PUTTING_TOGETHER_RECOMMENDATIONS})
 
 
 def extract_search_products(
@@ -976,6 +1022,7 @@ def extract_search_products(
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
     session_search_query: str | None = None,
+    session_recipient_hint: str | None = None,
     strict_budget: bool = False,
     last_search_products: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
@@ -1000,6 +1047,7 @@ def extract_search_products(
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
+        session_recipient_hint=session_recipient_hint,
         strict_budget=strict_budget,
     )
     if (
@@ -1015,6 +1063,10 @@ def extract_search_products(
             budget_max=budget_max,
             currency=currency,
             session_product_focus=session_product_focus,
+            session_search_query=session_search_query,
+            session_recipient_hint=session_recipient_hint,
+            user_message=user_message,
+            hybrid_context=hybrid_context,
         )
         if refined:
             return refined
@@ -1164,6 +1216,8 @@ def build_products_carousel_html(
                 budget_max=budget_max,
                 currency=currency,
                 session_product_focus=session_product_focus,
+                user_message=user_message,
+                hybrid_context=hybrid_context,
             )
             if refined:
                 products = refined
@@ -1412,6 +1466,13 @@ async def generate_response(
                 ),
                 "assistant_message": reply_text,
             }
+        error_code = agent_tool_error.get("error") or _error_code_from_tool_trace(
+            state.get("tool_trace"),
+            tool_name,
+        )
+        allow_stale = not _turn_has_fresh_search(state.get("tool_trace"))
+        if error_code in ("429", "rate_limit_exceeded"):
+            allow_stale = True
         products_html = build_products_carousel_html(
             _resolve_effective_tool_results(state),
             budget_max=state.get("session_budget_max"),
@@ -1421,7 +1482,7 @@ async def generate_response(
             hybrid_context=state.get("hybrid_context") or {},
             session_product_focus=state.get("session_product_focus"),
             last_search_products=last_search or None,
-            allow_stale_fallback=not _turn_has_fresh_search(state.get("tool_trace")),
+            allow_stale_fallback=allow_stale,
         )
         rate_limit_banner = _rate_limit_banner_html(agent_tool_error)
         return {
@@ -1644,6 +1705,9 @@ async def generate_response(
             currency=currency,
             session_product_focus=session_product_focus,
             session_search_query=state.get("session_search_query"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            user_message=user_message,
+            hybrid_context=hybrid_context,
         )
         if refined:
             visible_products = refined
@@ -1659,6 +1723,7 @@ async def generate_response(
             hybrid_context=hybrid_context,
             session_product_focus=session_product_focus,
             session_search_query=state.get("session_search_query"),
+            session_recipient_hint=state.get("session_recipient_hint"),
             strict_budget=strict_budget,
             last_search_products=last_search_products or None,
         )
@@ -1674,6 +1739,9 @@ async def generate_response(
                 currency=currency,
                 session_product_focus=session_product_focus,
                 session_search_query=state.get("session_search_query"),
+                session_recipient_hint=state.get("session_recipient_hint"),
+                user_message=user_message,
+                hybrid_context=hybrid_context,
             )
             if refined:
                 visible_products = refined
@@ -1711,6 +1779,7 @@ async def generate_response(
             hybrid_context=hybrid_context,
             session_product_focus=session_product_focus,
             session_search_query=state.get("session_search_query"),
+            session_recipient_hint=state.get("session_recipient_hint"),
             strict_budget=strict_budget,
         ),
         budget_max=budget_max,
@@ -1758,6 +1827,12 @@ async def generate_response(
         reply_text = template or "I could not generate a response. Please try again."
 
     reply_text = normalize_catalog_text(reply_text)
+    reply_text = _prepend_budget_confirmation(
+        reply_text,
+        intent_metadata,
+        budget_max=budget_max,
+        currency=currency,
+    )
     reply_text = _prepend_situational_empathy(reply_text, intent_metadata)
     tool_trace = state.get("tool_trace")
     reply_text = delivery_claim_guard(
@@ -1808,4 +1883,8 @@ async def generate_response(
     if topic_pivot:
         updates["last_visible_products"] = visible_products or None
         updates["last_search_products"] = visible_products or None
+    if isinstance(intent_metadata, dict) and intent_metadata.get("budget_confirmation_pending"):
+        cleared = dict(intent_metadata)
+        cleared["budget_confirmation_pending"] = False
+        updates["intent_metadata"] = cast(IntentMetadata, cleared)
     return updates

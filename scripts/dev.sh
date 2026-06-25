@@ -184,6 +184,15 @@ wait_backend() {
 }
 
 cmd_start() {
+  if [[ -f "$BACKEND_PID" ]]; then
+    local existing_pid
+    existing_pid="$(cat "$BACKEND_PID")"
+    if kill -0 "$existing_pid" 2>/dev/null \
+      && curl -s -o /dev/null "http://127.0.0.1:$BACKEND_PORT/health" 2>/dev/null; then
+      log "Backend already running on http://127.0.0.1:$BACKEND_PORT — use 'make restart' to reload."
+      exit 0
+    fi
+  fi
   stop_dev_processes
   refresh_docker
   wait_redis

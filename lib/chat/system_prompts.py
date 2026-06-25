@@ -156,9 +156,13 @@ _DELIVERY_CONTEXT_SUPPRESS_RULE = (
 )
 
 _EMPATHY_PREAMBLE_RULE = (
-    "\nWhen the customer shares emotional distress (breakup, loss, apology), open with "
-    "a brief acknowledgment (for example, \"I'm sorry to hear that…\") before "
-    "clarifying questions or recommendations.\n"
+    "\nWhen the customer shares emotional distress (breakup, loss, apology), use at most "
+    "one brief empathy sentence; never repeat sorry phrasing.\n"
+)
+
+_BUDGET_CONFIRMATION_RULE = (
+    "\nIf the reply already asks whether to keep the session budget cap, do not repeat "
+    "that budget question.\n"
 )
 
 
@@ -220,6 +224,8 @@ def build_response_system_instruction(
     instruction = select_response_system_instruction(intent_metadata, intent=intent)
     if not delivery_context_relevant:
         instruction += _DELIVERY_CONTEXT_SUPPRESS_RULE
+    if intent_metadata and intent_metadata.get("budget_confirmation_pending"):
+        instruction += _BUDGET_CONFIRMATION_RULE
     if zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
         instruction += (

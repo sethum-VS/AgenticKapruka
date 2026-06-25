@@ -5,16 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from app.config import get_settings
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, Intent
+from lib.chat.intent_heuristics import is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
 from lib.debug.trace import trace_route_decision
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.embeddings.vertex_embeddings import embed_texts
-from lib.chat.intent_heuristics import is_budget_refinement_message
 from lib.kapruka.product_id import contains_product_id
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
@@ -268,7 +268,18 @@ async def retrieve_hybrid_context(
         intent_metadata=intent_metadata,
     )
 
+    graph_degraded = False
+    if neo4j_client is not None and not skip_graph_reembed:
+        vector_hits = hybrid_context.get("vector_hits") or []
+        categories = hybrid_context.get("categories") or []
+        if not vector_hits and not categories:
+            graph_degraded = True
+
     updates: dict[str, Any] = {"hybrid_context": hybrid_context}
+    if graph_degraded:
+        meta = dict(intent_metadata or state.get("intent_metadata") or {})
+        meta["graph_degraded"] = True
+        updates["intent_metadata"] = cast(IntentMetadata, meta)
     currency_hint = preferences.get("currency")
     if currency_hint and currency_hint in _VALID_CURRENCIES and state.get("currency") is None:
         updates["currency"] = currency_hint

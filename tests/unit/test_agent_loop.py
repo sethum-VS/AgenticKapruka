@@ -1333,3 +1333,48 @@ def test_delivery_check_pending_false_on_breakup_with_session_city() -> None:
         [],
         "We just broke up and I'm heartbroken.",
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_rate_limit_retry_succeeds_without_tool_error() -> None:
+    """Budget refinement retries rate-limited MCP search before surfacing tool_error."""
+    mock_service = _mock_kapruka_service()
+    rate_limited = {
+        "error": "rate_limit_exceeded",
+        "message": "Rate limit exceeded",
+        "retry_after_seconds": 1,
+    }
+    success = {
+        "results": [_SEARCH_HIT.model_dump(mode="json")],
+        "applied_filters": {"q": "birthday chocolate cake", "max_price": 6000.0},
+    }
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="Keep it under 6000 rupees.")],
+        "session_product_focus": "chocolate",
+        "session_occasion": "birthday",
+        "session_search_query": "chocolate gift",
+        "session_budget_max": 6000.0,
+        "intent_metadata": {"budget_max": 6000.0},
+    }
+
+    with (
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=AssertionError("planner should not run on budget refinement"),
+        ),
+        patch(
+            "graphs.nodes.agent_loop.invoke_tool",
+            new_callable=AsyncMock,
+            side_effect=[rate_limited, rate_limited, success],
+        ) as mock_invoke,
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result.get("agent_tool_error") is None
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert mock_invoke.await_count == 3

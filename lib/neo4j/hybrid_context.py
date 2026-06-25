@@ -644,7 +644,36 @@ def _focus_derived_search_q(
     return None
 
 
-_GENERIC_BUDGET_Q_RE = re.compile(r"^(?:chocolate gift|gift hamper|gift)$", re.I)
+_GENERIC_BUDGET_Q_RE = re.compile(
+    r"^(?:chocolate gift|gift hamper|gift|"
+    r"(?:\w+\s+)*(?:birthday|anniversary)\s+(?:chocolate|cake|gift)(?:\s+\w+)*|"
+    r"(?:wife|husband|mom|mother|mum|dad|father|girlfriend|boyfriend|partner)\s+"
+    r"(?:birthday|anniversary)\s+(?:chocolate|cake|gift)(?:\s+gift)?)$",
+    re.I,
+)
+
+
+def _apply_occasion_budget_search_bias(
+    state: dict[str, Any],
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Bias budget-refinement MCP search toward occasion-appropriate gifts."""
+    occasion = state.get("session_occasion")
+    focus = state.get("session_product_focus")
+    if isinstance(occasion, str) and occasion.strip().lower() == "birthday":
+        if focus in ("chocolate", "cake"):
+            args["q"] = "birthday chocolate cake"
+            args["category"] = "Birthday"
+    elif isinstance(occasion, str) and occasion.strip().lower() == "anniversary":
+        focus = state.get("session_product_focus")
+        if focus == "flowers":
+            args["q"] = "anniversary flowers bouquet"
+        elif focus in ("chocolate", "cake"):
+            args["q"] = "anniversary chocolate gift"
+        else:
+            args["q"] = "anniversary gift"
+    args["sort"] = "relevance"
+    return args
 
 
 def _enrich_budget_search_q(
@@ -710,7 +739,7 @@ def build_budget_refinement_search_args(
         "q": q,
         "currency": currency,
         "max_price": float(max_price),
-        "sort": "price_asc",
+        "sort": "relevance",
     }
     if (
         not topic_pivot
@@ -718,7 +747,7 @@ def build_budget_refinement_search_args(
         and is_birthday_cake_intent(user_message)
     ):
         args["category"] = "Birthday"
-    return args
+    return _apply_occasion_budget_search_bias(state, args)
 
 
 def birthday_occasion_from_context(

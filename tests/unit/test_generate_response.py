@@ -1667,6 +1667,16 @@ def test_breakup_reply_omits_stale_kandy_delivery() -> None:
     assert delivery_html is None
 
 
+def test_prepend_situational_empathy_skips_when_reply_already_has_sorry() -> None:
+    from graphs.nodes.generate_response import _prepend_situational_empathy
+
+    metadata = {"is_situational": True}
+    reply = "I'm really sorry you're going through this breakup. Here are some ideas."
+    result = _prepend_situational_empathy(reply, metadata)
+    assert result.count("sorry") == 1
+    assert result.startswith("I'm really sorry")
+
+
 @pytest.mark.asyncio
 async def test_generate_response_budget_turn_prefers_refined_chocolate_carousel() -> None:
     """Budget-only turn uses last_search chocolate picks, not greeting-card MCP drift."""

@@ -15,10 +15,10 @@ from lib.chat.intent_heuristics import (
     GIFT_PREFERENCES_QUESTION,
     PROCEED_CHECKOUT_MESSAGE,
     classify_routing_guard,
+    is_budgeted_gift_ideas_message,
     is_cart_add_trigger,
     is_topic_pivot_message,
     is_vague_gift_intent,
-    is_budgeted_gift_ideas_message,
 )
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.off_topic import (
@@ -175,6 +175,32 @@ def _resolve_session_recipient_hint(state: AgentState, user_message: str) -> str
     if isinstance(prior, str) and prior.strip():
         return prior.strip().lower()
     return None
+
+
+def _flag_budget_confirmation_on_occasion_change(
+    state: AgentState,
+    user_message: str,
+    session_budget_max: float | None,
+    intent_metadata: IntentMetadata,
+) -> IntentMetadata:
+    """Ask once when occasion changes but a session budget cap remains active."""
+    if not isinstance(session_budget_max, (int, float)) or session_budget_max <= 0:
+        return intent_metadata
+    if is_topic_pivot_message(user_message):
+        return intent_metadata
+    derived = _derive_session_occasion(user_message)
+    prior = state.get("session_occasion")
+    if (
+        derived is not None
+        and isinstance(prior, str)
+        and prior.strip()
+        and derived != prior.strip().lower()
+    ):
+        return cast(
+            IntentMetadata,
+            {**intent_metadata, "budget_confirmation_pending": True},
+        )
+    return intent_metadata
 
 
 def _resolve_session_product_focus(state: AgentState, user_message: str) -> str | None:
@@ -344,6 +370,12 @@ async def analyze_intent(
     session_product_focus = _resolve_session_product_focus(state, user_message)
     session_occasion = _resolve_session_occasion(state, user_message)
     session_recipient_hint = _resolve_session_recipient_hint(state, user_message)
+    intent_metadata = _flag_budget_confirmation_on_occasion_change(
+        state,
+        user_message,
+        session_budget_max,
+        intent_metadata,
+    )
     delivery_date, session_delivery_date = _resolve_delivery_dates(state, user_message)
 
     if is_budgeted_gift_ideas_message(user_message):

@@ -16,6 +16,7 @@ from graphs.state import AgentState
 from lib.chat.intent_heuristics import is_vague_gift_intent
 from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
 from lib.chat.sse import chunk_text, format_sse_event
+from lib.chat.status_copy import SEARCHING_KAPRUKA
 from lib.debug.trace import trace_error, trace_node_update, trace_turn_complete
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ async def iter_chat_sse_events(
     partial_state: dict[str, Any] = {}
 
     if not _skip_early_search_status(state):
-        early_status_message = "Searching Kapruka…"
+        early_status_message = SEARCHING_KAPRUKA
         thinking_html = _render_streaming_assistant(early_status_message, pending_id, oob=False)
         yield format_sse_event(thinking_html)
         stream_started = True

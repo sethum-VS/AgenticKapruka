@@ -21,3 +21,5 @@ class IntentMetadata(TypedDict, total=False):
     vernacular_score_hint: float
     topic_pivot: bool
     budgeted_gift_discovery: bool
+    budget_confirmation_pending: bool
+    graph_degraded: bool

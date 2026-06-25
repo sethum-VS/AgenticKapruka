@@ -21,20 +21,27 @@ from lib.chat.delivery_dates import (
     delivery_date_clarifying_question,
     normalize_delivery_date,
 )
-from lib.chat.intent_heuristics import is_bare_category_pivot, is_budget_refinement_message, is_budgeted_gift_ideas_message
+from lib.chat.intent_heuristics import (
+    is_bare_category_pivot,
+    is_budget_refinement_message,
+    is_budgeted_gift_ideas_message,
+)
 from lib.chat.product_curation import (
     apply_anniversary_curation,
     apply_birthday_cake_curation,
     apply_gift_curation,
     apply_puja_curation,
+    apply_recipient_curation,
     carousel_focus_guard,
     demote_off_focus_products,
+    filter_gift_noise_products,
     has_graph_hybrid_context,
     is_cake_accessory,
     is_flower_fruit_intent,
 )
 from lib.chat.query_preprocessor import is_delivery_context_relevant_turn
 from lib.chat.search_broadening import apply_first_broaden
+from lib.chat.status_copy import SEARCHING_KAPRUKA
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
@@ -75,13 +82,13 @@ ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
 )
 
 _TOOL_STATUS_MESSAGES: dict[str, str] = {
-    SEARCH_PRODUCTS_TOOL: "Searching Kapruka…",
+    SEARCH_PRODUCTS_TOOL: SEARCHING_KAPRUKA,
     CHECK_DELIVERY_TOOL: "Checking delivery…",
     LIST_CITIES_TOOL: "Listing delivery cities…",
     LIST_CATEGORIES_TOOL: "Browsing categories…",
     GET_PRODUCT_TOOL: "Fetching product details…",
 }
-_DEFAULT_STATUS_MESSAGE = "Searching Kapruka…"
+_DEFAULT_STATUS_MESSAGE = SEARCHING_KAPRUKA
 
 PLANNER_SEARCH_RESULT_LIMIT = 5
 PLANNER_CATEGORY_NODE_LIMIT = 10
@@ -525,11 +532,60 @@ def _agent_tool_error_from_result(tool_name: str, result: dict[str, Any]) -> dic
     }
     error_code = result.get("error")
     if error_code is not None:
-        payload["error"] = str(error_code)
+        code_str = str(error_code)
+        if code_str == "429":
+            code_str = "rate_limit_exceeded"
+        payload["error"] = code_str
     retry_after = result.get("retry_after_seconds")
     if isinstance(retry_after, (int, float)) and retry_after > 0:
         payload["retry_after_seconds"] = str(int(retry_after))
+    elif isinstance(retry_after, str) and retry_after.isdigit():
+        payload["retry_after_seconds"] = retry_after
     return payload
+
+
+def _is_rate_limit_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    error_code = str(result.get("error") or "")
+    return error_code in ("429", "rate_limit_exceeded")
+
+
+def _rate_limit_retry_delay_seconds(result: dict[str, Any]) -> int:
+    raw_retry = result.get("retry_after_seconds")
+    if isinstance(raw_retry, (int, float)) and raw_retry > 0:
+        return min(int(raw_retry), 5)
+    if isinstance(raw_retry, str) and raw_retry.isdigit():
+        return min(int(raw_retry), 5)
+    return 1
+
+
+async def _invoke_tool_with_rate_limit_retry(
+    tool_name: str,
+    tool_args: dict[str, Any],
+    *,
+    kapruka_service: KaprukaService,
+    client_ip: str,
+    currency: str | None,
+    max_retries: int = 2,
+) -> dict[str, Any]:
+    """Retry Kapruka MCP reads on rate limit with backoff and status SSE."""
+    result: dict[str, Any] = {}
+    for attempt in range(max_retries + 1):
+        _emit_status(_status_message_for_tool(tool_name))
+        result = await invoke_tool(
+            tool_name,
+            tool_args,
+            kapruka_service=kapruka_service,
+            client_ip=client_ip,
+            currency=currency,
+        )
+        if not _is_rate_limit_result(result):
+            return result
+        if attempt >= max_retries:
+            return result
+        await asyncio.sleep(_rate_limit_retry_delay_seconds(result))
+    return result
 
 
 def _curate_search_trace_result(
@@ -550,6 +606,8 @@ def _curate_search_trace_result(
     hybrid_context = state.get("hybrid_context") or {}
     graph_up = has_graph_hybrid_context(hybrid_context)
     session_focus = state.get("session_product_focus")
+    session_recipient = state.get("session_recipient_hint")
+    strict_budget = bool(is_budget_refinement_message(user_message))
     curated = apply_anniversary_curation(
         apply_gift_curation(
             apply_birthday_cake_curation(
@@ -570,6 +628,11 @@ def _curate_search_trace_result(
         query=user_message,
         hybrid_context=hybrid_context,
     )
+    curated = apply_recipient_curation(
+        curated,
+        session_recipient if isinstance(session_recipient, str) else None,
+    )
+    curated = filter_gift_noise_products(curated, strict=strict_budget)
     budget_max = state.get("session_budget_max")
     currency = state.get("currency") or state.get("session_budget_currency") or "LKR"
     if isinstance(budget_max, (int, float)) and budget_max > 0:
@@ -579,7 +642,7 @@ def _curate_search_trace_result(
             curated,
             float(budget_max),
             str(currency),
-            strict_in_budget=bool(is_budget_refinement_message(user_message)),
+            strict_in_budget=strict_budget,
         )
     if curated == products:
         return result
@@ -1054,7 +1117,7 @@ async def agent_loop(
                 currency,
             )
             _emit_status(_status_message_for_tool(tool_name))
-            voucher_result = await invoke_tool(
+            voucher_result = await _invoke_tool_with_rate_limit_retry(
                 tool_name,
                 voucher_args,
                 kapruka_service=kapruka_service,
@@ -1077,7 +1140,7 @@ async def agent_loop(
             )
             if not _is_duplicate_invocation(tool_trace, tool_name, physical_args):
                 _emit_status(_status_message_for_tool(tool_name))
-                physical_result = await invoke_tool(
+                physical_result = await _invoke_tool_with_rate_limit_retry(
                     tool_name,
                     physical_args,
                     kapruka_service=kapruka_service,
@@ -1124,8 +1187,7 @@ async def agent_loop(
             )
             discovery_search_merged = True
             budget_refinement_search_applied = True
-            _emit_status(_status_message_for_tool(tool_name))
-            result = await invoke_tool(
+            result = await _invoke_tool_with_rate_limit_retry(
                 tool_name,
                 enriched_args,
                 kapruka_service=kapruka_service,
@@ -1353,15 +1415,23 @@ async def agent_loop(
             force_finish_reason = "duplicate_guard"
             continue
 
-        _emit_status(_status_message_for_tool(tool_name))
-
-        result = await invoke_tool(
-            tool_name,
-            enriched_args,
-            kapruka_service=kapruka_service,
-            client_ip=rate_limit_key,
-            currency=currency,
-        )
+        if tool_name == SEARCH_PRODUCTS_TOOL:
+            result = await _invoke_tool_with_rate_limit_retry(
+                tool_name,
+                enriched_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+        else:
+            _emit_status(_status_message_for_tool(tool_name))
+            result = await invoke_tool(
+                tool_name,
+                enriched_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
         if tool_name == SEARCH_PRODUCTS_TOOL:
             result = _curate_search_trace_result(result, state=state)
             search_q_arg = enriched_args.get("q")

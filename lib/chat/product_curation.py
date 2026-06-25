@@ -24,9 +24,37 @@ _GIFT_PROMOTE_RE = re.compile(
 )
 _GIFT_DEMOTE_RE = re.compile(
     r"\b(?:curry powder|kitkat|ritzbury|grocery|spice|convenience|"
-    r"chocolate bar|toffee bar|candy bar|snack bar)\b",
+    r"chocolate bar|toffee bar|candy bar|snack bar|for him|gentleman)\b",
     re.I,
 )
+_LOW_TICKET_SNACK_RE = re.compile(r"\b(?:bar|snack|toffee|candy)\b", re.I)
+_FEMALE_RECIPIENTS = frozenset(
+    {
+        "wife",
+        "mom",
+        "mother",
+        "mum",
+        "girlfriend",
+        "sister",
+        "daughter",
+        "grandma",
+        "grandmother",
+    },
+)
+_MALE_RECIPIENTS = frozenset(
+    {
+        "husband",
+        "dad",
+        "father",
+        "boyfriend",
+        "brother",
+        "son",
+        "grandpa",
+        "grandfather",
+    },
+)
+_FOR_HIM_RE = re.compile(r"\b(?:for him|men'?s?|gentleman)\b", re.I)
+_FOR_HER_RE = re.compile(r"\b(?:for her|women'?s?|ladies)\b", re.I)
 _NON_FLORAL_FLOWER_DENYLIST = re.compile(
     r"\b(?:air freshener|freshener|fragrance|deodorizer|room spray|scented)\b",
     re.I,
@@ -399,6 +427,54 @@ def apply_gift_curation(
     return promoted + neutral + demoted
 
 
+def filter_gift_noise_products(
+    products: list[dict[str, Any]],
+    *,
+    strict: bool,
+) -> list[dict[str, Any]]:
+    """Drop grocery, spice, and low-ticket snack items on strict budget turns."""
+    if not strict or not products:
+        return list(products)
+    filtered: list[dict[str, Any]] = []
+    for product in products:
+        blob = _product_text_blob(product)
+        if _GIFT_DEMOTE_RE.search(blob) or _PRODUCE_DENYLIST.search(blob):
+            continue
+        price = product_price_amount(product)
+        if (
+            price is not None
+            and price < 500
+            and _LOW_TICKET_SNACK_RE.search(blob)
+        ):
+            continue
+        filtered.append(product)
+    return filtered
+
+
+def apply_recipient_curation(
+    products: list[dict[str, Any]],
+    session_recipient_hint: str | None,
+) -> list[dict[str, Any]]:
+    """Demote gender-mismatched gift sets for the stated recipient."""
+    if not products or not session_recipient_hint:
+        return list(products)
+    recipient = session_recipient_hint.strip().lower()
+    if recipient in _FEMALE_RECIPIENTS:
+        mismatch = _FOR_HIM_RE
+    elif recipient in _MALE_RECIPIENTS:
+        mismatch = _FOR_HER_RE
+    else:
+        return list(products)
+    preferred: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        if mismatch.search(_product_text_blob(product)):
+            demoted.append(product)
+        else:
+            preferred.append(product)
+    return preferred + demoted
+
+
 def refine_last_search_by_budget(
     last_search_products: list[dict[str, Any]],
     *,
@@ -406,13 +482,25 @@ def refine_last_search_by_budget(
     currency: str,
     session_product_focus: str | None = None,
     session_search_query: str | None = None,
+    session_recipient_hint: str | None = None,
+    user_message: str = "",
+    hybrid_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Re-filter prior carousel by budget and session focus; None triggers MCP fallback."""
     _ = session_search_query
     if not last_search_products or budget_max is None or budget_max <= 0:
         return None
 
-    curated = sort_and_filter_by_budget(last_search_products, budget_max, currency)
+    curated = curate_carousel_products(
+        last_search_products,
+        query=user_message or (session_search_query or ""),
+        budget_max=budget_max,
+        currency=currency,
+        hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
+        session_recipient_hint=session_recipient_hint,
+        strict_budget=True,
+    )
     in_budget = [
         product
         for product in curated
@@ -535,6 +623,7 @@ def curate_carousel_products(
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    session_recipient_hint: str | None = None,
     strict_budget: bool = False,
 ) -> list[dict[str, Any]]:
     """Apply birthday/puja relevance curation then budget-aware carousel ordering."""
@@ -565,6 +654,8 @@ def curate_carousel_products(
         session_product_focus=session_product_focus,
     )
     scoped = boost_carousel_relevance(scoped, query)
+    scoped = apply_recipient_curation(scoped, session_recipient_hint)
+    scoped = filter_gift_noise_products(scoped, strict=strict_budget)
 
     def _budget_sort(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return sort_and_filter_by_budget(

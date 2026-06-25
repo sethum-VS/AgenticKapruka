@@ -340,3 +340,21 @@ async def test_analyze_intent_topic_pivot_clears_hybrid_hints_and_search_query()
     hints = result["hybrid_context"]["hints"]
     assert "occasion" not in hints
     assert "category" not in hints
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_occasion_change_sets_budget_confirmation_pending() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Show me some anniversary gifts")],
+        "session_id": "sess-occasion-pivot",
+        "session_occasion": "birthday",
+        "session_budget_max": 6000.0,
+        "session_budget_currency": "LKR",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("session_occasion") == "anniversary"
+    assert result.get("session_budget_max") == 6000.0
+    assert result["intent_metadata"].get("budget_confirmation_pending") is True

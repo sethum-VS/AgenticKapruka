@@ -271,3 +271,106 @@ async def test_budget_refinement_carousel_stable_after_delivery_turn(
     html = turn3.get("response_html") or ""
     assert "Heart Chocolate Gift Box" in html
     assert "Greeting Card" not in html
+
+
+@pytest.mark.asyncio
+async def test_budget_refinement_filters_snack_noise_from_mock_mcp(
+    checkpointer: AsyncRedisSaver,
+) -> None:
+    """Budget turn drops curry powder and snack bars when MCP returns cheap noise first."""
+    snack = ProductResult(
+        id="snack001",
+        name="Chocolate Snack Bar",
+        summary="Mini bar.",
+        price=Money(amount=70.0, currency="LKR"),
+        compare_at_price=None,
+        in_stock=True,
+        stock_level="high",
+        image_url=None,
+        category=CategoryRef(id="cat_snack", name="Snacks", slug="snacks"),
+        rating=None,
+        ships_internationally=False,
+        url="https://www.kapruka.com/snack",
+    )
+    curry = ProductResult(
+        id="curry001",
+        name="Ruhunu Curry Powder",
+        summary="Spice pack.",
+        price=Money(amount=350.0, currency="LKR"),
+        compare_at_price=None,
+        in_stock=True,
+        stock_level="high",
+        image_url=None,
+        category=CategoryRef(id="cat_grocery", name="Grocery", slug="grocery"),
+        rating=None,
+        ships_internationally=False,
+        url="https://www.kapruka.com/curry",
+    )
+    cake = ProductResult(
+        id="cake001",
+        name="Say Cheers Chocolate Cake",
+        summary="Birthday cake.",
+        price=Money(amount=3660.0, currency="LKR"),
+        compare_at_price=None,
+        in_stock=True,
+        stock_level="high",
+        image_url=None,
+        category=CategoryRef(id="cat_birthday", name="Birthday", slug="birthday"),
+        rating=None,
+        ships_internationally=False,
+        url="https://www.kapruka.com/cake",
+    )
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.side_effect = [
+        SearchProductsOutput(
+            results=[_CHOCOLATE_PRODUCT],
+            next_cursor=None,
+            applied_filters={"q": "chocolate gift"},
+        ),
+        SearchProductsOutput(
+            results=[snack, curry, cake],
+            next_cursor=None,
+            applied_filters={"q": "birthday chocolate cake", "max_price": 6000.0},
+        ),
+    ]
+    deps = ShoppingGraphDeps(
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        genai_client=_discovery_mock_genai(),
+    )
+    graph = build_shopping_graph(checkpointer=checkpointer, deps=deps)
+    config: dict[str, Any] = {"configurable": {"thread_id": "thread-budget-noise-001"}}
+
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "chocolate gift"},
+            rationale="search chocolate",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+        AgentPlannerStep(action="finish", rationale="budget turn should not replan"),
+    ]
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        await graph.ainvoke(
+            initial_shopping_state(
+                message="Something with chocolate for my wife",
+                session_id="sess-budget-noise-001",
+                thread_id="thread-budget-noise-001",
+            ),
+            config,
+        )
+        turn2 = await graph.ainvoke(
+            append_message_state("Keep it under 6000 rupees."),
+            config,
+        )
+
+    html = turn2.get("response_html") or ""
+    carousel_lower = html.lower()
+    assert "curry" not in carousel_lower
+    assert "snack" not in carousel_lower
+    assert "cake" in carousel_lower or "cheers" in carousel_lower

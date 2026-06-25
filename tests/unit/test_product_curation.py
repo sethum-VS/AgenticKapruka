@@ -7,11 +7,13 @@ from lib.chat.product_curation import (
     apply_birthday_cake_curation,
     apply_gift_curation,
     apply_puja_curation,
+    apply_recipient_curation,
     carousel_focus_guard,
     curate_carousel_products,
     demote_off_focus_products,
     demote_non_floral_for_flower_intent,
     demote_puja_products,
+    filter_gift_noise_products,
     filter_puja_products,
     has_graph_hybrid_context,
     is_flower_fruit_intent,
@@ -348,3 +350,45 @@ def test_demote_off_focus_products_keeps_matches_first() -> None:
     ]
     demoted = demote_off_focus_products(products, "chocolate")
     assert demoted[0]["id"] == "choc"
+
+
+def test_filter_gift_noise_products_drops_curry_and_snack_bar() -> None:
+    products = [
+        _product("curry", 350.0, name="Ruhunu Curry Powder 250g"),
+        _product("snack", 70.0, name="Chocolate Snack Bar Mini"),
+        _birthday_cake("bento", 3660.0, name="Celebratory Duo Bento"),
+    ]
+    filtered = filter_gift_noise_products(products, strict=True)
+    assert [item["id"] for item in filtered] == ["bento"]
+
+
+def test_apply_recipient_curation_demotes_for_him_on_wife_flow() -> None:
+    products = [
+        _product("him", 4500.0, name="Gentleman's Giftset For Him"),
+        _product("her", 5200.0, name="Chocolate Truffles Gift Box"),
+    ]
+    curated = apply_recipient_curation(products, "wife")
+    assert curated[0]["id"] == "her"
+    assert curated[-1]["id"] == "him"
+
+
+def test_curate_carousel_products_strict_budget_excludes_noise() -> None:
+    products = [
+        _product("curry", 350.0, name="Ruhunu Curry Powder"),
+        _product("snack", 70.0, name="KitKat Snack Bar"),
+        _birthday_cake("bento", 3660.0, name="Say Cheers Chocolate Cake"),
+    ]
+    curated = curate_carousel_products(
+        products,
+        query="wife birthday chocolate under 6000",
+        budget_max=6000.0,
+        currency="LKR",
+        session_product_focus="chocolate",
+        session_recipient_hint="wife",
+        strict_budget=True,
+        hybrid_context={"hints": {"occasion": "Birthday"}},
+    )
+    names = [str(item.get("name") or "") for item in curated]
+    assert not any("curry" in name.lower() for name in names)
+    assert not any("snack" in name.lower() or "kitkat" in name.lower() for name in names)
+    assert any("cake" in name.lower() or "bento" in name.lower() for name in names)

@@ -26,6 +26,8 @@ clean-css:
 	rm -f $(OUTPUT_CSS)
 
 # ── Local dev stack (Docker Redis + uvicorn backend + Tailwind watcher) ───────
+# Use: make stop-all && make dev  (sequential — not make stop-all & make dev)
+# If already running, dev.sh exits cleanly; use make restart to reload.
 # If already running, stops and restarts processes and refreshes Docker services.
 dev start:
 	@chmod +x scripts/dev.sh

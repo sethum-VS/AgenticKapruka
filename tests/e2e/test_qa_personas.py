@@ -40,6 +40,16 @@ def test_persona_clueless_gift_giver_budget_and_delivery(
     carousel_text = page.inner_text('[data-testid="product-carousel"]')
     assert "26,310" not in carousel_text
     assert "curry" not in carousel_text.lower()
+    lowered_carousel = carousel_text.lower()
+    assert "snack" not in lowered_carousel
+    assert "bar" not in lowered_carousel or "bento" in lowered_carousel or "cake" in lowered_carousel
+    assert any(token in lowered_carousel for token in ("cake", "bento", "chocolate", "hamper"))
+    assert "snack" not in carousel_text.lower()
+    assert "bar" not in carousel_text.lower() or "birthday" in carousel_text.lower()
+    assert any(
+        keyword in carousel_text.lower()
+        for keyword in ("cake", "bento", "cheers", "chocolate")
+    )
 
     tools = fetch_mcp_tools(page, base_url)
     if tools:
