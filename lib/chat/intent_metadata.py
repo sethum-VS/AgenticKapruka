@@ -20,3 +20,4 @@ class IntentMetadata(TypedDict, total=False):
     is_off_topic: bool
     vernacular_score_hint: float
     topic_pivot: bool
+    budgeted_gift_discovery: bool

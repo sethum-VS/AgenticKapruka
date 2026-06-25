@@ -6,11 +6,15 @@ import asyncio
 import logging
 import secrets
 from collections.abc import AsyncIterator
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
+from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
+from lib.chat.intent_heuristics import is_vague_gift_intent
+from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
 from lib.chat.sse import chunk_text, format_sse_event
 from lib.debug.trace import trace_error, trace_node_update, trace_turn_complete
 
@@ -20,6 +24,35 @@ CHAT_TURN_TIMEOUT_SECONDS = 90.0
 _TIMEOUT_MESSAGE = (
     "This is taking longer than expected. Please try again with a more specific question."
 )
+_CART_ERROR_FALLBACK = "I couldn't add that — try naming the product."
+
+
+def _skip_early_search_status(state: AgentState) -> bool:
+    """Skip generic search status when the turn routes straight to a reply."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if not user_message.strip():
+        return False
+    if is_off_topic_message(user_message) or is_impossible_catalog_request(user_message):
+        return True
+    if is_vague_gift_intent(user_message):
+        return True
+    if isinstance(state.get("agent_clarifying_question"), str) and state.get(
+        "agent_clarifying_question",
+    ).strip():
+        return True
+    return False
+
+
+def _cart_error_message_from_state(state: dict[str, Any]) -> str | None:
+    action = state.get("cart_action_result")
+    if not isinstance(action, dict):
+        return None
+    if action.get("status") != "error":
+        return None
+    message = action.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    return _CART_ERROR_FALLBACK
 
 
 def _render_streaming_assistant(message: str, element_id: str, *, oob: bool) -> str:
@@ -67,13 +100,15 @@ async def iter_chat_sse_events(
 
     pending_id = f"assistant-stream-{stream_id or secrets.token_hex(4)}"
     stream_started = False
+    partial_state: dict[str, Any] = {}
 
-    early_status_message = "Searching Kapruka…"
-    thinking_html = _render_streaming_assistant(early_status_message, pending_id, oob=False)
-    yield format_sse_event(thinking_html)
-    stream_started = True
-    status_html = _render_streaming_assistant(early_status_message, pending_id, oob=True)
-    yield format_sse_event(status_html, event="status")
+    if not _skip_early_search_status(state):
+        early_status_message = "Searching Kapruka…"
+        thinking_html = _render_streaming_assistant(early_status_message, pending_id, oob=False)
+        yield format_sse_event(thinking_html)
+        stream_started = True
+        status_html = _render_streaming_assistant(early_status_message, pending_id, oob=True)
+        yield format_sse_event(status_html, event="status")
 
     thread_id = ""
     configurable = config.get("configurable") if isinstance(config, dict) else None
@@ -107,6 +142,7 @@ async def iter_chat_sse_events(
                 for node_name, node_update in payload.items():
                     if not isinstance(node_update, dict):
                         continue
+                    partial_state.update(node_update)
                     trace_node_update(node_name, node_update)
                     if node_name != "generate_response":
                         continue
@@ -155,14 +191,20 @@ async def iter_chat_sse_events(
     except Exception as exc:
         trace_error("graph.astream failed", exc)
         logger.exception("chat stream failed during graph.astream")
-        error_html = (
-            '<div class="flex justify-start">'
-            '<div class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 '
-            'text-sm text-red-800" role="alert">'
-            "Something went wrong. Please try again.</div></div>"
-        )
-        if stream_started:
-            error_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{error_html}'
+        cart_message = _cart_error_message_from_state(partial_state)
+        if cart_message:
+            error_html = _render_streaming_assistant(cart_message, pending_id, oob=stream_started)
+            if stream_started:
+                error_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{error_html}'
+        else:
+            error_html = (
+                '<div class="flex justify-start">'
+                '<div class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 '
+                'text-sm text-red-800" role="alert">'
+                "Something went wrong. Please try again.</div></div>"
+            )
+            if stream_started:
+                error_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{error_html}'
         yield format_sse_event(error_html)
         yield format_sse_event("", event="done")
         done_emitted = True

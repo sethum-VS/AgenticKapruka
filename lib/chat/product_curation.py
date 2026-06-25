@@ -23,7 +23,12 @@ _GIFT_PROMOTE_RE = re.compile(
     re.I,
 )
 _GIFT_DEMOTE_RE = re.compile(
-    r"\b(?:curry powder|kitkat|ritzbury|grocery|spice|convenience)\b",
+    r"\b(?:curry powder|kitkat|ritzbury|grocery|spice|convenience|"
+    r"chocolate bar|toffee bar|candy bar|snack bar)\b",
+    re.I,
+)
+_NON_FLORAL_FLOWER_DENYLIST = re.compile(
+    r"\b(?:air freshener|freshener|fragrance|deodorizer|room spray|scented)\b",
     re.I,
 )
 _BIRTHDAY_PRODUCT_RE = re.compile(r"\bbirthday\b", re.I)
@@ -319,6 +324,52 @@ def _gift_curation_active(
     return isinstance(occasion, str) and "birthday" in occasion.lower()
 
 
+def demote_non_floral_for_flower_intent(
+    products: list[dict[str, Any]],
+    query: str,
+    *,
+    session_product_focus: str | None = None,
+) -> list[dict[str, Any]]:
+    """Demote air fresheners and room scents when the customer wants fresh flowers."""
+    if not products:
+        return []
+    if not is_flower_fruit_intent(query) and session_product_focus != "flowers":
+        return list(products)
+
+    preferred: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        blob = _product_text_blob(product)
+        if _NON_FLORAL_FLOWER_DENYLIST.search(blob):
+            demoted.append(product)
+        else:
+            preferred.append(product)
+    return preferred + demoted
+
+
+def boost_carousel_relevance(
+    products: list[dict[str, Any]],
+    query: str,
+) -> list[dict[str, Any]]:
+    """Promote exact phrase matches to the front of the carousel."""
+    stripped = query.strip()
+    if not stripped or len(products) < 2:
+        return list(products)
+
+    from graphs.nodes.resolve_cart_product import phrase_product_overlap_score
+
+    scored = [
+        (phrase_product_overlap_score(stripped, str(product.get("name") or "")), product)
+        for product in products
+    ]
+    best_score = max(score for score, _ in scored)
+    if best_score < 0.6:
+        return list(products)
+    top = [product for score, product in scored if score == best_score]
+    rest = [product for score, product in scored if score < best_score]
+    return top + rest
+
+
 def apply_gift_curation(
     products: list[dict[str, Any]],
     *,
@@ -426,6 +477,8 @@ def sort_and_filter_by_budget(
     products: list[dict[str, Any]],
     budget_max: float | None,
     currency: str,
+    *,
+    strict_in_budget: bool = False,
 ) -> list[dict[str, Any]]:
     """Hide items above 2× budget; sort in-budget asc, then near-budget (+10%) with badge."""
     if budget_max is None or budget_max <= 0:
@@ -447,7 +500,12 @@ def sort_and_filter_by_budget(
     for product in scoped:
         price = product_price_amount(product)
         if price is None:
-            over_near.append(product)
+            if not strict_in_budget:
+                over_near.append(product)
+            continue
+        if strict_in_budget:
+            if price <= budget_max:
+                in_budget.append(product)
             continue
         if price > budget_max * _HIDE_BUDGET_FACTOR:
             continue
@@ -477,6 +535,7 @@ def curate_carousel_products(
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    strict_budget: bool = False,
 ) -> list[dict[str, Any]]:
     """Apply birthday/puja relevance curation then budget-aware carousel ordering."""
     from lib.neo4j.hybrid_context import is_birthday_cake_scoped_turn
@@ -500,6 +559,20 @@ def curate_carousel_products(
         hybrid_context=hybrid_context,
     )
     scoped = demote_produce_for_vague_gifts(scoped, query)
+    scoped = demote_non_floral_for_flower_intent(
+        scoped,
+        query,
+        session_product_focus=session_product_focus,
+    )
+    scoped = boost_carousel_relevance(scoped, query)
+
+    def _budget_sort(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sort_and_filter_by_budget(
+            items,
+            budget_max,
+            currency,
+            strict_in_budget=strict_budget,
+        )
     if is_birthday_cake_scoped_turn(
         query,
         hybrid_context,
@@ -511,24 +584,20 @@ def curate_carousel_products(
         other_items = [
             product for product in scoped if not product_is_birthday_cake_product(product)
         ]
-        return sort_and_filter_by_budget(
+        return _budget_sort(
             birthday_items,
-            budget_max,
-            currency,
-        ) + sort_and_filter_by_budget(other_items, budget_max, currency)
+        ) + _budget_sort(other_items)
     if is_flower_fruit_intent(query):
         if graph_context_available:
             preferred = [
                 product for product in scoped if not product_matches_puja_denylist(product)
             ]
             demoted = [product for product in scoped if product_matches_puja_denylist(product)]
-            return sort_and_filter_by_budget(
+            return _budget_sort(
                 preferred,
-                budget_max,
-                currency,
-            ) + sort_and_filter_by_budget(demoted, budget_max, currency)
+            ) + _budget_sort(demoted)
 
         filtered = filter_puja_products(scoped, query)
-        return sort_and_filter_by_budget(filtered, budget_max, currency)
+        return _budget_sort(filtered)
 
-    return sort_and_filter_by_budget(scoped, budget_max, currency)
+    return _budget_sort(scoped)

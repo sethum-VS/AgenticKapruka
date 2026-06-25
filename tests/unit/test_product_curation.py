@@ -10,6 +10,7 @@ from lib.chat.product_curation import (
     carousel_focus_guard,
     curate_carousel_products,
     demote_off_focus_products,
+    demote_non_floral_for_flower_intent,
     demote_puja_products,
     filter_puja_products,
     has_graph_hybrid_context,
@@ -303,6 +304,25 @@ def test_product_matches_focus_chocolate_tokens() -> None:
         _product("x", 100.0, name="Greeting Card"),
         "chocolate",
     )
+
+
+def test_demote_non_floral_for_flower_intent() -> None:
+    products = [
+        _product("freshener", 1200.0, name="Alco Fresh Rose Air Freshener"),
+        _product("roses", 4500.0, name="Blush Roses Bouquet"),
+    ]
+    curated = demote_non_floral_for_flower_intent(products, "fresh roses bouquet")
+    assert curated[0]["id"] == "roses"
+    assert curated[-1]["id"] == "freshener"
+
+
+def test_sort_and_filter_strict_budget_hides_over_cap() -> None:
+    products = [
+        _product("in", 4500.0),
+        _product("over", 6500.0),
+    ]
+    curated = sort_and_filter_by_budget(products, 5000.0, "LKR", strict_in_budget=True)
+    assert [item["id"] for item in curated] == ["in"]
 
 
 def test_apply_gift_curation_promotes_hampers_over_convenience_candy() -> None:

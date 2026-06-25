@@ -24,6 +24,7 @@ from app.templating import (
 )
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
+from langgraph.config import get_stream_writer
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
@@ -546,6 +547,21 @@ def _apply_perishable_delivery_honesty(
             delivery_html = render_delivery_date_status(result=delivery_output)
 
     warning = delivery_output.perishable_warning
+    if (not isinstance(warning, str) or not warning.strip()) and _turn_implies_perishable_gift(
+        user_message,
+        session_product_focus=session_product_focus,
+    ):
+        checked_date = delivery_output.checked_date
+        if (
+            checked_date
+            and not _is_city_only_check_delivery(invocation)
+            and _delivery_date_more_than_one_day_out(checked_date)
+        ):
+            warning = (
+                "Fresh cakes, flowers, and gift combos are best within a day or two of "
+                "delivery. Your date is more than a day out — consider ordering closer to "
+                "the event."
+            )
     if isinstance(warning, str) and warning.strip():
         warning = warning.strip()
         dated_delivery = not _is_city_only_check_delivery(invocation)
@@ -709,7 +725,11 @@ def _discovery_curation_query(
     search_payload: dict[str, Any],
     *,
     user_message: str,
+    session_search_query: str | None = None,
 ) -> str:
+    if is_budget_refinement_message(user_message):
+        if isinstance(session_search_query, str) and session_search_query.strip():
+            return session_search_query.strip()
     query = _search_query_from_payload(search_payload)
     return user_message.strip() or (query or "")
 
@@ -723,6 +743,7 @@ def _budget_curated_products(
     graph_context_available: bool,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    strict_budget: bool = False,
 ) -> list[dict[str, Any]]:
     """Apply birthday/puja relevance and budget-aware carousel ordering."""
     return curate_carousel_products(
@@ -733,6 +754,7 @@ def _budget_curated_products(
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
+        strict_budget=strict_budget,
     )
 
 
@@ -758,6 +780,8 @@ def _cap_search_products_for_llm_context(
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    session_search_query: str | None = None,
+    strict_budget: bool = False,
 ) -> dict[str, Any] | None:
     """Slice curated kapruka_search_products results before Gemini synthesis."""
     if not tool_results:
@@ -773,12 +797,17 @@ def _cap_search_products_for_llm_context(
 
     curated = _budget_curated_products(
         _curated_search_results(search_payload),
-        query=_discovery_curation_query(search_payload, user_message=user_message),
+        query=_discovery_curation_query(
+            search_payload,
+            user_message=user_message,
+            session_search_query=session_search_query,
+        ),
         budget_max=budget_max,
         currency=currency,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
+        strict_budget=strict_budget,
     )
     capped_results = [_enrich_product_display_price(product) for product in curated[:limit]]
     if capped_results == raw_results:
@@ -797,18 +826,49 @@ def _budget_prompt_line(budget_max: float | None, currency: str) -> str:
     return f"Customer budget cap: {format_currency(budget_max, currency)}.\n"
 
 
+def _session_context_prompt_lines(
+    *,
+    session_search_query: str | None,
+    session_occasion: str | None,
+    session_recipient_hint: str | None,
+    user_message: str,
+) -> str:
+    if not is_budget_refinement_message(user_message):
+        return ""
+    lines: list[str] = []
+    if isinstance(session_search_query, str) and session_search_query.strip():
+        lines.append(f"Session topic: {session_search_query.strip()}")
+    if isinstance(session_occasion, str) and session_occasion.strip():
+        lines.append(f"Occasion: {session_occasion.strip()}")
+    if isinstance(session_recipient_hint, str) and session_recipient_hint.strip():
+        lines.append(f"Recipient: {session_recipient_hint.strip()}")
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n\n"
+
+
 def _build_user_prompt(
     user_message: str,
     tool_results: dict[str, Any] | None,
     *,
     budget_max: float | None = None,
     currency: str = "LKR",
+    session_search_query: str | None = None,
+    session_occasion: str | None = None,
+    session_recipient_hint: str | None = None,
 ) -> str:
     """Combine user turn and MCP payload for response synthesis."""
     context = _format_tool_results_context(tool_results)
     budget_line = _budget_prompt_line(budget_max, currency)
+    session_line = _session_context_prompt_lines(
+        session_search_query=session_search_query,
+        session_occasion=session_occasion,
+        session_recipient_hint=session_recipient_hint,
+        user_message=user_message,
+    )
     return (
         f"Customer message:\n{user_message}\n\n"
+        f"{session_line}"
         f"{budget_line}"
         f"tool_results (sole source of truth for catalog facts):\n{context}"
     )
@@ -875,6 +935,37 @@ def _generate_reply_sync(
     return _parse_reply_response(response)
 
 
+def _carousel_strict_budget(user_message: str, budget_max: float | None) -> bool:
+    if budget_max is None or budget_max <= 0:
+        return False
+    if is_budget_refinement_message(user_message):
+        return True
+    from lib.chat.intent_heuristics import is_budgeted_gift_ideas_message
+
+    return is_budgeted_gift_ideas_message(user_message)
+
+
+def _prepend_situational_empathy(
+    reply_text: str,
+    intent_metadata: IntentMetadata | None,
+) -> str:
+    if not intent_metadata or not intent_metadata.get("is_situational"):
+        return reply_text
+    lowered = reply_text.strip().lower()
+    if lowered.startswith(("i'm sorry", "sorry", "i am sorry")):
+        return reply_text
+    return f"I'm sorry to hear you're going through this. {reply_text.strip()}"
+
+
+def _emit_synthesis_status() -> None:
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        return
+    if writer is not None:
+        writer({"type": "status", "message": "Putting together recommendations…"})
+
+
 def extract_search_products(
     tool_results: dict[str, Any] | None,
     *,
@@ -884,6 +975,8 @@ def extract_search_products(
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    session_search_query: str | None = None,
+    strict_budget: bool = False,
     last_search_products: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return curated product dicts from kapruka_search_products tool_results, if any."""
@@ -897,12 +990,17 @@ def extract_search_products(
     products = _curated_search_results(search_payload)
     products = _budget_curated_products(
         products,
-        query=_discovery_curation_query(search_payload, user_message=user_message),
+        query=_discovery_curation_query(
+            search_payload,
+            user_message=user_message,
+            session_search_query=session_search_query,
+        ),
         budget_max=budget_max,
         currency=currency,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
+        strict_budget=strict_budget,
     )
     if (
         session_product_focus
@@ -1239,11 +1337,19 @@ async def generate_response(
         }
 
     clarifying_question = state.get("agent_clarifying_question")
-    if (
-        state.get("agent_loop_exit_reason") == "ask_user"
-        and isinstance(clarifying_question, str)
+    exit_reason = state.get("agent_loop_exit_reason")
+    show_clarifying = (
+        isinstance(clarifying_question, str)
         and clarifying_question.strip()
-    ):
+        and (
+            exit_reason == "ask_user"
+            or (
+                exit_reason is None
+                and not _turn_has_fresh_search(state.get("tool_trace"))
+            )
+        )
+    )
+    if show_clarifying:
         question = clarifying_question.strip()
         tool_trace = state.get("tool_trace")
         delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
@@ -1376,17 +1482,18 @@ async def generate_response(
     if state.get("intent") == "cart":
         action = dict(state.get("cart_action_result") or {})
         cart_reply = _build_cart_assistant_message(action)
-        if cart_reply:
-            cart_oob = _build_cart_oob_html(
-                action,
-                currency=state.get("currency") or "LKR",
-            )
-            assistant_html = render_assistant_html(cart_reply)
-            response_html = f"{cart_oob}{assistant_html}" if cart_oob else assistant_html
-            return {
-                "response_html": response_html,
-                "assistant_message": cart_reply,
-            }
+        if not cart_reply:
+            cart_reply = "I couldn't add that — try naming the product."
+        cart_oob = _build_cart_oob_html(
+            action,
+            currency=state.get("currency") or "LKR",
+        )
+        assistant_html = render_assistant_html(cart_reply)
+        response_html = f"{cart_oob}{assistant_html}" if cart_oob else assistant_html
+        return {
+            "response_html": response_html,
+            "assistant_message": cart_reply,
+        }
 
     if state.get("intent") == "checkout":
         checkout = _extract_checkout_payload(tool_results)
@@ -1542,6 +1649,7 @@ async def generate_response(
             visible_products = refined
 
     if visible_products is None:
+        strict_budget = _carousel_strict_budget(user_message, budget_max)
         visible_products = extract_search_products(
             tool_results,
             budget_max=budget_max,
@@ -1550,6 +1658,8 @@ async def generate_response(
             graph_context_available=graph_context_available,
             hybrid_context=hybrid_context,
             session_product_focus=session_product_focus,
+            session_search_query=state.get("session_search_query"),
+            strict_budget=strict_budget,
             last_search_products=last_search_products or None,
         )
         if (
@@ -1586,8 +1696,10 @@ async def generate_response(
         tool_results,
         delivery_context_relevant=delivery_context_relevant,
     )
+    strict_budget = _carousel_strict_budget(user_message, budget_max)
     client = genai_client
     model = select_model(state)
+    _emit_synthesis_status()
     user_prompt = _build_user_prompt(
         user_message,
         _cap_search_products_for_llm_context(
@@ -1598,14 +1710,23 @@ async def generate_response(
             graph_context_available=graph_context_available,
             hybrid_context=hybrid_context,
             session_product_focus=session_product_focus,
+            session_search_query=state.get("session_search_query"),
+            strict_budget=strict_budget,
         ),
         budget_max=budget_max,
         currency=currency,
+        session_search_query=state.get("session_search_query"),
+        session_occasion=state.get("session_occasion"),
+        session_recipient_hint=state.get("session_recipient_hint"),
     )
 
     zep_memory_facts = state.get("zep_memory_facts")
     if zep_memory_facts:
-        zep_memory_facts = scope_memory_facts_for_turn(zep_memory_facts, user_message)
+        zep_memory_facts = scope_memory_facts_for_turn(
+            zep_memory_facts,
+            user_message,
+            is_budget_refinement=is_budget_refinement_message(user_message),
+        )
     intent_metadata = state.get("intent_metadata")
     intent = state.get("intent")
     try:
@@ -1637,6 +1758,7 @@ async def generate_response(
         reply_text = template or "I could not generate a response. Please try again."
 
     reply_text = normalize_catalog_text(reply_text)
+    reply_text = _prepend_situational_empathy(reply_text, intent_metadata)
     tool_trace = state.get("tool_trace")
     reply_text = delivery_claim_guard(
         reply_text,

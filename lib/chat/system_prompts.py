@@ -199,6 +199,7 @@ def select_response_system_instruction(
         return GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION
     if intent_metadata and intent_metadata.get("is_situational"):
         instruction = LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION + _EMPATHY_PREAMBLE_RULE
+        instruction += _PROFESSIONAL_TONE_RULE
         hint = intent_metadata.get("vernacular_score_hint", 0.0)
         if isinstance(hint, (int, float)) and hint >= 0.3:
             vernacular = intent_metadata.get("detected_vernacular", "en")

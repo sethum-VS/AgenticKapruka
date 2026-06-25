@@ -47,7 +47,7 @@
   >
     {% for product in products %}
     <div class="snap-start shrink-0">
-      {% with lazy_image=true %}
+      {% with lazy_image=loop.index0 >= 2 %}
         {% include "components/product_card.html" %}
       {% endwith %}
     </div>

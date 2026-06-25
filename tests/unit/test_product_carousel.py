@@ -82,11 +82,12 @@ def test_product_carousel_renders_empty_for_no_products() -> None:
 
 
 def test_product_carousel_enables_lazy_image_on_cards() -> None:
-    """Carousel product cards use Alpine lazyImage with skeleton placeholders."""
+    """First two carousel cards load eagerly; remaining cards lazy-load."""
     html = render_product_carousel(_carousel_products())
 
-    assert html.count('data-testid="lazy-image"') == 3
-    assert html.count('data-testid="lazy-image-skeleton"') == 3
+    assert html.count('data-testid="lazy-image"') == 1
+    assert html.count('data-testid="lazy-image-skeleton"') == 1
+    assert html.count('loading="lazy"') == 2
     assert 'x-data="lazyImage"' in html
     assert 'template x-if="inView"' in html
     assert "transition-opacity duration-300" in html

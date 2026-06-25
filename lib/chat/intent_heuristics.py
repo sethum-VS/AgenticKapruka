@@ -69,7 +69,17 @@ def is_vague_gift_intent(message: str) -> bool:
     stripped = message.strip()
     if not stripped or not _VAGUE_GIFT_RE.search(stripped):
         return False
+    if extract_budget(stripped) is not None:
+        return False
     return not _GIFT_SPECIFIC_RE.search(stripped)
+
+
+def is_budgeted_gift_ideas_message(message: str) -> bool:
+    """True for actionable gift-idea chips that include an explicit budget."""
+    stripped = message.strip()
+    if not stripped or not _VAGUE_GIFT_RE.search(stripped):
+        return False
+    return extract_budget(stripped) is not None
 
 
 def is_cart_add_trigger(message: str) -> bool:

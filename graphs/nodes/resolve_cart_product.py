@@ -9,6 +9,11 @@ from typing import Any
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.chat.intent_heuristics import extract_cart_product_phrase
+from lib.chat.product_reference import (
+    is_deictic_phrase,
+    is_ordinal_phrase,
+    resolve_product_reference,
+)
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 
@@ -98,7 +103,41 @@ async def resolve_cart_product(
             },
         }
 
+    last_visible = list(state.get("last_visible_products") or [])
     last_search = list(state.get("last_search_products") or [])
+    reference = resolve_product_reference(
+        phrase,
+        last_visible_products=last_visible or None,
+        last_search_products=last_search or None,
+        session_product_focus=state.get("session_product_focus"),
+    )
+    if reference is not None:
+        if reference.get("status") == "resolved" and reference.get("product") is not None:
+            product = reference["product"]
+            logger.info(
+                "resolve_cart_product: reference %r -> %s",
+                phrase,
+                product.get("id"),
+            )
+            return {
+                "cart_action_result": {
+                    "status": "resolved",
+                    "product": product,
+                    "phrase": phrase,
+                },
+            }
+        clarify_question = reference.get("clarifying_question")
+        if isinstance(clarify_question, str) and clarify_question.strip():
+            payload: dict[str, Any] = {
+                "status": "clarify",
+                "product": None,
+                "clarifying_question": clarify_question.strip(),
+            }
+            candidates = reference.get("candidates")
+            if isinstance(candidates, list) and candidates:
+                payload["candidates"] = candidates
+            return {"cart_action_result": payload}
+
     product, tied, clarify = match_products_by_phrase(phrase, last_search)
     if clarify:
         logger.info("resolve_cart_product: tie among %d candidates for %r", len(tied), phrase)
@@ -121,6 +160,17 @@ async def resolve_cart_product(
                 "status": "resolved",
                 "product": product,
                 "phrase": phrase,
+            },
+        }
+
+    if is_deictic_phrase(phrase) or is_ordinal_phrase(phrase):
+        return {
+            "cart_action_result": {
+                "status": "clarify",
+                "product": None,
+                "clarifying_question": (
+                    "Search for a gift first, then say 'add that to my cart'."
+                ),
             },
         }
 

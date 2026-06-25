@@ -14,6 +14,7 @@ from lib.chat.intent_metadata import IntentMetadata
 from lib.debug.trace import trace_route_decision
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.embeddings.vertex_embeddings import embed_texts
+from lib.chat.intent_heuristics import is_budget_refinement_message
 from lib.kapruka.product_id import contains_product_id
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
@@ -214,10 +215,13 @@ async def retrieve_hybrid_context(
     user_message = _extract_latest_user_message(state.get("messages") or [])
     intent_metadata: IntentMetadata | None = state.get("intent_metadata")
     topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
+    skip_graph_reembed = bool(
+        is_budget_refinement_message(user_message) and hybrid_context,
+    )
     if topic_pivot:
         hybrid_context = {}
 
-    if neo4j_client is not None:
+    if neo4j_client is not None and not skip_graph_reembed:
         embed = embed_fn or embed_texts
         try:
             graph_context = await _fetch_graph_hybrid_context(

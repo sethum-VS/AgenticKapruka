@@ -55,6 +55,8 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
         "session_delivery_date",
         "session_product_focus",
         "session_search_query",
+        "session_occasion",
+        "session_recipient_hint",
         "session_awaiting_delivery_date",
         "session_awaiting_gift_preferences",
         "session_delivery_city_confirmed",

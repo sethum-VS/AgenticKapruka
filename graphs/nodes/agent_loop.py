@@ -21,7 +21,7 @@ from lib.chat.delivery_dates import (
     delivery_date_clarifying_question,
     normalize_delivery_date,
 )
-from lib.chat.intent_heuristics import is_bare_category_pivot, is_budget_refinement_message
+from lib.chat.intent_heuristics import is_bare_category_pivot, is_budget_refinement_message, is_budgeted_gift_ideas_message
 from lib.chat.product_curation import (
     apply_anniversary_curation,
     apply_birthday_cake_curation,
@@ -467,7 +467,30 @@ def _dual_gift_physical_query(user_message: str) -> str:
         return "chocolates gift"
     if "hamper" in lowered:
         return "gift hamper"
+    if "birthday" in lowered:
+        return "birthday gift"
     return "gift hamper"
+
+
+def _should_run_budgeted_gift_ideas_search(
+    state: AgentState,
+    user_message: str,
+    *,
+    already_ran: bool,
+) -> bool:
+    """True when the welcome chip or budgeted gift-ideas turn needs dual MCP search."""
+    if already_ran:
+        return False
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    if not intent_metadata.get("budgeted_gift_discovery") and not is_budgeted_gift_ideas_message(
+        user_message,
+    ):
+        return False
+    budget_max = state.get("session_budget_max")
+    if not isinstance(budget_max, (int, float)) or budget_max <= 0:
+        return False
+    session_q = state.get("session_search_query")
+    return not (isinstance(session_q, str) and session_q.strip())
 
 
 def _should_run_dual_gift_search(
@@ -547,6 +570,17 @@ def _curate_search_trace_result(
         query=user_message,
         hybrid_context=hybrid_context,
     )
+    budget_max = state.get("session_budget_max")
+    currency = state.get("currency") or state.get("session_budget_currency") or "LKR"
+    if isinstance(budget_max, (int, float)) and budget_max > 0:
+        from lib.chat.product_curation import sort_and_filter_by_budget
+
+        curated = sort_and_filter_by_budget(
+            curated,
+            float(budget_max),
+            str(currency),
+            strict_in_budget=bool(is_budget_refinement_message(user_message)),
+        )
     if curated == products:
         return result
     updated = dict(result)
@@ -968,6 +1002,7 @@ async def agent_loop(
     search_broaden_applied = False
     discovery_search_merged = False
     dual_gift_search_applied = False
+    budgeted_gift_ideas_search_applied = False
     budget_refinement_search_applied = False
     session_delivery_date_update: str | None = None
     session_search_query_update: str | None = None
@@ -995,6 +1030,71 @@ async def agent_loop(
             exit_reason = force_finish_reason or "duplicate_guard"
             agent_loop_done = True
             break
+
+        if (
+            iteration == 0
+            and _should_run_budgeted_gift_ideas_search(
+                state,
+                user_message,
+                already_ran=budgeted_gift_ideas_search_applied,
+            )
+        ):
+            budgeted_gift_ideas_search_applied = True
+            tool_name = SEARCH_PRODUCTS_TOOL
+            budget_max = float(state.get("session_budget_max") or 0)
+            base_args: dict[str, Any] = {
+                "currency": currency,
+                "max_price": budget_max,
+                "sort": "price_asc",
+            }
+            voucher_args = _inject_tool_currency(
+                tool_name,
+                {**base_args, "q": "gift voucher"},
+                state,
+                currency,
+            )
+            _emit_status(_status_message_for_tool(tool_name))
+            voucher_result = await invoke_tool(
+                tool_name,
+                voucher_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+            voucher_result = _curate_search_trace_result(voucher_result, state=state)
+            tool_trace.append(
+                {"name": tool_name, "args": voucher_args, "result": voucher_result},
+            )
+            tool_call_count += 1
+            physical_args = _inject_tool_currency(
+                tool_name,
+                {
+                    **base_args,
+                    "q": _dual_gift_physical_query(user_message),
+                },
+                state,
+                currency,
+            )
+            if not _is_duplicate_invocation(tool_trace, tool_name, physical_args):
+                _emit_status(_status_message_for_tool(tool_name))
+                physical_result = await invoke_tool(
+                    tool_name,
+                    physical_args,
+                    kapruka_service=kapruka_service,
+                    client_ip=rate_limit_key,
+                    currency=currency,
+                )
+                physical_result = _curate_search_trace_result(physical_result, state=state)
+                tool_trace.append(
+                    {"name": tool_name, "args": physical_args, "result": physical_result},
+                )
+                tool_call_count += 1
+                voucher_result = _merge_search_results(voucher_result, physical_result)
+            session_search_query_update = "gift voucher"
+            if _search_has_products(voucher_result):
+                exit_reason = "finish"
+                agent_loop_done = True
+                break
 
         if (
             iteration == 0
@@ -1082,7 +1182,8 @@ async def agent_loop(
             agent_loop_done = True
             break
 
-        _emit_status(_DEFAULT_STATUS_MESSAGE)
+        if iteration > 0 or not budget_refinement_search_applied:
+            _emit_status(_DEFAULT_STATUS_MESSAGE)
 
         step = await asyncio.to_thread(
             _plan_next_step_sync,

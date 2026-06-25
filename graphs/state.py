@@ -65,6 +65,8 @@ class AgentState(TypedDict):
     session_delivery_date: str | None
     session_product_focus: str | None
     session_search_query: str | None
+    session_occasion: str | None
+    session_recipient_hint: str | None
     session_awaiting_delivery_date: bool | None
     session_awaiting_gift_preferences: bool | None
     session_delivery_city_confirmed: bool | None

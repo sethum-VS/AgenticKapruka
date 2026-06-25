@@ -84,6 +84,45 @@ async def test_resolve_cart_product_uses_last_search_products() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_cart_product_deictic_that_skips_cold_mcp() -> None:
+    mock_service = AsyncMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Add that to my cart")],
+        "session_id": "sess-cart-that",
+        "last_visible_products": [_BLUSH_ROSES],
+        "last_search_products": [_BLUSH_ROSES, _RED_ROSES],
+    }
+
+    result = await resolve_cart_product(
+        state,
+        kapruka_service=mock_service,
+        client_ip="127.0.0.1",
+    )
+
+    action = result["cart_action_result"]
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00blush001"
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_cart_product_ordinal_first_skips_cold_mcp() -> None:
+    mock_service = AsyncMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Add the first one to my cart")],
+        "session_id": "sess-cart-ordinal",
+        "last_visible_products": [_RED_ROSES, _BLUSH_ROSES],
+    }
+
+    result = await resolve_cart_product(state, kapruka_service=mock_service)
+
+    action = result["cart_action_result"]
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00red001"
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resolve_cart_product_cold_start_searches_mcp() -> None:
     blush = ProductResult(
         id="combo00blush001",

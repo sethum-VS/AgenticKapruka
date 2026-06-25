@@ -157,12 +157,33 @@
     );
   }
 
+  const STATUS_MIN_VISIBLE_MS = 300;
+  let statusShownAt = 0;
+  let statusFlushTimer = null;
+
   function swapStatusHtml(html) {
-    // Status events OOB-update the pending assistant bubble without appending.
-    htmx.swap(document.body, html, { swapStyle: "none" });
-    document.body.dispatchEvent(
-      new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
-    );
+    const now = Date.now();
+    const apply = () => {
+      htmx.swap(document.body, html, { swapStyle: "none" });
+      document.body.dispatchEvent(
+        new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
+      );
+      statusShownAt = Date.now();
+    };
+
+    const elapsed = now - statusShownAt;
+    if (statusShownAt > 0 && elapsed < STATUS_MIN_VISIBLE_MS) {
+      if (statusFlushTimer) {
+        clearTimeout(statusFlushTimer);
+      }
+      statusFlushTimer = setTimeout(() => {
+        statusFlushTimer = null;
+        apply();
+      }, STATUS_MIN_VISIBLE_MS - elapsed);
+      return;
+    }
+
+    apply();
   }
 
   function toggleRequestState(form, active) {

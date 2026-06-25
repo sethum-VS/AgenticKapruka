@@ -15,8 +15,10 @@ from lib.chat.intent_heuristics import (
     GIFT_PREFERENCES_QUESTION,
     PROCEED_CHECKOUT_MESSAGE,
     classify_routing_guard,
+    is_cart_add_trigger,
     is_topic_pivot_message,
     is_vague_gift_intent,
+    is_budgeted_gift_ideas_message,
 )
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.off_topic import (
@@ -44,6 +46,15 @@ _FLORAL_DESIGN = re.compile(r"\b(?:floral|design|designs)\b", re.I)
 _GIFT_FOCUS = re.compile(r"\b(?:gift|voucher|hamper)s?\b", re.I)
 _CHOCOLATE_FOCUS = re.compile(r"\b(?:chocolate|chocolates|cocoa|choco)\b", re.I)
 _COMBO_FOCUS = re.compile(r"\b(?:combo|combopack)\b", re.I)
+_OCCASION_FOCUS = re.compile(
+    r"\b(?:birthday|anniversary|wedding|valentine|graduation|new baby|baby shower)\b",
+    re.I,
+)
+_RECIPIENT_FOCUS = re.compile(
+    r"\b(?:wife|husband|mom|mother|mum|dad|father|girlfriend|boyfriend|partner|"
+    r"sister|brother|son|daughter|grandma|grandmother|grandpa|grandfather)\b",
+    re.I,
+)
 
 
 class IntentClassification(BaseModel):
@@ -123,6 +134,49 @@ def _derive_product_focus(user_message: str) -> str | None:
     return None
 
 
+def _derive_session_occasion(user_message: str) -> str | None:
+    match = _OCCASION_FOCUS.search(user_message.strip())
+    if match:
+        return match.group(0).strip().lower()
+    return None
+
+
+def _derive_session_recipient_hint(user_message: str) -> str | None:
+    match = _RECIPIENT_FOCUS.search(user_message.strip())
+    if match:
+        return match.group(0).strip().lower()
+    return None
+
+
+def _resolve_session_occasion(state: AgentState, user_message: str) -> str | None:
+    derived = _derive_session_occasion(user_message)
+    if derived is not None:
+        return derived
+    if is_topic_pivot_message(user_message):
+        return None
+    prior = state.get("session_occasion")
+    if isinstance(prior, str) and prior.strip():
+        return prior.strip()
+    hybrid = state.get("hybrid_context") or {}
+    hints = hybrid.get("hints") or {}
+    occasion = hints.get("occasion")
+    if isinstance(occasion, str) and occasion.strip():
+        return occasion.strip().lower()
+    return None
+
+
+def _resolve_session_recipient_hint(state: AgentState, user_message: str) -> str | None:
+    derived = _derive_session_recipient_hint(user_message)
+    if derived is not None:
+        return derived
+    if is_topic_pivot_message(user_message):
+        return None
+    prior = state.get("session_recipient_hint")
+    if isinstance(prior, str) and prior.strip():
+        return prior.strip().lower()
+    return None
+
+
 def _resolve_session_product_focus(state: AgentState, user_message: str) -> str | None:
     """Persist product focus across turns; refresh on explicit mentions."""
     prior = state.get("session_product_focus")
@@ -159,6 +213,8 @@ def _with_session_fields(
     session_budget_max: float | None,
     session_budget_currency: CurrencyCode | None,
     session_product_focus: str | None,
+    session_occasion: str | None,
+    session_recipient_hint: str | None,
     delivery_date: str | None,
     session_delivery_date: str | None,
 ) -> dict[str, Any]:
@@ -168,6 +224,10 @@ def _with_session_fields(
         payload["session_budget_currency"] = session_budget_currency
     if session_product_focus is not None:
         payload["session_product_focus"] = session_product_focus
+    if session_occasion is not None:
+        payload["session_occasion"] = session_occasion
+    if session_recipient_hint is not None:
+        payload["session_recipient_hint"] = session_recipient_hint
     if delivery_date is not None:
         payload["delivery_date"] = delivery_date
     if session_delivery_date is not None:
@@ -208,10 +268,14 @@ def _clear_context_on_pivot(
     hybrid["hints"] = hints
     hybrid["occasions"] = []
 
-    session_clear: dict[str, Any] = {
-        "last_visible_products": None,
-        "last_search_products": None,
-    }
+    session_clear: dict[str, Any] = {}
+    if not is_cart_add_trigger(user_message):
+        session_clear.update(
+            {
+                "last_visible_products": None,
+                "last_search_products": None,
+            },
+        )
     from lib.chat.delivery_dates import normalize_delivery_date
     from lib.chat.query_preprocessor import extract_target_city
 
@@ -278,7 +342,15 @@ async def analyze_intent(
         )
     )
     session_product_focus = _resolve_session_product_focus(state, user_message)
+    session_occasion = _resolve_session_occasion(state, user_message)
+    session_recipient_hint = _resolve_session_recipient_hint(state, user_message)
     delivery_date, session_delivery_date = _resolve_delivery_dates(state, user_message)
+
+    if is_budgeted_gift_ideas_message(user_message):
+        intent_metadata = cast(
+            IntentMetadata,
+            {**intent_metadata, "budgeted_gift_discovery": True},
+        )
 
     def _with_budget(payload: dict[str, Any]) -> dict[str, Any]:
         result = _with_session_fields(
@@ -286,11 +358,15 @@ async def analyze_intent(
             session_budget_max=session_budget_max,
             session_budget_currency=session_budget_currency,
             session_product_focus=session_product_focus,
+            session_occasion=session_occasion,
+            session_recipient_hint=session_recipient_hint,
             delivery_date=delivery_date,
             session_delivery_date=session_delivery_date,
         )
         if topic_pivot:
             result["session_search_query"] = None
+            result["session_occasion"] = None
+            result["session_recipient_hint"] = None
             result.update(pivot_session_clear)
             if hybrid_context_update is not None:
                 result["hybrid_context"] = hybrid_context_update

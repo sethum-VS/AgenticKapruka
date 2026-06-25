@@ -44,6 +44,8 @@ async def test_analyze_intent_shopping_turn_skips_gemini() -> None:
         "intent": "discovery",
         "intent_metadata": expected_metadata,
         "session_product_focus": "cake",
+        "session_occasion": "birthday",
+        "session_recipient_hint": "mom",
     }
     mock_client.models.generate_content.assert_not_called()
 
@@ -238,6 +240,21 @@ async def test_analyze_intent_vague_gift_asks_preferences() -> None:
 
     assert result.get("agent_clarifying_question")
     assert result.get("session_awaiting_gift_preferences") is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_budgeted_gift_chip_routes_to_search() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Gift ideas under Rs. 5,000")],
+        "session_id": "sess-budget-chip",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("agent_clarifying_question") is None
+    assert result.get("session_awaiting_gift_preferences") is not True
+    assert result["intent_metadata"].get("budgeted_gift_discovery") is True
 
 
 @pytest.mark.asyncio

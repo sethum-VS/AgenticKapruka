@@ -550,9 +550,11 @@ def _is_meta_catalog_query(message: str) -> bool:
 _extract_max_price = extract_max_price
 
 
-def _product_search_keyword(token: str) -> str:
+def _product_search_keyword(token: str, *, has_budget: bool = False) -> str:
     """Map a user token to a Kapruka-friendly product keyword."""
     normalized = token.lower().strip()
+    if has_budget and normalized in ("gift", "gifts"):
+        return "gift hamper"
     mapped = _CATEGORY_SEARCH_TERMS.get(normalized)
     if mapped:
         return mapped
@@ -642,6 +644,33 @@ def _focus_derived_search_q(
     return None
 
 
+_GENERIC_BUDGET_Q_RE = re.compile(r"^(?:chocolate gift|gift hamper|gift)$", re.I)
+
+
+def _enrich_budget_search_q(
+    q: str,
+    state: dict[str, Any],
+) -> str:
+    """Preserve occasion/recipient context on budget-only refinement turns."""
+    if not _GENERIC_BUDGET_Q_RE.match(q.strip()):
+        return q.strip()
+
+    parts: list[str] = []
+    recipient = state.get("session_recipient_hint")
+    if isinstance(recipient, str) and recipient.strip():
+        parts.append(recipient.strip())
+    occasion = state.get("session_occasion")
+    hybrid = state.get("hybrid_context") or {}
+    hints = hybrid.get("hints") or {}
+    hint_occasion = hints.get("occasion")
+    if not occasion and isinstance(hint_occasion, str) and hint_occasion.strip():
+        occasion = hint_occasion.strip().lower()
+    if isinstance(occasion, str) and occasion.strip():
+        parts.append(occasion.strip())
+    parts.append(q.strip())
+    return " ".join(parts)
+
+
 def build_budget_refinement_search_args(
     state: dict[str, Any],
     user_message: str,
@@ -663,6 +692,8 @@ def build_budget_refinement_search_args(
 
     if not q:
         return None
+
+    q = _enrich_budget_search_q(q, state)
 
     budget_cap = extract_budget(user_message)
     intent_metadata = state.get("intent_metadata") or {}
