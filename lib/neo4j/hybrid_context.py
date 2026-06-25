@@ -18,6 +18,7 @@ from lib.chat.model_router import select_rewrite_model
 from lib.chat.product_curation import (
     PUJA_NEGATIVE_CATEGORY_HINTS,
     has_graph_hybrid_context,
+    is_anniversary_occasion_intent,
     is_flower_fruit_intent,
 )
 from lib.embeddings.reranker import CrossEncoderService
@@ -471,6 +472,10 @@ DESSERT_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
     "Desserts",
 )
 
+ANNIVERSARY_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
+    "Greeting Cards",
+)
+
 _CATEGORY_SEARCH_TERMS: dict[str, str] = {
     "chocolates": "chocolate",
     "flowers": "flower",
@@ -686,6 +691,17 @@ def birthday_occasion_from_context(hybrid_context: dict[str, Any] | None) -> boo
     return favorite == "birthday"
 
 
+_ANNIVERSARY_OCCASION_RE = re.compile(r"\banniversary\b", re.I)
+
+
+def anniversary_occasion_from_context(hybrid_context: dict[str, Any] | None) -> bool:
+    """True when graph/Zep hints mark the turn as an Anniversary occasion."""
+    context = hybrid_context or {}
+    hints = context.get("hints") or {}
+    occasion = str(hints.get("occasion") or "").strip().lower()
+    return occasion == "anniversary"
+
+
 def _should_demote_desserts_for_birthday(
     query: str,
     hybrid_context: dict[str, Any] | None,
@@ -844,6 +860,35 @@ def enrich_flower_fruit_negative_hints(
     return context
 
 
+def enrich_anniversary_hints(
+    query: str,
+    hybrid_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Bias anniversary turns toward flowers/hampers and away from greeting cards."""
+    context = dict(hybrid_context or {})
+    if not is_anniversary_occasion_intent(query, context):
+        return context
+    hints = dict(context.get("hints") or {})
+    hints.setdefault("occasion", "Anniversary")
+    existing = str(hints.get("exclude_categories") or "")
+    hints["exclude_categories"] = _merge_exclude_category_hints(
+        existing,
+        ANNIVERSARY_NEGATIVE_CATEGORY_HINTS,
+    )
+    context["hints"] = hints
+    return context
+
+
+def _anniversary_biased_search_q(query: str) -> str:
+    """Pick anniversary-focused Kapruka keywords from the customer turn."""
+    lowered = query.lower()
+    if re.search(r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b", lowered):
+        return "anniversary flowers"
+    if re.search(r"\b(?:cake|cakes|hamper|hampers)\b", lowered):
+        return "anniversary gift hamper"
+    return "anniversary gift hamper"
+
+
 def enrich_birthday_cake_hints(
     query: str,
     hybrid_context: dict[str, Any] | None,
@@ -881,6 +926,10 @@ def build_discovery_search_args(
     category = _resolve_mcp_category_filter(context)
     query = strip_location_from_search_query(user_message.strip(), intent_metadata)
     birthday_occasion = birthday_occasion_from_context(context) or is_birthday_cake_intent(query)
+    anniversary_occasion = (
+        anniversary_occasion_from_context(context)
+        or is_anniversary_occasion_intent(query, context)
+    )
     fallback_category = category or ("Birthday" if birthday_occasion else None)
 
     if is_broad_cakes_query(query):
@@ -940,6 +989,9 @@ def build_discovery_search_args(
     ):
         args["q"] = canonical_birthday_cake_search_q(query)
         args.setdefault("category", "Birthday")
+
+    if anniversary_occasion:
+        args["q"] = _anniversary_biased_search_q(query)
 
     if intent_metadata:
         session_budget = intent_metadata.get("budget_max")

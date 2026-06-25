@@ -1386,7 +1386,7 @@ def test_build_verified_delivery_fee_line_uses_format_currency() -> None:
         rate=450.0,
         currency="LKR",
     )
-    assert line == "Delivery to Galle on 2026-06-17: Rs. 450 (verified with Kapruka)"
+    assert line == "Delivery to Galle on Wednesday, 17 June 2026: Rs. 450 (verified with Kapruka)"
 
 
 def test_apply_perishable_delivery_honesty_appends_verified_fee_from_tool_trace() -> None:
@@ -1412,7 +1412,7 @@ def test_apply_perishable_delivery_honesty_appends_verified_fee_from_tool_trace(
         "Here are a few roses we can send.",
         tool_trace,
     )
-    assert "Delivery to Galle on 2026-06-17: Rs. 450 (verified with Kapruka)" in reply
+    assert "Delivery to Galle on Wednesday, 17 June 2026: Rs. 450 (verified with Kapruka)" in reply
     assert delivery_html is not None
     assert 'data-testid="delivery-date-available"' in delivery_html
     assert "Flat delivery rate: Rs. 450 per order." in delivery_html
@@ -1463,7 +1463,7 @@ async def test_generate_response_surfaces_delivery_fee_when_mcp_returns_rate() -
     result = await generate_response(state, genai_client=mock_client)
 
     assert (
-        "Delivery to Galle on 2026-06-17: Rs. 450 (verified with Kapruka)"
+        "Yes, we can deliver to Galle on Wednesday, 17 June 2026. Delivery fee is Rs. 450."
         in (result["assistant_message"])
     )
     assert 'data-testid="delivery-date-available"' in result["response_html"]
@@ -1562,3 +1562,80 @@ async def test_generate_response_guard_blocks_llm_hallucinated_delivery_fee() ->
 
     assert "Rs. 500" not in result["assistant_message"]
     assert "When would you like delivery?" in result["assistant_message"]
+
+
+def test_breakup_reply_omits_stale_kandy_delivery() -> None:
+    """Situational breakup turns must not append stale Kandy delivery fee lines."""
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {"city": "Kandy", "delivery_date": "2026-06-28"},
+            "result": {
+                "city": "Kandy",
+                "now": "2026-06-25T10:00:00+05:30",
+                "checked_date": "2026-06-28",
+                "available": True,
+                "rate": 500.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": None,
+            },
+        },
+    ]
+    reply, delivery_html = _apply_perishable_delivery_honesty(
+        "I'm really sorry you're going through this breakup.",
+        tool_trace,
+        user_message="We just broke up and I'm heartbroken.",
+        delivery_context_relevant=False,
+    )
+    assert "Kandy" not in reply
+    assert "verified with Kapruka" not in reply
+    assert delivery_html is None
+
+
+@pytest.mark.asyncio
+async def test_generate_response_budget_turn_prefers_refined_chocolate_carousel() -> None:
+    """Budget-only turn uses last_search chocolate picks, not greeting-card MCP drift."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(message="Here are chocolate gifts within your budget.")
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    chocolate_product = {
+        "id": "choc001",
+        "name": "Heart Chocolate Box",
+        "price": {"amount": 4500.0, "currency": "LKR"},
+        "in_stock": True,
+        "category": {"name": "Chocolate"},
+    }
+    greeting_card = {
+        "id": "card001",
+        "name": "Greeting Card",
+        "price": {"amount": 1200.0, "currency": "LKR"},
+        "in_stock": True,
+        "category": {"name": "Greeting Cards"},
+    }
+    state: AgentState = {
+        "intent": "discovery",
+        "messages": [HumanMessage(content="under 6000")],
+        "session_id": "sess-budget-refine",
+        "session_budget_max": 6000.0,
+        "session_product_focus": "chocolate",
+        "session_search_query": "chocolate gift",
+        "last_search_products": [chocolate_product],
+        "tool_results": {
+            SEARCH_PRODUCTS_TOOL: {
+                "results": [greeting_card],
+                "applied_filters": {"q": "gift under 6000"},
+            },
+        },
+        "currency": "LKR",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "Heart Chocolate Box" in (result.get("response_html") or "")
+    assert result.get("response_html") is not None
+    assert "Greeting Card" not in (result.get("response_html") or "")

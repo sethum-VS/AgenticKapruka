@@ -99,3 +99,30 @@ def test_classify_situational_for_valentine_nerves() -> None:
     message = "Valentine's surprise for my partner — I'm nervous"
     assert classify_query_mode(message) == "situational"
     assert _preprocessor.process(message)["is_situational"] is True
+
+
+def test_is_delivery_context_relevant_turn_breakup_without_delivery_tokens() -> None:
+    from lib.chat.query_preprocessor import is_delivery_context_relevant_turn
+
+    state = {
+        "session_delivery_city_canonical": "Kandy",
+        "session_delivery_date": "2026-06-28",
+        "intent_metadata": {"is_situational": True},
+    }
+    assert not is_delivery_context_relevant_turn(
+        state,
+        "We just broke up and I'm heartbroken.",
+    )
+
+
+def test_is_delivery_context_relevant_turn_delivery_question() -> None:
+    from lib.chat.query_preprocessor import is_delivery_context_relevant_turn
+
+    state = {
+        "session_delivery_city_canonical": "Kandy",
+        "intent_metadata": {},
+    }
+    assert is_delivery_context_relevant_turn(
+        state,
+        "can you deliver to Kandy this Sunday?",
+    )

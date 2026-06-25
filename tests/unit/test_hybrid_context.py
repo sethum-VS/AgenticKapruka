@@ -510,3 +510,14 @@ def test_merge_planner_search_args_budget_refinement() -> None:
     )
     assert merged["q"] == "chocolate gift"
     assert merged["max_price"] == 6000.0
+
+
+def test_build_discovery_search_args_anniversary_bias() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "Show me some anniversary gifts",
+        {"hints": {"occasion": "anniversary"}},
+        currency="LKR",
+    )
+    assert "anniversary" in args["q"].lower()

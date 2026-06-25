@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import date
 from typing import Any
 
 from google import genai
@@ -24,13 +25,16 @@ from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
+from lib.chat.intent_heuristics import is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.off_topic import impossible_request_subject, off_topic_topic
 from lib.chat.product_curation import (
+    carousel_focus_guard,
     curate_carousel_products,
     filter_cake_accessories,
     has_graph_hybrid_context,
     is_cake_accessory,
+    refine_last_search_by_budget,
 )
 from lib.chat.product_detail import (
     is_delivery_fee_question,
@@ -42,7 +46,7 @@ from lib.chat.product_honesty import (
     artificial_floral_note_for_picks,
     reply_already_discloses_artificial_floral,
 )
-from lib.chat.query_preprocessor import extract_target_city
+from lib.chat.query_preprocessor import extract_target_city, is_delivery_context_relevant_turn
 from lib.chat.search_broadening import build_empty_search_reply
 from lib.chat.system_prompts import (
     build_farewell_message,
@@ -72,6 +76,7 @@ from lib.kapruka.types import CheckDeliveryOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import format_currency
 from lib.utils.text import decode_html_entities
+from lib.utils.timezone import colombo_today, format_delivery_date_friendly
 from lib.zep.memory import format_memory_facts_block
 
 logger = logging.getLogger(__name__)
@@ -385,7 +390,8 @@ def _build_verified_delivery_fee_line(
     currency: str,
 ) -> str:
     fee = format_currency(rate, currency)
-    return f"Delivery to {city} on {checked_date}: {fee} (verified with Kapruka)"
+    friendly_date = format_delivery_date_friendly(checked_date)
+    return f"Delivery to {city} on {friendly_date}: {fee} (verified with Kapruka)"
 
 
 def _build_verified_city_delivery_line(
@@ -398,11 +404,53 @@ def _build_verified_city_delivery_line(
     return f"Delivery to {city}: {fee} flat rate per order (verified with Kapruka)"
 
 
+_PERISHABLE_GIFT_RE = re.compile(
+    r"\b(?:cake|cakes|flower|flowers|rose|roses|bouquet|fruit)\b",
+    re.I,
+)
+
+
+def _reply_has_verified_delivery_fee(
+    reply_text: str,
+    *,
+    rate: float | None = None,
+    currency: str = "LKR",
+) -> bool:
+    if "verified with Kapruka" in reply_text:
+        return True
+    return rate is not None and format_currency(rate, currency) in reply_text
+
+
+def _turn_implies_perishable_gift(
+    user_message: str,
+    *,
+    session_product_focus: str | None = None,
+) -> bool:
+    if session_product_focus in ("cake", "flowers"):
+        return True
+    return bool(_PERISHABLE_GIFT_RE.search(user_message))
+
+
+def _delivery_date_more_than_one_day_out(checked_date: str) -> bool:
+    try:
+        target = date.fromisoformat(checked_date)
+    except ValueError:
+        return False
+    return (target - colombo_today()).days > 1
+
+
 def _apply_perishable_delivery_honesty(
     reply_text: str,
     tool_trace: list[ToolInvocation] | None,
+    *,
+    user_message: str = "",
+    session_product_focus: str | None = None,
+    delivery_context_relevant: bool = True,
 ) -> tuple[str, str | None]:
     """Append verified delivery fee and perishable_warning; render delivery status partial."""
+    if not delivery_context_relevant:
+        return reply_text, None
+
     invocation = _last_check_delivery_invocation(tool_trace)
     if invocation is None:
         return reply_text, None
@@ -422,7 +470,11 @@ def _apply_perishable_delivery_honesty(
 
     if delivery_output.available:
         city = _canonical_city_from_check_delivery_invocation(invocation)
-        if city:
+        if city and not _reply_has_verified_delivery_fee(
+            updated_reply,
+            rate=delivery_output.rate,
+            currency=delivery_output.currency,
+        ):
             if _is_city_only_check_delivery(invocation):
                 fee_line = _build_verified_city_delivery_line(
                     city=city,
@@ -436,17 +488,27 @@ def _apply_perishable_delivery_honesty(
                     rate=delivery_output.rate,
                     currency=delivery_output.currency,
                 )
-            if "verified with Kapruka" not in updated_reply:
-                updated_reply = f"{updated_reply}\n\n{fee_line}".strip()
+            updated_reply = f"{updated_reply}\n\n{fee_line}".strip()
         if not _is_city_only_check_delivery(invocation):
             delivery_html = render_delivery_date_status(result=delivery_output)
 
     warning = delivery_output.perishable_warning
     if isinstance(warning, str) and warning.strip():
         warning = warning.strip()
-        if warning not in updated_reply:
+        perishable_turn = _turn_implies_perishable_gift(
+            user_message,
+            session_product_focus=session_product_focus,
+        )
+        dated_delivery = not _is_city_only_check_delivery(invocation)
+        ahead_booking = dated_delivery and _delivery_date_more_than_one_day_out(
+            delivery_output.checked_date,
+        )
+        should_append_warning = warning not in updated_reply and (
+            not ahead_booking or (perishable_turn and ahead_booking)
+        )
+        if should_append_warning:
             updated_reply = f"{updated_reply}\n\n{warning}".strip()
-        if delivery_html is None:
+        if delivery_html is None and dated_delivery:
             delivery_html = render_delivery_date_status(result=delivery_output)
 
     return updated_reply, delivery_html
@@ -522,8 +584,9 @@ def _build_verified_dated_delivery_reply(
     currency: str,
 ) -> str:
     fee = format_currency(rate, currency)
+    friendly_date = format_delivery_date_friendly(checked_date)
     return (
-        f"Yes, we can deliver to {city} on {checked_date}. "
+        f"Yes, we can deliver to {city} on {friendly_date}. "
         f"Delivery fee is {fee}."
     )
 
@@ -549,15 +612,15 @@ def _apply_verified_dated_delivery_template(
         or not isinstance(rate, (int, float))
     ):
         return reply_text
-    template = _build_verified_dated_delivery_reply(
+    fee_label = format_currency(float(rate), str(delivery_currency))
+    if "verified with Kapruka" in reply_text or fee_label in reply_text:
+        return reply_text
+    return _build_verified_dated_delivery_reply(
         city=city,
         checked_date=checked_date,
         rate=float(rate),
         currency=str(delivery_currency),
     )
-    if format_currency(float(rate), str(delivery_currency)) in reply_text:
-        return reply_text
-    return template
 
 
 def _is_cake_accessory(product: dict[str, Any]) -> bool:
@@ -740,12 +803,14 @@ def _generate_reply_sync(
     intent_metadata: IntentMetadata | None = None,
     system_instruction: str | None = None,
     intent: str | None = None,
+    delivery_context_relevant: bool = True,
 ) -> str:
     """Blocking Gemini call; run via asyncio.to_thread from generate_response."""
     instruction = system_instruction or build_response_system_instruction(
         intent_metadata,
         zep_memory_facts=zep_memory_facts,
         intent=intent,
+        delivery_context_relevant=delivery_context_relevant,
     )
     if system_instruction is not None and zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
@@ -773,6 +838,7 @@ def extract_search_products(
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    last_search_products: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return curated product dicts from kapruka_search_products tool_results, if any."""
     if not tool_results:
@@ -783,7 +849,7 @@ def extract_search_products(
         return []
 
     products = _curated_search_results(search_payload)
-    return _budget_curated_products(
+    products = _budget_curated_products(
         products,
         query=_discovery_curation_query(search_payload, user_message=user_message),
         budget_max=budget_max,
@@ -792,6 +858,23 @@ def extract_search_products(
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
     )
+    if (
+        session_product_focus
+        and products
+        and not carousel_focus_guard(products, session_product_focus)
+        and last_search_products
+        and budget_max is not None
+        and budget_max > 0
+    ):
+        refined = refine_last_search_by_budget(
+            last_search_products,
+            budget_max=budget_max,
+            currency=currency,
+            session_product_focus=session_product_focus,
+        )
+        if refined:
+            return refined
+    return products
 
 
 def _build_cart_assistant_message(action: dict[str, Any]) -> str | None:
@@ -924,6 +1007,7 @@ def build_products_carousel_html(
             graph_context_available=graph_context_available,
             hybrid_context=hybrid_context,
             session_product_focus=session_product_focus,
+            last_search_products=last_search_products,
         )
     if not products and last_search_products:
         products = last_search_products
@@ -1100,7 +1184,14 @@ async def generate_response(
     ):
         question = clarifying_question.strip()
         tool_trace = state.get("tool_trace")
-        question, delivery_status_html = _apply_perishable_delivery_honesty(question, tool_trace)
+        delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
+        question, delivery_status_html = _apply_perishable_delivery_honesty(
+            question,
+            tool_trace,
+            user_message=user_message,
+            session_product_focus=state.get("session_product_focus"),
+            delivery_context_relevant=delivery_context_relevant,
+        )
         return {
             "response_html": render_assistant_html(
                 question,
@@ -1138,9 +1229,13 @@ async def generate_response(
                 error_reply = f"{error_reply}\n\nFrom our earlier results: {detail}"
         tool_trace = state.get("tool_trace")
         if is_delivery_fee_question(user_message) and _tool_trace_has_check_delivery(tool_trace):
+            delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
             reply_text, delivery_status_html = _apply_perishable_delivery_honesty(
                 error_reply,
                 tool_trace,
+                user_message=user_message,
+                session_product_focus=state.get("session_product_focus"),
+                delivery_context_relevant=delivery_context_relevant,
             )
             return {
                 "response_html": render_assistant_html(
@@ -1284,13 +1379,18 @@ async def generate_response(
                     "assistant_message": error_message,
                 }
             if search_payload.get("results") == []:
-                empty_reply = build_empty_search_reply(
-                    broaden_attempted=bool(state.get("search_broaden_applied")),
+                can_refine_from_last_search = bool(
+                    is_budget_refinement_message(user_message)
+                    and state.get("last_search_products")
                 )
-                return {
-                    "response_html": render_assistant_html(empty_reply),
-                    "assistant_message": empty_reply,
-                }
+                if not can_refine_from_last_search:
+                    empty_reply = build_empty_search_reply(
+                        broaden_attempted=bool(state.get("search_broaden_applied")),
+                    )
+                    return {
+                        "response_html": render_assistant_html(empty_reply),
+                        "assistant_message": empty_reply,
+                    }
 
     currency = state.get("currency") or "LKR"
     metadata = dict(state.get("intent_metadata") or {})
@@ -1304,6 +1404,8 @@ async def generate_response(
     graph_context_available = has_graph_hybrid_context(state.get("hybrid_context") or {})
     hybrid_context = state.get("hybrid_context") or {}
     session_product_focus = state.get("session_product_focus")
+    delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
+    last_search_products = list(state.get("last_search_products") or [])
 
     if is_product_detail_turn(user_message):
         matched = match_product_from_last_search(
@@ -1325,6 +1427,9 @@ async def generate_response(
             detail_reply, delivery_status_html = _apply_perishable_delivery_honesty(
                 detail_reply,
                 tool_trace,
+                user_message=user_message,
+                session_product_focus=session_product_focus,
+                delivery_context_relevant=delivery_context_relevant,
             )
             products_html = build_products_carousel_html(
                 tool_results,
@@ -1345,15 +1450,50 @@ async def generate_response(
                 "assistant_message": detail_reply,
             }
 
-    visible_products = extract_search_products(
-        tool_results,
-        budget_max=budget_max,
-        currency=currency,
-        user_message=user_message,
-        graph_context_available=graph_context_available,
-        hybrid_context=hybrid_context,
-        session_product_focus=session_product_focus,
-    )
+    visible_products: list[dict[str, Any]] | None = None
+    if (
+        is_budget_refinement_message(user_message)
+        and last_search_products
+        and budget_max is not None
+        and budget_max > 0
+    ):
+        refined = refine_last_search_by_budget(
+            last_search_products,
+            budget_max=budget_max,
+            currency=currency,
+            session_product_focus=session_product_focus,
+            session_search_query=state.get("session_search_query"),
+        )
+        if refined:
+            visible_products = refined
+
+    if visible_products is None:
+        visible_products = extract_search_products(
+            tool_results,
+            budget_max=budget_max,
+            currency=currency,
+            user_message=user_message,
+            graph_context_available=graph_context_available,
+            hybrid_context=hybrid_context,
+            session_product_focus=session_product_focus,
+            last_search_products=last_search_products or None,
+        )
+        if (
+            visible_products
+            and not carousel_focus_guard(visible_products, session_product_focus)
+            and budget_max is not None
+            and budget_max > 0
+        ):
+            refined = refine_last_search_by_budget(
+                last_search_products,
+                budget_max=budget_max,
+                currency=currency,
+                session_product_focus=session_product_focus,
+                session_search_query=state.get("session_search_query"),
+            )
+            if refined:
+                visible_products = refined
+
     products_html = build_products_carousel_html(
         tool_results,
         budget_max=budget_max,
@@ -1362,7 +1502,7 @@ async def generate_response(
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
-        last_search_products=state.get("last_search_products"),
+        last_search_products=last_search_products or None,
         visible_products=visible_products,
     )
 
@@ -1422,7 +1562,8 @@ async def generate_response(
         delivery_city_status=state.get("delivery_city_status"),
         delivery_city_confirmed=bool(state.get("session_delivery_city_confirmed")),
     )
-    reply_text = _apply_verified_dated_delivery_template(reply_text, tool_trace)
+    if delivery_context_relevant:
+        reply_text = _apply_verified_dated_delivery_template(reply_text, tool_trace)
     reply_text = carousel_consistency_guard(
         reply_text,
         visible_products,
@@ -1435,7 +1576,13 @@ async def generate_response(
         visible_products,
         user_message=user_message,
     )
-    reply_text, delivery_status_html = _apply_perishable_delivery_honesty(reply_text, tool_trace)
+    reply_text, delivery_status_html = _apply_perishable_delivery_honesty(
+        reply_text,
+        tool_trace,
+        user_message=user_message,
+        session_product_focus=session_product_focus,
+        delivery_context_relevant=delivery_context_relevant,
+    )
 
     logger.info(
         "generate_response: rendered assistant reply (%d chars, carousel=%s)",

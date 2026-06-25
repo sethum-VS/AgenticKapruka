@@ -24,20 +24,24 @@ def test_persona_clueless_gift_giver_budget_and_delivery(
     page: Page,
     base_url: str,
 ) -> None:
-    """Clueless Gift Giver: chocolate thread, budget refine, Kandy delivery."""
+    """Clueless Gift Giver QA Scenario 1: clarify → chocolate → budget → Kandy delivery."""
     page.goto(f"{base_url}/chat")
     wait_for_alpine(page)
     reset_e2e_session(page, base_url)
 
-    _chat_turn(page, "chocolate gift for my wife in Kandy")
-    _chat_turn(page, "under 6000")
-    reply = _chat_turn(page, "can you deliver this Sunday?")
+    _chat_turn(page, "I need a gift for my wife")
+    _chat_turn(page, "chocolate")
+    budget_reply = _chat_turn(page, "Keep it under 6000 rupees.")
+    delivery_reply = _chat_turn(page, "can you deliver to Kandy this Sunday?")
 
     tools = fetch_mcp_tools(page, base_url)
     assert "kapruka_search_products" in tools
     assert "kapruka_check_delivery" in tools
-    assert "voucher" not in reply.lower() or "chocolate" in reply.lower()
+    assert "voucher" not in budget_reply.lower() or "chocolate" in budget_reply.lower()
     expect(page.locator('[data-testid="product-card"]').first).to_be_visible()
+    assert "kandy" in delivery_reply.lower()
+    verified = "verified with kapruka" in delivery_reply.lower()
+    assert delivery_reply.lower().count("rs.") <= 2 or verified
 
 
 def test_persona_context_pivot_cakes_not_vouchers(page: Page, base_url: str) -> None:
@@ -80,3 +84,18 @@ def test_persona_apology_professional_tone(page: Page, base_url: str) -> None:
     lowered = reply.lower()
     assert "machan" not in lowered
     assert "bro" not in lowered or "broke" in lowered
+
+
+def test_persona_breakup_omits_stale_kandy_delivery(page: Page, base_url: str) -> None:
+    """After Kandy delivery context, breakup empathy must not mention Kandy."""
+    page.goto(f"{base_url}/chat")
+    wait_for_alpine(page)
+    reset_e2e_session(page, base_url)
+
+    _chat_turn(page, "chocolate gift for my wife in Kandy")
+    _chat_turn(page, "can you deliver this Sunday?")
+    breakup_reply = _chat_turn(page, "We just broke up and I'm heartbroken.")
+
+    lowered = breakup_reply.lower()
+    assert "kandy" not in lowered
+    assert "verified with kapruka" not in lowered

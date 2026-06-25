@@ -31,7 +31,10 @@ Rules:
 - Recommend your top 2–3 picks with a short rationale for each — do not dump the full catalog.
 - Quote product names exactly as they appear in tool_results.
 - Use each product's display_price field (Rs. X,XXX) for LKR prices in prose — not raw amount JSON.
-- When delivery city or date appears in tool_results or the customer message, mention it briefly.
+- When delivery city or date appears in tool_results or the customer message this
+  turn, mention it briefly.
+- Do not mention delivery city or date from earlier turns unless the customer
+  asked about delivery this turn.
 - Never invent products, prices, stock status, categories, or delivery facts.
 """
     + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
@@ -51,8 +54,10 @@ Rules:
 - Never invent products, prices, stock status, categories, or delivery facts.
 - Quote product names exactly as they appear in tool_results.
 - Use each product's display_price field (Rs. X,XXX) for LKR prices in prose — not raw amount JSON.
-- When delivery city or date is known, mention it with contextual hand-delivery advice for
-  personal occasions (condolence, breakup, apology).
+- When delivery city or date is known for this turn, mention it with contextual
+  hand-delivery advice for personal occasions (condolence, breakup, apology).
+- Do not mention delivery city or date from earlier turns unless the customer
+  asked about delivery this turn.
 - Warm professional concierge tone by default.
 """
     + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
@@ -71,7 +76,10 @@ Rules:
 - Curate top 2–3 relevant picks with brief rationale when catalog data is present.
 - Never invent products, prices, stock status, categories, or delivery facts.
 - Quote names exactly as they appear in tool_results; use display_price for LKR prose.
-- Mention delivery city or date when present in tool_results.
+- Mention delivery city or date when present in tool_results or the customer
+  message this turn.
+- Do not mention delivery city or date from earlier turns unless the customer
+  asked about delivery this turn.
 """
     + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
     + "- Keep the reply warm, concise, and under 150 words.\n"
@@ -141,6 +149,11 @@ _PROFESSIONAL_TONE_RULE = (
     "only if the customer used them in this message.\n"
 )
 
+_DELIVERY_CONTEXT_SUPPRESS_RULE = (
+    "- Do not mention delivery city or date unless the customer asked about delivery "
+    "in this turn.\n"
+)
+
 
 def build_off_topic_redirect_message(topic: str) -> str:
     """Polite redirect when the customer asks about weather, news, or general knowledge."""
@@ -192,9 +205,12 @@ def build_response_system_instruction(
     *,
     zep_memory_facts: list[str] | None = None,
     intent: str | None = None,
+    delivery_context_relevant: bool = True,
 ) -> str:
     """Combine routed system prompt with optional Zep memory context."""
     instruction = select_response_system_instruction(intent_metadata, intent=intent)
+    if not delivery_context_relevant:
+        instruction += _DELIVERY_CONTEXT_SUPPRESS_RULE
     if zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
         instruction += (

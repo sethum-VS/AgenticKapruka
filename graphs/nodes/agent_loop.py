@@ -23,12 +23,15 @@ from lib.chat.delivery_dates import (
 )
 from lib.chat.intent_heuristics import is_budget_refinement_message
 from lib.chat.product_curation import (
+    apply_anniversary_curation,
     apply_birthday_cake_curation,
     apply_puja_curation,
+    carousel_focus_guard,
     has_graph_hybrid_context,
     is_cake_accessory,
     is_flower_fruit_intent,
 )
+from lib.chat.query_preprocessor import is_delivery_context_relevant_turn
 from lib.chat.search_broadening import apply_first_broaden
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
@@ -503,16 +506,20 @@ def _curate_search_trace_result(
     hybrid_context = state.get("hybrid_context") or {}
     graph_up = has_graph_hybrid_context(hybrid_context)
     session_focus = state.get("session_product_focus")
-    curated = apply_birthday_cake_curation(
-        apply_puja_curation(
-            products,
+    curated = apply_anniversary_curation(
+        apply_birthday_cake_curation(
+            apply_puja_curation(
+                products,
+                query=user_message,
+                graph_context_available=graph_up,
+            ),
             query=user_message,
+            hybrid_context=hybrid_context,
             graph_context_available=graph_up,
+            session_product_focus=session_focus,
         ),
         query=user_message,
         hybrid_context=hybrid_context,
-        graph_context_available=graph_up,
-        session_product_focus=session_focus,
     )
     if curated == products:
         return result
@@ -707,6 +714,8 @@ def _build_planner_system_instruction(
     tool_trace: list[ToolInvocation],
 ) -> str:
     """Compose planner system instruction with memory and hybrid soft hints."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    delivery_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
     instruction = (
         f"{PLANNER_SYSTEM_INSTRUCTION}\n\n"
         f"Today in Sri Lanka: {colombo_today_iso()}\n"
@@ -718,12 +727,18 @@ def _build_planner_system_instruction(
             f"\n\nDisplay currency (authoritative): {currency.strip()} — use for all price "
             "filters; do not ask the customer to choose currency."
         )
-    session_date = state.get("session_delivery_date") or state.get("delivery_date")
-    if isinstance(session_date, str) and session_date.strip():
-        instruction += (
-            f"\n\nResolved delivery date: {session_date.strip()} — do not ask_user for the "
-            "date when delivery validation is needed; use this date in kapruka_check_delivery."
+    if delivery_relevant:
+        session_date = state.get("session_delivery_date") or state.get("delivery_date")
+        if isinstance(session_date, str) and session_date.strip():
+            instruction += (
+                f"\n\nResolved delivery date: {session_date.strip()} — do not ask_user for the "
+                "date when delivery validation is needed; use this date in kapruka_check_delivery."
+            )
+        canonical_city = state.get("session_delivery_city_canonical") or state.get(
+            "delivery_city_canonical",
         )
+        if isinstance(canonical_city, str) and canonical_city.strip():
+            instruction += f"\n\nResolved delivery city: {canonical_city.strip()}."
     session_focus = state.get("session_product_focus")
     if isinstance(session_focus, str) and session_focus.strip():
         instruction += f"\n\nSession shopping focus: {session_focus.strip()} (from earlier turn)."
@@ -734,7 +749,6 @@ def _build_planner_system_instruction(
         )
     zep_memory_facts = state.get("zep_memory_facts")
     if zep_memory_facts:
-        user_message = _extract_latest_user_message(state.get("messages") or [])
         scoped_facts = scope_memory_facts_for_turn(zep_memory_facts, user_message)
         if scoped_facts:
             facts_block = format_memory_facts_block(scoped_facts).replace(
@@ -762,9 +776,10 @@ def _build_planner_user_prompt(state: AgentState) -> str:
     currency = state.get("currency")
     if isinstance(currency, str) and currency.strip():
         prompt += f"\n\nSession display currency: {currency.strip()}"
-    session_date = state.get("session_delivery_date") or state.get("delivery_date")
-    if isinstance(session_date, str) and session_date.strip():
-        prompt += f"\n\nResolved delivery date: {session_date.strip()}"
+    if is_delivery_context_relevant_turn(dict(state), user_message):
+        session_date = state.get("session_delivery_date") or state.get("delivery_date")
+        if isinstance(session_date, str) and session_date.strip():
+            prompt += f"\n\nResolved delivery date: {session_date.strip()}"
     session_focus = state.get("session_product_focus")
     if isinstance(session_focus, str) and session_focus.strip():
         prompt += f"\n\nSession shopping focus: {session_focus.strip()}"
@@ -930,6 +945,7 @@ async def agent_loop(
             and (
                 state.get("session_search_query")
                 or state.get("session_product_focus")
+                or state.get("last_search_products")
             )
         ):
             tool_name = SEARCH_PRODUCTS_TOOL
@@ -958,13 +974,29 @@ async def agent_loop(
                 currency=currency,
             )
             result = _curate_search_trace_result(result, state=state)
+            search_q_arg = enriched_args.get("q")
+            if isinstance(search_q_arg, str) and search_q_arg.strip():
+                session_search_query_update = search_q_arg.strip()
+            else:
+                search_q = _search_query_from_result(result)
+                if search_q:
+                    session_search_query_update = search_q
+            if _search_has_products(result):
+                raw_results = result.get("results")
+                products = [
+                    item for item in (raw_results or []) if isinstance(item, dict)
+                ]
+                session_focus = state.get("session_product_focus")
+                if session_focus and products and not carousel_focus_guard(
+                    products,
+                    session_focus if isinstance(session_focus, str) else None,
+                ):
+                    result = dict(result)
+                    result["results"] = []
             tool_trace.append(
                 {"name": tool_name, "args": enriched_args, "result": result},
             )
             tool_call_count += 1
-            search_q = _search_query_from_result(result)
-            if search_q:
-                session_search_query_update = search_q
             if isinstance(result, dict) and result.get("error"):
                 agent_tool_error = {
                     "tool": tool_name,
@@ -977,9 +1009,12 @@ async def agent_loop(
                 state,
                 tool_trace,
             ):
-                force_finish = True
-                force_finish_reason = "finish"
-            continue
+                exit_reason = "finish"
+                agent_loop_done = True
+                break
+            exit_reason = "finish"
+            agent_loop_done = True
+            break
 
         _emit_status(_DEFAULT_STATUS_MESSAGE)
 
@@ -1154,9 +1189,13 @@ async def agent_loop(
         )
         if tool_name == SEARCH_PRODUCTS_TOOL:
             result = _curate_search_trace_result(result, state=state)
-            search_q = _search_query_from_result(result)
-            if search_q:
-                session_search_query_update = search_q
+            search_q_arg = enriched_args.get("q")
+            if isinstance(search_q_arg, str) and search_q_arg.strip():
+                session_search_query_update = search_q_arg.strip()
+            else:
+                search_q = _search_query_from_result(result)
+                if search_q:
+                    session_search_query_update = search_q
             if _search_has_products(result):
                 raw_results = result.get("results")
                 products = [
@@ -1392,5 +1431,7 @@ async def agent_loop(
     last_search_products = _last_search_products_from_trace(tool_trace, state=state)
     if last_search_products:
         updates["last_search_products"] = last_search_products
+    elif state.get("last_search_products"):
+        updates["last_search_products"] = state["last_search_products"]
 
     return updates

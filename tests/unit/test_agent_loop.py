@@ -1254,3 +1254,67 @@ async def test_agent_loop_utility_general_iteration_cap_at_two() -> None:
     assert result["agent_loop_exit_reason"] == "max_iterations"
     assert len(result["tool_trace"]) == UTILITY_GENERAL_MAX_ITERATIONS
     assert mock_service.search_products.call_count == UTILITY_GENERAL_MAX_ITERATIONS
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_budget_refinement_exits_without_second_planner_iteration() -> None:
+    """Budget-only turns finish immediately after one contextual search."""
+    mock_service = _mock_kapruka_service()
+    greeting_card = ProductResult(
+        id="card001",
+        name="Greeting Card",
+        summary="Generic card.",
+        price=Money(amount=500.0, currency="LKR"),
+        compare_at_price=None,
+        in_stock=True,
+        stock_level="high",
+        image_url=None,
+        category=CategoryRef(id="cat_cards", name="Greeting Cards", slug="greeting-cards"),
+        rating=None,
+        ships_internationally=False,
+        url="https://www.kapruka.com/card",
+    )
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[greeting_card],
+        next_cursor=None,
+        applied_filters={"q": "gift voucher", "max_price": 6000.0},
+    )
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="Keep it under 6000 rupees.")],
+        "session_product_focus": "chocolate",
+        "session_search_query": "chocolate gift",
+        "session_budget_max": 6000.0,
+        "intent_metadata": {"budget_max": 6000.0},
+        "last_search_products": [
+            {
+                "id": "choc001",
+                "name": "Chocolate Truffles",
+                "price": {"amount": 4500.0, "currency": "LKR"},
+                "in_stock": True,
+            }
+        ],
+    }
+    planner_should_not_run = AgentPlannerStep(
+        action="call_tool",
+        tool_name=SEARCH_PRODUCTS_TOOL,
+        tool_args={"q": "gift voucher"},
+        rationale="should not run",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=[planner_should_not_run],
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_not_called()
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert mock_service.search_products.await_count == 1
+    assert result.get("session_search_query") == "chocolate gift"
+    assert result["last_search_products"] == state["last_search_products"]

@@ -8,6 +8,8 @@ from lib.chat.intent_heuristics import is_budget_refinement_message, is_topic_pi
 def test_is_budget_refinement_message_under_price_only() -> None:
     assert is_budget_refinement_message("under 6000")
     assert is_budget_refinement_message("under Rs. 5,000")
+    assert is_budget_refinement_message("Keep it under 6000 rupees.")
+    assert is_budget_refinement_message("Keep it under 6000 rupees.")
 
 
 def test_is_budget_refinement_message_rejects_new_product() -> None:

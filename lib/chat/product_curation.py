@@ -29,6 +29,22 @@ _CAKE_ACCESSORY_BLACKLIST = re.compile(
     r"fondant|nozzle|decorating|piping\s+bag|spatula)\b",
     re.I,
 )
+_FOCUS_TOKEN_PATTERNS: dict[str, re.Pattern[str]] = {
+    "chocolate": re.compile(r"\b(?:chocolate|choco|cocoa)\b", re.I),
+    "cake": re.compile(r"\b(?:cake|birthday)\b", re.I),
+    "flowers": re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b", re.I),
+    "gift": re.compile(r"\b(?:hamper|combo|combopack|gift)\b", re.I),
+}
+_ANNIVERSARY_OCCASION_RE = re.compile(r"\banniversary\b", re.I)
+_ANNIVERSARY_PROMOTE_RE = re.compile(
+    r"\b(?:flower|flowers|rose|roses|bouquet|floral|cake|cakes|hamper|hampers|"
+    r"chocolate|chocolates|combo|combopack)\b",
+    re.I,
+)
+_ANNIVERSARY_DEMOTE_RE = re.compile(
+    r"\b(?:greeting\s+card|watch\s+box|storage\s+box|voucher|gift\s+voucher)\b",
+    re.I,
+)
 
 PUJA_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
     "Puja",
@@ -227,6 +243,112 @@ def _product_currency(product: dict[str, Any]) -> str:
     return "LKR"
 
 
+def product_matches_focus(
+    product: dict[str, Any],
+    session_product_focus: str | None,
+) -> bool:
+    """True when product name/category matches the session shopping focus."""
+    if not session_product_focus:
+        return True
+    pattern = _FOCUS_TOKEN_PATTERNS.get(session_product_focus)
+    if pattern is None:
+        return True
+    return bool(pattern.search(_product_text_blob(product)))
+
+
+def carousel_focus_guard(
+    products: list[dict[str, Any]],
+    session_product_focus: str | None,
+    *,
+    top_n: int = 5,
+    min_ratio: float = 0.3,
+) -> bool:
+    """True when top carousel items align with session product focus."""
+    if not products or not session_product_focus:
+        return True
+    sample = products[:top_n]
+    if not sample:
+        return True
+    matches = sum(1 for product in sample if product_matches_focus(product, session_product_focus))
+    return (matches / len(sample)) >= min_ratio
+
+
+def refine_last_search_by_budget(
+    last_search_products: list[dict[str, Any]],
+    *,
+    budget_max: float | None,
+    currency: str,
+    session_product_focus: str | None = None,
+    session_search_query: str | None = None,
+) -> list[dict[str, Any]] | None:
+    """Re-filter prior carousel by budget and session focus; None triggers MCP fallback."""
+    _ = session_search_query
+    if not last_search_products or budget_max is None or budget_max <= 0:
+        return None
+
+    curated = sort_and_filter_by_budget(last_search_products, budget_max, currency)
+    in_budget = [
+        product
+        for product in curated
+        if (price := product_price_amount(product)) is not None and price <= budget_max
+    ]
+    if not in_budget:
+        return None
+
+    if session_product_focus:
+        matching = [
+            product
+            for product in in_budget
+            if product_matches_focus(product, session_product_focus)
+        ]
+        if not matching:
+            return None
+        demoted = [
+            product
+            for product in in_budget
+            if not product_matches_focus(product, session_product_focus)
+        ]
+        return matching + demoted
+
+    return in_budget
+
+
+def is_anniversary_occasion_intent(
+    query: str,
+    hybrid_context: dict[str, Any] | None = None,
+) -> bool:
+    """True when the turn targets anniversary gifts."""
+    if query.strip() and _ANNIVERSARY_OCCASION_RE.search(query):
+        return True
+    hints = (hybrid_context or {}).get("hints") or {}
+    occasion = str(hints.get("occasion") or "").strip().lower()
+    return occasion == "anniversary"
+
+
+def apply_anniversary_curation(
+    products: list[dict[str, Any]],
+    *,
+    query: str,
+    hybrid_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Promote flowers/cakes/hampers and demote greeting cards for anniversary turns."""
+    if not is_anniversary_occasion_intent(query, hybrid_context):
+        return list(products)
+
+    promoted: list[dict[str, Any]] = []
+    neutral: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        blob = _product_text_blob(product)
+        if _ANNIVERSARY_DEMOTE_RE.search(blob):
+            demoted.append(product)
+        elif _ANNIVERSARY_PROMOTE_RE.search(blob):
+            promoted.append(product)
+        else:
+            neutral.append(product)
+    return promoted + neutral + demoted
+
+
 def sort_and_filter_by_budget(
     products: list[dict[str, Any]],
     budget_max: float | None,
@@ -292,6 +414,11 @@ def curate_carousel_products(
         hybrid_context=hybrid_context,
         graph_context_available=graph_context_available,
         session_product_focus=session_product_focus,
+    )
+    scoped = apply_anniversary_curation(
+        scoped,
+        query=query,
+        hybrid_context=hybrid_context,
     )
     scoped = demote_produce_for_vague_gifts(scoped, query)
     if is_birthday_cake_scoped_turn(

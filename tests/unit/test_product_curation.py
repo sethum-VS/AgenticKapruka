@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from lib.chat.product_curation import (
+    apply_anniversary_curation,
     apply_birthday_cake_curation,
     apply_puja_curation,
+    carousel_focus_guard,
     curate_carousel_products,
     demote_puja_products,
     filter_puja_products,
@@ -12,8 +14,10 @@ from lib.chat.product_curation import (
     is_flower_fruit_intent,
     product_is_birthday_cake_product,
     product_is_generic_dessert,
+    product_matches_focus,
     product_matches_puja_denylist,
     product_price_amount,
+    refine_last_search_by_budget,
     sort_and_filter_by_budget,
 )
 
@@ -219,3 +223,81 @@ def test_curate_carousel_products_birthday_cake_budget_order() -> None:
         hybrid_context={"hints": {"occasion": "Birthday"}},
     )
     assert [item["id"] for item in curated] == ["bday", "lava"]
+
+
+def test_refine_last_search_by_budget_filters_chocolate_and_drops_over_budget() -> None:
+    products = [
+        _product("choc1", 5500.0, name="Cadbury Chocolate Gift Box"),
+        _product("choc2", 7500.0, name="Premium Chocolate Hamper"),
+        _product("card", 1200.0, name="Greeting Card"),
+    ]
+    refined = refine_last_search_by_budget(
+        products,
+        budget_max=6000.0,
+        currency="LKR",
+        session_product_focus="chocolate",
+    )
+    assert refined is not None
+    assert all(
+        float(item["price"]["amount"]) <= 6000.0  # type: ignore[index]
+        for item in refined
+        if isinstance(item.get("price"), dict)
+    )
+    assert refined[0]["id"] == "choc1"
+    assert "choc2" not in {item["id"] for item in refined}
+    assert refined[-1]["id"] == "card"
+
+
+def test_refine_last_search_by_budget_returns_none_without_focus_match() -> None:
+    products = [
+        _product("card", 1200.0, name="Greeting Card"),
+        _product("voucher", 5000.0, name="Gift Voucher"),
+    ]
+    assert (
+        refine_last_search_by_budget(
+            products,
+            budget_max=6000.0,
+            currency="LKR",
+            session_product_focus="chocolate",
+        )
+        is None
+    )
+
+
+def test_carousel_focus_guard_detects_off_topic_drift() -> None:
+    greeting_cards = [
+        _product(f"card{i}", 1000.0 + i, name=f"Greeting Card {i}") for i in range(5)
+    ]
+    assert not carousel_focus_guard(greeting_cards, "chocolate")
+    mixed = [
+        _product("choc1", 4500.0, name="Chocolate Truffles"),
+        _product("choc2", 5200.0, name="Dark Chocolate Box"),
+        *greeting_cards[:3],
+    ]
+    assert carousel_focus_guard(mixed, "chocolate")
+
+
+def test_apply_anniversary_curation_demotes_greeting_cards() -> None:
+    products = [
+        _product("card", 1500.0, name="Anniversary Greeting Card"),
+        _product("roses", 6500.0, name="Red Rose Bouquet"),
+        _product("hamper", 8900.0, name="Anniversary Gift Hamper"),
+    ]
+    curated = apply_anniversary_curation(
+        products,
+        query="Show me some anniversary gifts",
+        hybrid_context={"hints": {"occasion": "anniversary"}},
+    )
+    assert curated[0]["id"] in {"roses", "hamper"}
+    assert curated[-1]["id"] == "card"
+
+
+def test_product_matches_focus_chocolate_tokens() -> None:
+    assert product_matches_focus(
+        _product("x", 100.0, name="Dark Choco Truffles"),
+        "chocolate",
+    )
+    assert not product_matches_focus(
+        _product("x", 100.0, name="Greeting Card"),
+        "chocolate",
+    )

@@ -10,6 +10,13 @@ def test_decode_html_entities_decodes_en_dash() -> None:
     assert decode_html_entities("Cadbury 135g &#8211; 30 Minis") == "Cadbury 135g – 30 Minis"
 
 
+def test_decode_html_entities_repairs_mangled_catalog_pattern() -> None:
+    raw = "Cadbury Milk Chocolate Chunks 135g N#226;n#8364;n#8220; 30 Minis"
+    decoded = decode_html_entities(raw)
+    assert "N#" not in decoded
+    assert "–" in decoded or "€" in decoded or '"' in decoded
+
+
 def test_decode_html_entities_is_idempotent() -> None:
     value = "Plain chocolate"
     assert decode_html_entities(value) == value

@@ -44,6 +44,12 @@ def test_is_past_colombo_date_compares_to_colombo_today() -> None:
         assert is_past_colombo_date("2026-06-09") is False
 
 
+def test_format_delivery_date_friendly() -> None:
+    from lib.utils.timezone import format_delivery_date_friendly
+
+    assert format_delivery_date_friendly("2026-06-28") == "Sunday, 28 June 2026"
+
+
 def test_delivery_date_input_htmx_check_delivery() -> None:
     """Date input posts to /checkout/check-delivery with Colombo min date."""
     html = render_delivery_date(min_date="2026-06-08")
@@ -76,7 +82,7 @@ def test_delivery_date_status_available_partial() -> None:
 
     assert 'data-testid="delivery-date-available"' in html
     assert 'data-available="true"' in html
-    assert "2026-06-10" in html
+    assert "Wednesday, 10 June 2026" in html
     assert "Rs. 350" in html
 
 
@@ -97,7 +103,8 @@ def test_delivery_date_status_unavailable_partial() -> None:
     assert 'data-testid="delivery-date-unavailable"' in html
     assert 'data-available="false"' in html
     assert "Sunday delivery unavailable" in html
-    assert "2026-06-10" in html
+    assert "Tuesday, 9 June 2026" in html
+    assert "Wednesday, 10 June 2026" in html
 
 
 def test_delivery_date_error_partial() -> None:

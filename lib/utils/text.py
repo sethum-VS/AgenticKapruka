@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import html
+import re
+
+_MANGLED_NUMERIC_ENTITY = re.compile(r"[Nn]#(\d+);")
+_DOUBLE_ENCODED_ENTITY = re.compile(r"&amp;#(\d+);")
 
 
 def decode_html_entities(value: str) -> str:
     """Decode HTML entities from MCP catalog text (e.g. &#8211; → en-dash)."""
-    decoded = value
+    repaired = _DOUBLE_ENCODED_ENTITY.sub(r"&#\1;", value)
     for _ in range(3):
-        next_value = html.unescape(decoded)
-        if next_value == decoded:
+        repaired = _MANGLED_NUMERIC_ENTITY.sub(r"&#\1;", repaired)
+        next_value = html.unescape(repaired)
+        if next_value == repaired:
             break
-        decoded = next_value
-    return decoded
+        repaired = next_value
+    return repaired

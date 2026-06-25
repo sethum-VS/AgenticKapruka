@@ -159,6 +159,33 @@ def extract_target_city(text: str) -> str | None:
     return None
 
 
+def is_delivery_context_relevant_turn(
+    state: dict[str, object],
+    user_message: str,
+) -> bool:
+    """True when this turn should surface delivery city/date copy."""
+    from lib.chat.delivery_dates import normalize_delivery_date
+
+    stripped = user_message.strip()
+    intent_metadata = state.get("intent_metadata")
+    metadata: dict[str, object] = (
+        dict(intent_metadata) if isinstance(intent_metadata, dict) else {}
+    )
+    if metadata.get("requires_delivery_validation"):
+        return True
+    if metadata.get("target_city"):
+        return True
+    if extract_target_city(stripped):
+        return True
+    if normalize_delivery_date({}, stripped) is not None:
+        return True
+    if _has_delivery_intent(stripped):
+        return True
+    if classify_query_mode(stripped) == "situational":
+        return False
+    return False
+
+
 class QueryPreprocessor:
     """Derive IntentMetadata from raw user text before LLM intent classification."""
 
