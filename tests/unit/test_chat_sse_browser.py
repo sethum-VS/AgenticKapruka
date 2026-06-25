@@ -119,6 +119,47 @@ def _wait_for_alpine(page: Page) -> None:
 
 
 @pytest.mark.browser
+def test_chat_sse_done_event_clears_sending_indicator() -> None:
+    """Explicit done event clears Sending… without waiting for body close."""
+    sse_body = (
+        "event: message\n"
+        'data: <div id="user-msg">You said hello</div>\n\n'
+        "event: done\n"
+        "data: \n\n"
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def handle_stream(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+                body=sse_body,
+            )
+
+        page.route("http://localhost/chat/stream", handle_stream)
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const form = document.getElementById('chat-form');
+              const indicator = document.getElementById('chat-loading');
+              return form
+                && !form.classList.contains('htmx-request')
+                && indicator
+                && !indicator.classList.contains('htmx-request');
+            }""",
+            timeout=1000,
+        )
+
+        browser.close()
+
+
+@pytest.mark.browser
 def test_chat_sse_streams_incremental_assistant_tokens() -> None:
     """Submitting the chat form appends each SSE message event into #chat-messages."""
     sse_body = (

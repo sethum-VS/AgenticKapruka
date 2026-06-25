@@ -521,3 +521,30 @@ def test_build_discovery_search_args_anniversary_bias() -> None:
         currency="LKR",
     )
     assert "anniversary" in args["q"].lower()
+
+
+def test_build_discovery_search_args_topic_pivot_bare_cakes_literal() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "Nevermind. Cakes.",
+        {"hints": {"occasion": "Anniversary"}},
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+    assert args["q"] == "cake"
+    assert "category" not in args
+
+
+def test_merge_planner_search_args_topic_pivot_bare_cakes() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "birthday cake", "category": "Birthday"},
+        user_message="Nevermind. Cakes.",
+        hybrid_context={"hints": {"occasion": "Anniversary"}},
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+    assert merged["q"] == "cake"
+    assert "category" not in merged

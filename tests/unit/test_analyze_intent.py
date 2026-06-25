@@ -298,3 +298,25 @@ async def test_analyze_intent_topic_pivot_clears_session_budget() -> None:
 
     assert result.get("session_budget_max") is None
     assert result["session_product_focus"] == "cake"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_topic_pivot_clears_hybrid_hints_and_search_query() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Nevermind. Cakes.")],
+        "session_id": "sess-pivot-context",
+        "session_search_query": "anniversary gift hamper",
+        "hybrid_context": {
+            "hints": {"occasion": "Anniversary", "category": "Birthday"},
+            "occasions": ["Anniversary"],
+        },
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("session_search_query") is None
+    assert result["intent_metadata"]["topic_pivot"] is True
+    hints = result["hybrid_context"]["hints"]
+    assert "occasion" not in hints
+    assert "category" not in hints

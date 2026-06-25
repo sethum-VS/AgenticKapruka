@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from lib.chat.intent_heuristics import is_budget_refinement_message, is_topic_pivot_message
+from lib.chat.intent_heuristics import (
+    is_bare_category_pivot,
+    is_budget_refinement_message,
+    is_topic_pivot_message,
+)
 
 
 def test_is_budget_refinement_message_under_price_only() -> None:
@@ -23,3 +27,9 @@ def test_is_topic_pivot_message_nevermind_cakes() -> None:
 
 def test_is_topic_pivot_message_rejects_full_request() -> None:
     assert not is_topic_pivot_message("birthday cake for mom under 5000")
+
+
+def test_is_bare_category_pivot_nevermind_cakes() -> None:
+    assert is_bare_category_pivot("Nevermind. Cakes.") == "cake"
+    assert is_bare_category_pivot("cakes") == "cake"
+    assert is_bare_category_pivot("birthday cake for mom") is None

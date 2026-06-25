@@ -21,7 +21,7 @@ from lib.chat.delivery_dates import (
     delivery_date_clarifying_question,
     normalize_delivery_date,
 )
-from lib.chat.intent_heuristics import is_budget_refinement_message
+from lib.chat.intent_heuristics import is_bare_category_pivot, is_budget_refinement_message
 from lib.chat.product_curation import (
     apply_anniversary_curation,
     apply_birthday_cake_curation,
@@ -582,8 +582,28 @@ def _trace_has_dated_check_delivery(tool_trace: list[ToolInvocation]) -> bool:
     return False
 
 
-def _delivery_check_pending(state: AgentState, tool_trace: list[ToolInvocation]) -> bool:
+def _resolve_delivery_product_id(state: AgentState) -> str | None:
+    """Pick a catalog product id for perishable-aware delivery checks."""
+    for key in ("last_visible_products", "last_search_products"):
+        products = state.get(key)
+        if not isinstance(products, list) or not products:
+            continue
+        first = products[0]
+        if isinstance(first, dict):
+            product_id = first.get("id")
+            if isinstance(product_id, str) and product_id.strip():
+                return product_id.strip()
+    return None
+
+
+def _delivery_check_pending(
+    state: AgentState,
+    tool_trace: list[ToolInvocation],
+    user_message: str,
+) -> bool:
     """True when city+date are known but kapruka_check_delivery has not run with a date."""
+    if not is_delivery_context_relevant_turn(dict(state), user_message):
+        return False
     session_date = state.get("session_delivery_date") or state.get("delivery_date")
     if not (isinstance(session_date, str) and session_date.strip()):
         return False
@@ -625,22 +645,34 @@ def _format_planner_query_rewrite_hints(
     budget_max: float | None = None,
     graph_context_available: bool = False,
     session_product_focus: str | None = None,
+    topic_pivot: bool = False,
 ) -> str:
     """Soft search-query rewrite suggestions for broad cake and mom/birthday turns."""
     hints: list[str] = []
     has_budget = budget_max is not None and budget_max > 0
+    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
+    if bare_focus:
+        hints.append(
+            "Topic pivot with bare category only: prefer action ask_user with a short clarifying "
+            "question (who is it for / occasion) OR kapruka_search_products with literal q "
+            f'(e.g. "{bare_focus}s" → q="{bare_focus}") — do not inherit prior occasion context.'
+        )
     if session_product_focus == "cake" and _FLORAL_DESIGN.search(user_message):
         hints.append(
             'Session shopping focus is cake: prefer kapruka_search_products with '
             'q="floral birthday cake" and category="Birthday" rather than jewelry or apparel.'
         )
-    if message_count > 1 and _SHORT_CATEGORY_REPLY.match(user_message.strip()):
+    if message_count > 1 and _SHORT_CATEGORY_REPLY.match(user_message.strip()) and not topic_pivot:
         hints.append(
             "Follow-up category reply after a prior clarifying turn: prefer action call_tool "
             'with kapruka_search_products (e.g. "cakes" → q="birthday cake"; '
             '"flowers" → q="fresh roses bouquet") rather than ask_user.'
         )
-    if _CAKES_BROAD.search(user_message) and not _BIRTHDAY_CAKE.search(user_message):
+    if (
+        _CAKES_BROAD.search(user_message)
+        and not _BIRTHDAY_CAKE.search(user_message)
+        and not topic_pivot
+    ):
         hints.append(
             'Broad "cakes" query: prefer kapruka_search_products with q="birthday cake" '
             "unless the customer named a specific cake type."
@@ -792,6 +824,7 @@ def _build_planner_user_prompt(state: AgentState) -> str:
         budget_max=budget_max if isinstance(budget_max, (int, float)) else None,
         graph_context_available=has_graph_hybrid_context(hybrid_context),
         session_product_focus=session_focus if isinstance(session_focus, str) else None,
+        topic_pivot=bool(intent_metadata.get("topic_pivot")),
     )
     if rewrite_hints:
         prompt += f"\n\n{rewrite_hints}"
@@ -1054,7 +1087,7 @@ async def agent_loop(
             break
 
         if step.action == "finish":
-            if _delivery_check_pending(state, tool_trace):
+            if _delivery_check_pending(state, tool_trace, user_message):
                 tool_name = CHECK_DELIVERY_TOOL
                 canonical_city = state.get("delivery_city_canonical") or state.get(
                     "session_delivery_city_canonical",
@@ -1064,6 +1097,9 @@ async def agent_loop(
                     "city": str(canonical_city).strip(),
                     "delivery_date": str(session_date).strip(),
                 }
+                product_id = _resolve_delivery_product_id(state)
+                if product_id:
+                    delivery_args["product_id"] = product_id
                 delivery_args = _inject_tool_currency(
                     tool_name,
                     delivery_args,
@@ -1132,8 +1168,10 @@ async def agent_loop(
                 intent_metadata=state.get("intent_metadata"),
                 state=dict(state),
             )
-            if is_broad_cakes_query(user_message) or is_broad_cakes_query(
-                str(enriched_args.get("q") or ""),
+            topic_pivot = bool((state.get("intent_metadata") or {}).get("topic_pivot"))
+            if not topic_pivot and (
+                is_broad_cakes_query(user_message)
+                or is_broad_cakes_query(str(enriched_args.get("q") or ""))
             ):
                 enriched_args["q"] = "birthday cake"
                 enriched_args.setdefault("category", "Birthday")
@@ -1141,6 +1179,9 @@ async def agent_loop(
 
         if tool_name == CHECK_DELIVERY_TOOL:
             user_message = _extract_latest_user_message(state.get("messages") or [])
+            product_id = _resolve_delivery_product_id(state)
+            if product_id and not enriched_args.get("product_id"):
+                enriched_args["product_id"] = product_id
             canonical_city = state.get("delivery_city_canonical")
             if not (isinstance(canonical_city, str) and canonical_city.strip()):
                 session_city = state.get("session_delivery_city_canonical")
@@ -1201,7 +1242,9 @@ async def agent_loop(
                 products = [
                     item for item in (raw_results or []) if isinstance(item, dict)
                 ]
-                if products and _accessory_ratio(products) > 0.5 and (
+                if products and _accessory_ratio(products) > 0.5 and not bool(
+                    (state.get("intent_metadata") or {}).get("topic_pivot"),
+                ) and (
                     is_broad_cakes_query(user_message)
                     or is_broad_cakes_query(str(enriched_args.get("q") or ""))
                 ):

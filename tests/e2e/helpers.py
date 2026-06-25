@@ -20,7 +20,11 @@ def reset_e2e_session(page: Page, base_url: str) -> None:
 
 
 def fetch_mcp_tools(page: Page, base_url: str) -> list[str]:
-    payload = page.request.get(f"{base_url}/e2e/mcp-calls").json()
+    """Return mock MCP tool names when the E2E app exposes /e2e/mcp-calls."""
+    response = page.request.get(f"{base_url}/e2e/mcp-calls")
+    if response.status != 200:
+        return []
+    payload = response.json()
     tools = payload.get("tools", [])
     return list(tools) if isinstance(tools, list) else []
 
@@ -38,7 +42,12 @@ def send_chat_message(page: Page, message: str, *, timeout_ms: int = 60_000) -> 
             !loading.classList.contains('htmx-request')
             && !loading.classList.contains('chat-loading')
           );
-          return formIdle && loadingIdle;
+          const noPendingStream = !document.querySelector('[id^="assistant-stream-"]');
+          const assistants = document.querySelectorAll('[aria-label="Assistant message"]');
+          const last = assistants.length ? assistants[assistants.length - 1] : null;
+          const lastText = last ? (last.textContent || '').trim().toLowerCase() : '';
+          const notSearching = lastText !== 'searching kapruka…';
+          return formIdle && loadingIdle && noPendingStream && notSearching;
         }""",
         timeout=timeout_ms,
     )
@@ -58,7 +67,16 @@ def extract_last_assistant_html(page: Page) -> str:
 
 
 def extract_last_assistant_text(page: Page) -> str:
-    assistant = page.locator('[aria-label="Assistant message"]').last
-    if assistant.count() == 0:
-        return ""
-    return assistant.inner_text()
+    """Return visible text from the latest finalized assistant bubble."""
+    assistants = page.locator('[aria-label="Assistant message"]')
+    count = assistants.count()
+    for index in range(count - 1, -1, -1):
+        bubble = assistants.nth(index)
+        bubble_id = bubble.get_attribute("id") or ""
+        if bubble_id.startswith("assistant-stream-"):
+            continue
+        text = bubble.inner_text().strip()
+        if text.lower() == "searching kapruka…":
+            continue
+        return text
+    return ""

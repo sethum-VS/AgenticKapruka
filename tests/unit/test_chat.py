@@ -70,7 +70,7 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'hx-post="/chat/stream"' in html
     assert 'hx-ext="sse"' in html
     assert 'sse-connect="/chat/stream"' in html
-    assert 'sse-swap="message,status"' in html
+    assert 'sse-swap="message,status,done"' in html
     assert 'id="chat-sse-listener"' in html
     assert 'hx-target="#chat-messages"' in html
     assert 'hx-swap="beforeend"' in html
@@ -276,7 +276,7 @@ async def test_chat_index_returns_200_html_with_empty_state(chat_index_env: Redi
     assert 'id="chat-form"' in html
     assert 'hx-post="/chat/stream"' in html
     assert 'sse-connect="/chat/stream"' in html
-    assert 'sse-swap="message,status"' in html
+    assert 'sse-swap="message,status,done"' in html
     assert 'x-data="chatHelpers()"' in html
     assert "/static/js/chat-sse.js" in html
     assert "/static/js/chat-helpers.js" in html

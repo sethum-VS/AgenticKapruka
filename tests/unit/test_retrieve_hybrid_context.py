@@ -401,3 +401,18 @@ async def test_retrieve_hybrid_context_adds_birthday_dessert_exclude_hints() -> 
 
     assert "Chocolate" in updates["hybrid_context"]["hints"]["exclude_categories"]
     assert updates["hybrid_context"]["hints"]["occasion"] == "Birthday"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_skips_past_occasion_on_topic_pivot() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="Nevermind. Cakes.")],
+        "intent": "discovery",
+        "intent_metadata": {"topic_pivot": True},
+        "zep_memory_facts": ["User celebrated wife's anniversary last year"],
+    }
+
+    result = await retrieve_hybrid_context(state)
+
+    hints = result["hybrid_context"].get("hints") or {}
+    assert "occasion" not in hints or hints.get("occasion") != "anniversary"

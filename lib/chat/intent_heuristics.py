@@ -171,6 +171,27 @@ def is_topic_pivot_message(message: str) -> bool:
     return bool(re.search(r"nevermind.*\b(?:cakes?|flowers?|chocolates?)\b", stripped, re.I))
 
 
+def is_bare_category_pivot(message: str) -> str | None:
+    """Return the bare category noun when a pivot is category-only (no occasion in turn)."""
+    stripped = message.strip().strip("!.?")
+    if not stripped or not is_topic_pivot_message(message):
+        return None
+    if re.search(r"\b(?:birthday|anniversary|wedding|valentine)\b", stripped, re.I):
+        return None
+    if re.search(r"\b(?:for|under|below|mom|dad|wife|husband)\b", stripped, re.I):
+        return None
+    lowered = stripped.lower()
+    if re.search(r"\b(?:cup)?cakes?\b", lowered):
+        return "cake"
+    if re.search(r"\b(?:flower|flowers|rose|roses|bouquet)s?\b", lowered):
+        return "flowers"
+    if re.search(r"\b(?:chocolate|chocolates)\b", lowered):
+        return "chocolate"
+    if re.search(r"\bgifts?\b", lowered):
+        return "gift"
+    return None
+
+
 def infer_intent_from_message(message: str) -> Intent:
     """Map a user utterance to a shopping-graph intent without calling Gemini."""
     guard = classify_routing_guard(message)

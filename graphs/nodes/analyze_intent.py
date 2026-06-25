@@ -191,6 +191,26 @@ def _clear_budget_on_pivot(
     return None, None, cleared
 
 
+def _clear_context_on_pivot(
+    user_message: str,
+    state: AgentState,
+    intent_metadata: IntentMetadata,
+) -> tuple[IntentMetadata, dict[str, Any] | None, bool]:
+    """Drop sticky occasion/search seeds when the customer pivots without a new occasion."""
+    if not is_topic_pivot_message(user_message):
+        return intent_metadata, None, False
+
+    cleared_meta = cast(IntentMetadata, {**intent_metadata, "topic_pivot": True})
+    hybrid = dict(state.get("hybrid_context") or {})
+    hints = dict(hybrid.get("hints") or {})
+    for key in ("occasion", "category", "exclude_categories"):
+        hints.pop(key, None)
+    hybrid["hints"] = hints
+    hybrid["occasions"] = []
+    logger.info("analyze_intent: topic pivot — clearing hybrid occasion/search seeds")
+    return cleared_meta, hybrid, True
+
+
 def _off_topic_metadata(
     intent_metadata: IntentMetadata,
     *,
@@ -229,11 +249,16 @@ async def analyze_intent(
         session_budget_currency,
         intent_metadata,
     )
+    intent_metadata, hybrid_context_update, topic_pivot = _clear_context_on_pivot(
+        user_message,
+        state,
+        intent_metadata,
+    )
     session_product_focus = _resolve_session_product_focus(state, user_message)
     delivery_date, session_delivery_date = _resolve_delivery_dates(state, user_message)
 
     def _with_budget(payload: dict[str, Any]) -> dict[str, Any]:
-        return _with_session_fields(
+        result = _with_session_fields(
             payload,
             session_budget_max=session_budget_max,
             session_budget_currency=session_budget_currency,
@@ -241,6 +266,11 @@ async def analyze_intent(
             delivery_date=delivery_date,
             session_delivery_date=session_delivery_date,
         )
+        if topic_pivot:
+            result["session_search_query"] = None
+            if hybrid_context_update is not None:
+                result["hybrid_context"] = hybrid_context_update
+        return result
 
     if not user_message.strip():
         logger.debug("analyze_intent: empty user message, defaulting to general")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,9 +22,17 @@ from graphs.shopping_graph import (
     build_shopping_graph,
     initial_shopping_state,
 )
+from lib.chat.city_resolution import CityResolution
 from lib.kapruka.service import KaprukaService
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
-from lib.kapruka.types import CategoryRef, Money, ProductResult, SearchProductsOutput
+from lib.kapruka.types import (
+    CategoryRef,
+    CheckDeliveryOutput,
+    Money,
+    ProductResult,
+    SearchProductsOutput,
+)
 from lib.redis.checkpointer import get_checkpointer
 from lib.redis.client import RedisClient
 
@@ -173,4 +182,92 @@ async def test_clarify_chocolate_budget_multiturn_keeps_chocolate_carousel(
     html = turn2.get("response_html") or ""
     assert "Heart Chocolate Gift Box" in html
     assert "Greeting Card" not in html
+    assert turn2.get("last_visible_products")
     assert mock_plan.call_count <= 1
+
+
+@pytest.mark.asyncio
+async def test_budget_refinement_carousel_stable_after_delivery_turn(
+    checkpointer: AsyncRedisSaver,
+) -> None:
+    """Turn 3 delivery answer keeps budget-refined chocolate carousel visible."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.side_effect = [
+        SearchProductsOutput(
+            results=[_CHOCOLATE_PRODUCT],
+            next_cursor=None,
+            applied_filters={"q": "chocolate gift", "limit": 10, "in_stock_only": False},
+        ),
+        SearchProductsOutput(
+            results=[_GREETING_CARD],
+            next_cursor=None,
+            applied_filters={"q": "chocolate gift", "max_price": 6000.0},
+        ),
+    ]
+    mock_service.check_delivery.return_value = CheckDeliveryOutput(
+        city="Kandy",
+        now="2026-06-25T10:00:00+05:30",
+        checked_date="2026-06-28",
+        available=True,
+        rate=500.0,
+        currency="LKR",
+        reason=None,
+        next_available_date=None,
+        perishable_warning=None,
+    )
+    mock_service.list_delivery_cities = AsyncMock(return_value=["Kandy"])
+
+    deps = ShoppingGraphDeps(
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        genai_client=_discovery_mock_genai(),
+    )
+    graph = build_shopping_graph(checkpointer=checkpointer, deps=deps)
+    config: dict[str, Any] = {"configurable": {"thread_id": "thread-budget-delivery-001"}}
+
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "chocolate gift"},
+            rationale="search chocolate",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+        AgentPlannerStep(action="finish", rationale="budget turn should not replan search"),
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Kandy", "delivery_date": "2026-06-28"},
+            rationale="delivery check",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+    ]
+
+    with (
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+        patch(
+            "graphs.nodes.resolve_delivery_context.resolve_delivery_city",
+            new=AsyncMock(return_value=CityResolution(status="resolved", canonical="Kandy")),
+        ),
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 25)),
+    ):
+        await graph.ainvoke(
+            initial_shopping_state(
+                message="Something with chocolate for my wife",
+                session_id="sess-budget-delivery-001",
+                thread_id="thread-budget-delivery-001",
+            ),
+            config,
+        )
+        await graph.ainvoke(append_message_state("Keep it under 6000 rupees."), config)
+        turn3 = await graph.ainvoke(
+            append_message_state("can you deliver to Kandy this Sunday?"),
+            config,
+        )
+
+    html = turn3.get("response_html") or ""
+    assert "Heart Chocolate Gift Box" in html
+    assert "Greeting Card" not in html

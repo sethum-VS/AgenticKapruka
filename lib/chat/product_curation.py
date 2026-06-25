@@ -318,11 +318,7 @@ def is_anniversary_occasion_intent(
     hybrid_context: dict[str, Any] | None = None,
 ) -> bool:
     """True when the turn targets anniversary gifts."""
-    if query.strip() and _ANNIVERSARY_OCCASION_RE.search(query):
-        return True
-    hints = (hybrid_context or {}).get("hints") or {}
-    occasion = str(hints.get("occasion") or "").strip().lower()
-    return occasion == "anniversary"
+    return bool(query.strip() and _ANNIVERSARY_OCCASION_RE.search(query))
 
 
 def apply_anniversary_curation(

@@ -117,11 +117,31 @@ def _should_run_dated_delivery_preflight(
     if intent_metadata.get("requires_delivery_validation"):
         return True
     session_city = state.get("session_delivery_city_canonical")
+    if (
+        isinstance(session_city, str)
+        and bool(session_city.strip())
+        and is_delivery_date_only_message(user_message)
+    ):
+        return True
     return (
         isinstance(session_city, str)
         and bool(session_city.strip())
         and _has_delivery_intent(user_message)
     )
+
+
+def _resolve_delivery_product_id(state: AgentState) -> str | None:
+    """Pick a catalog product id for perishable-aware delivery checks."""
+    for key in ("last_visible_products", "last_search_products"):
+        products = state.get(key)
+        if not isinstance(products, list) or not products:
+            continue
+        first = products[0]
+        if isinstance(first, dict):
+            product_id = first.get("id")
+            if isinstance(product_id, str) and product_id.strip():
+                return product_id.strip()
+    return None
 
 
 async def _preflight_check_delivery(
@@ -130,6 +150,7 @@ async def _preflight_check_delivery(
     client_ip: str,
     city: str,
     delivery_date: str | None = None,
+    product_id: str | None = None,
 ) -> ToolInvocation:
     """Run check_delivery and return a tool_trace entry."""
     if delivery_date:
@@ -137,11 +158,18 @@ async def _preflight_check_delivery(
             client_ip,
             city=city,
             delivery_date=delivery_date,
+            product_id=product_id,
         )
         args: dict[str, str] = {"city": city, "delivery_date": delivery_date}
     else:
-        output = await kapruka_service.check_delivery(client_ip, city=city)
+        output = await kapruka_service.check_delivery(
+            client_ip,
+            city=city,
+            product_id=product_id,
+        )
         args = {"city": city}
+    if product_id:
+        args["product_id"] = product_id
     return {
         "name": CHECK_DELIVERY_TOOL,
         "args": args,
@@ -208,6 +236,7 @@ async def resolve_delivery_context(
                     client_ip=rate_limit_key,
                     city=str(canonical),
                     delivery_date=delivery_date,
+                    product_id=_resolve_delivery_product_id(state),
                 )
                 base["tool_trace"] = [preflight]
             elif canonical and _should_run_delivery_preflight(
@@ -221,6 +250,7 @@ async def resolve_delivery_context(
                     kapruka_service=kapruka_service,
                     client_ip=rate_limit_key,
                     city=str(canonical),
+                    product_id=_resolve_delivery_product_id(state),
                 )
                 base["tool_trace"] = [preflight]
             if base.get("tool_trace"):
@@ -280,6 +310,7 @@ async def resolve_delivery_context(
                 client_ip=rate_limit_key,
                 city=canonical,
                 delivery_date=delivery_date,
+                product_id=_resolve_delivery_product_id(state),
             )
             resolved["tool_trace"] = [preflight]
         elif canonical and _should_run_delivery_preflight(
@@ -293,6 +324,7 @@ async def resolve_delivery_context(
                 kapruka_service=kapruka_service,
                 client_ip=rate_limit_key,
                 city=canonical,
+                product_id=_resolve_delivery_product_id(state),
             )
             resolved["tool_trace"] = [preflight]
         if resolved.get("tool_trace"):

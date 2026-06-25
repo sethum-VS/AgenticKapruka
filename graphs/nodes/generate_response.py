@@ -75,9 +75,9 @@ from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import CheckDeliveryOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import format_currency
-from lib.utils.text import decode_html_entities
+from lib.utils.text import decode_html_entities, normalize_catalog_text
 from lib.utils.timezone import colombo_today, format_delivery_date_friendly
-from lib.zep.memory import format_memory_facts_block
+from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_turn
 
 logger = logging.getLogger(__name__)
 
@@ -405,7 +405,7 @@ def _build_verified_city_delivery_line(
 
 
 _PERISHABLE_GIFT_RE = re.compile(
-    r"\b(?:cake|cakes|flower|flowers|rose|roses|bouquet|fruit)\b",
+    r"\b(?:cake|cakes|flower|flowers|rose|roses|bouquet|fruit|chocolate|chocolates)\b",
     re.I,
 )
 
@@ -426,7 +426,7 @@ def _turn_implies_perishable_gift(
     *,
     session_product_focus: str | None = None,
 ) -> bool:
-    if session_product_focus in ("cake", "flowers"):
+    if session_product_focus in ("cake", "flowers", "chocolate"):
         return True
     return bool(_PERISHABLE_GIFT_RE.search(user_message))
 
@@ -654,7 +654,7 @@ def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, An
     for product in products:
         name = product.get("name")
         if isinstance(name, str):
-            product["name"] = decode_html_entities(name)
+            product["name"] = normalize_catalog_text(name)
     query = _search_query_from_payload(search_payload)
     return _filter_cake_search_products(products, query)
 
@@ -994,6 +994,7 @@ def build_products_carousel_html(
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
     last_search_products: list[dict[str, Any]] | None = None,
+    last_visible_products: list[dict[str, Any]] | None = None,
     visible_products: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Render product carousel partial when search_products returned results."""
@@ -1009,8 +1010,20 @@ def build_products_carousel_html(
             session_product_focus=session_product_focus,
             last_search_products=last_search_products,
         )
+    if not products and last_visible_products:
+        products = last_visible_products
     if not products and last_search_products:
-        products = last_search_products
+        if budget_max is not None and budget_max > 0:
+            refined = refine_last_search_by_budget(
+                last_search_products,
+                budget_max=budget_max,
+                currency=currency,
+                session_product_focus=session_product_focus,
+            )
+            if refined:
+                products = refined
+        if not products:
+            products = last_search_products
     if not products:
         return None
     return render_product_carousel(products)
@@ -1406,6 +1419,7 @@ async def generate_response(
     session_product_focus = state.get("session_product_focus")
     delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
     last_search_products = list(state.get("last_search_products") or [])
+    last_visible_products = list(state.get("last_visible_products") or [])
 
     if is_product_detail_turn(user_message):
         matched = match_product_from_last_search(
@@ -1503,6 +1517,7 @@ async def generate_response(
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
         last_search_products=last_search_products or None,
+        last_visible_products=last_visible_products or None,
         visible_products=visible_products,
     )
 
@@ -1524,6 +1539,8 @@ async def generate_response(
     )
 
     zep_memory_facts = state.get("zep_memory_facts")
+    if zep_memory_facts:
+        zep_memory_facts = scope_memory_facts_for_turn(zep_memory_facts, user_message)
     intent_metadata = state.get("intent_metadata")
     intent = state.get("intent")
     try:
@@ -1535,6 +1552,7 @@ async def generate_response(
             zep_memory_facts=zep_memory_facts,
             intent_metadata=intent_metadata,
             intent=intent,
+            delivery_context_relevant=delivery_context_relevant,
         )
     except Exception as exc:
         if not is_resource_exhausted(exc):
@@ -1553,7 +1571,7 @@ async def generate_response(
         )
         reply_text = template or "I could not generate a response. Please try again."
 
-    reply_text = decode_html_entities(reply_text)
+    reply_text = normalize_catalog_text(reply_text)
     tool_trace = state.get("tool_trace")
     reply_text = delivery_claim_guard(
         reply_text,
@@ -1589,7 +1607,7 @@ async def generate_response(
         len(reply_text),
         bool(products_html),
     )
-    return {
+    updates: dict[str, Any] = {
         "response_html": render_assistant_html(
             reply_text,
             products_html=products_html,
@@ -1597,3 +1615,6 @@ async def generate_response(
         ),
         "assistant_message": reply_text,
     }
+    if visible_products:
+        updates["last_visible_products"] = visible_products
+    return updates

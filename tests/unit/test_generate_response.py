@@ -417,6 +417,43 @@ def test_build_products_carousel_html_budget_sorts_in_budget_first() -> None:
     assert hidden_idx == -1
 
 
+def test_build_products_carousel_html_fallback_uses_budget_refined_last_search() -> None:
+    last_search = [
+        _product("cheap", "Chocolate Box", amount=4500.0),
+        _product("expensive", "Premium Hamper", amount=12000.0),
+    ]
+    html = build_products_carousel_html(
+        None,
+        budget_max=6000.0,
+        currency="LKR",
+        last_search_products=last_search,
+    )
+    assert html is not None
+    assert 'data-product-id="cheap"' in html
+    assert 'data-product-id="expensive"' not in html
+
+
+def test_turn_implies_perishable_gift_chocolate_focus() -> None:
+    from graphs.nodes.generate_response import _generate_reply_sync, _turn_implies_perishable_gift
+
+    assert _turn_implies_perishable_gift("thanks", session_product_focus="chocolate")
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(message="I'm here for you.")
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
+    _generate_reply_sync(
+        mock_client,
+        model="gemini-test",
+        user_prompt="Customer message:\nbreakup\n\ntool_results:\n{}",
+        delivery_context_relevant=False,
+    )
+    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert "Do not mention delivery city" in config.system_instruction
+
+
 def test_extract_search_products_filters_puja_for_flowers_when_graph_down() -> None:
     tool_results = {
         SEARCH_PRODUCTS_TOOL: {

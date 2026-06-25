@@ -212,6 +212,10 @@ async def retrieve_hybrid_context(
 
     hybrid_context: dict[str, Any] = dict(state.get("hybrid_context") or {})
     user_message = _extract_latest_user_message(state.get("messages") or [])
+    intent_metadata: IntentMetadata | None = state.get("intent_metadata")
+    topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
+    if topic_pivot:
+        hybrid_context = {}
 
     if neo4j_client is not None:
         embed = embed_fn or embed_texts
@@ -222,7 +226,11 @@ async def retrieve_hybrid_context(
                 embed_fn=embed,
             )
             if graph_context:
-                hybrid_context = _merge_graph_hybrid_context(hybrid_context, graph_context)
+                hybrid_context = _merge_graph_hybrid_context(
+                    hybrid_context,
+                    graph_context,
+                    topic_pivot=topic_pivot,
+                )
                 product_count = len(graph_context.get("vector_hits") or []) + len(
                     graph_context.get("categories") or [],
                 )
@@ -243,8 +251,12 @@ async def retrieve_hybrid_context(
                 "retrieve_hybrid_context: Neo4j GraphRAG failed; continuing with Zep only",
             )
 
-    hybrid_context = merge_preferences_into_hybrid_context(hybrid_context, preferences)
-    intent_metadata: IntentMetadata | None = state.get("intent_metadata")
+    hybrid_context = merge_preferences_into_hybrid_context(
+        hybrid_context,
+        preferences,
+        user_message=user_message,
+        topic_pivot=topic_pivot,
+    )
     hybrid_context = enrich_flower_fruit_negative_hints(user_message, hybrid_context)
     hybrid_context = enrich_birthday_cake_hints(
         user_message,
@@ -268,6 +280,8 @@ async def retrieve_hybrid_context(
 def _merge_graph_hybrid_context(
     base: dict[str, Any],
     graph_context: dict[str, Any],
+    *,
+    topic_pivot: bool = False,
 ) -> dict[str, Any]:
     """Merge graph retrieval fields; graph hints fill gaps when Zep hints are absent."""
     merged: dict[str, Any] = dict(base)
@@ -275,7 +289,10 @@ def _merge_graph_hybrid_context(
     hints: dict[str, str] = dict(merged.get("hints") or {})
 
     for key, value in graph_hints.items():
-        hints.setdefault(key, value)
+        if topic_pivot and key in ("occasion", "category"):
+            hints[key] = value
+        else:
+            hints.setdefault(key, value)
 
     merged["hints"] = hints
     for key in (

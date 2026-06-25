@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from lib.utils.text import decode_html_entities
+from lib.utils.text import normalize_catalog_text
 
 SUPPORTED_CURRENCIES = frozenset({"LKR", "USD", "GBP", "AUD", "CAD", "EUR"})
 LOCATION_TYPES = frozenset({"house", "apartment", "office", "other"})
@@ -90,7 +90,7 @@ class ProductResult(BaseModel):
     @field_validator("name", "summary")
     @classmethod
     def decode_html_entities_in_text(cls, value: str) -> str:
-        return decode_html_entities(value)
+        return normalize_catalog_text(value)
 
 
 class SearchProductsOutput(BaseModel):
@@ -174,7 +174,7 @@ class GetProductOutput(BaseModel):
     @field_validator("name", "description", "summary")
     @classmethod
     def decode_html_entities_in_text(cls, value: str) -> str:
-        return decode_html_entities(value)
+        return normalize_catalog_text(value)
 
 
 # --- kapruka_list_categories ---

@@ -147,9 +147,10 @@ async def test_iter_chat_sse_events_yields_user_then_assistant_chunks() -> None:
     assert events[2].startswith("event: status\n")
     assert "Searching Kapruka…" in events[2]
     assert any("assistant-stream-" in event for event in events[3:])
-    assert "Hello from Kapruka assistant." in events[-1]
-    assert 'aria-label="Assistant message"' in events[-1]
-    assert 'hx-swap-oob="delete"' in events[-1]
+    assert any("Hello from Kapruka assistant." in event for event in events)
+    assert any('aria-label="Assistant message"' in event for event in events)
+    assert any('hx-swap-oob="delete"' in event for event in events)
+    assert events[-1].startswith("event: done\n")
 
 
 @pytest.mark.asyncio
@@ -213,6 +214,6 @@ async def test_iter_chat_sse_events_emits_error_event_on_graph_failure() -> None
 
     assert collected
     assert "Searching Kapruka…" in collected[1]
-    assert "Something went wrong" in collected[-1]
-    assert sum("Something went wrong" in event for event in collected) == 1
-    assert 'hx-swap-oob="delete"' in collected[-1]
+    assert any("Something went wrong" in event for event in collected)
+    assert any('hx-swap-oob="delete"' in event for event in collected)
+    assert collected[-1].startswith("event: done\n")

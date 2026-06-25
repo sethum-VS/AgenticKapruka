@@ -136,6 +136,7 @@ async def iter_chat_sse_events(
                         assistant_message=assistant_message,
                         response_html_chars=len(response_html or ""),
                     )
+                    yield format_sse_event("", event="done")
     except TimeoutError:
         trace_error("graph.astream exceeded wall-clock timeout", TimeoutError())
         logger.warning(
@@ -147,6 +148,7 @@ async def iter_chat_sse_events(
         if stream_started:
             timeout_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{timeout_html}'
         yield format_sse_event(timeout_html)
+        yield format_sse_event("", event="done")
     except Exception as exc:
         trace_error("graph.astream failed", exc)
         logger.exception("chat stream failed during graph.astream")
@@ -159,3 +161,4 @@ async def iter_chat_sse_events(
         if stream_started:
             error_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{error_html}'
         yield format_sse_event(error_html)
+        yield format_sse_event("", event="done")

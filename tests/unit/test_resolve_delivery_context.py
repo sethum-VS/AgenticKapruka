@@ -185,7 +185,7 @@ async def test_resolve_delivery_context_preflight_check_delivery_on_city_resolve
             client_ip=_CLIENT_IP,
         )
 
-    service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy")
+    service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy", product_id=None)
     tool_trace = result.get("tool_trace") or []
     assert len(tool_trace) == 1
     assert tool_trace[0]["name"] == "kapruka_check_delivery"
@@ -249,6 +249,7 @@ async def test_resolve_delivery_context_dated_preflight_when_date_present() -> N
         _CLIENT_IP,
         city="Galle",
         delivery_date="2026-06-13",
+        product_id=None,
     )
     tool_trace = result.get("tool_trace") or []
     assert len(tool_trace) == 1
@@ -301,7 +302,7 @@ async def test_resolve_delivery_context_preflight_on_delivery_followup_with_sess
             client_ip=_CLIENT_IP,
         )
 
-    service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy")
+    service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy", product_id=None)
     tool_trace = result.get("tool_trace") or []
     assert len(tool_trace) == 1
     assert tool_trace[0]["args"] == {"city": "Kandy"}

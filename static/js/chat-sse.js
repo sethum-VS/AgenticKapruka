@@ -227,6 +227,10 @@
         buffer = parsed.remainder;
 
         for (const event of parsed.events) {
+          if (event.eventName === "done") {
+            toggleRequestState(form, false);
+            continue;
+          }
           if (!acceptedEvents.includes(event.eventName)) {
             continue;
           }
@@ -245,6 +249,10 @@
       if (buffer.trim()) {
         const parsed = parseSseChunk(`${buffer}\n\n`);
         for (const event of parsed.events) {
+          if (event.eventName === "done") {
+            toggleRequestState(form, false);
+            continue;
+          }
           if (!acceptedEvents.includes(event.eventName)) {
             continue;
           }

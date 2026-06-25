@@ -19,3 +19,4 @@ class IntentMetadata(TypedDict, total=False):
     redirect_kind: str | None
     is_off_topic: bool
     vernacular_score_hint: float
+    topic_pivot: bool

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from lib.kapruka.types import CategoryRef, Money, ProductResult
-from lib.utils.text import decode_html_entities
+from lib.utils.text import (
+    decode_html_entities,
+    normalize_catalog_text,
+    repair_utf8_mojibake,
+)
 
 
 def test_decode_html_entities_decodes_en_dash() -> None:
@@ -20,6 +24,23 @@ def test_decode_html_entities_repairs_mangled_catalog_pattern() -> None:
 def test_decode_html_entities_is_idempotent() -> None:
     value = "Plain chocolate"
     assert decode_html_entities(value) == value
+
+
+_MOJIBAKE_EN_DASH = b"\xe2\x80\x93".decode("latin-1")
+
+
+def test_repair_utf8_mojibake_fixes_en_dash() -> None:
+    raw = f"Comfort And Sip Travel Gift Set {_MOJIBAKE_EN_DASH} Pink"
+    repaired = repair_utf8_mojibake(raw)
+    assert _MOJIBAKE_EN_DASH not in repaired
+    assert "–" in repaired
+
+
+def test_normalize_catalog_text_composes_mojibake_and_entities() -> None:
+    raw = f"Comfort And Sip Travel Gift Set {_MOJIBAKE_EN_DASH} Pink"
+    assert _MOJIBAKE_EN_DASH not in normalize_catalog_text(raw)
+    assert "–" in normalize_catalog_text(raw)
+    assert normalize_catalog_text("Plain &#8211; text") == "Plain – text"
 
 
 def test_product_result_decodes_html_entities_in_name() -> None:

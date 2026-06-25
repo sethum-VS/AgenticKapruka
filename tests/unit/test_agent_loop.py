@@ -19,6 +19,7 @@ from graphs.nodes.agent_loop import (
     AgentPlannerStep,
     _build_planner_system_instruction,
     _build_planner_user_prompt,
+    _delivery_check_pending,
     _max_iterations_for_state,
     agent_loop,
     build_planner_prior_iterations,
@@ -1318,3 +1319,16 @@ async def test_agent_loop_budget_refinement_exits_without_second_planner_iterati
     assert mock_service.search_products.await_count == 1
     assert result.get("session_search_query") == "chocolate gift"
     assert result["last_search_products"] == state["last_search_products"]
+
+
+def test_delivery_check_pending_false_on_breakup_with_session_city() -> None:
+    state: AgentState = {
+        "session_delivery_city_canonical": "Kandy",
+        "session_delivery_city_confirmed": True,
+        "session_delivery_date": "2026-06-28",
+    }
+    assert not _delivery_check_pending(
+        state,
+        [],
+        "We just broke up and I'm heartbroken.",
+    )

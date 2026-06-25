@@ -597,13 +597,15 @@ def is_birthday_cake_scoped_turn(
     hybrid_context: dict[str, Any] | None = None,
     *,
     session_product_focus: str | None = None,
+    topic_pivot: bool = False,
 ) -> bool:
     """True when carousel/search curation should prefer Birthday category cakes."""
-    if session_product_focus == "cake":
-        return True
+    _ = session_product_focus
     if is_birthday_cake_intent(query):
         return True
-    if not birthday_occasion_from_context(hybrid_context):
+    if topic_pivot:
+        return False
+    if not birthday_occasion_from_context(hybrid_context, user_message=query):
         return False
     stripped = query.strip()
     return bool(stripped and _CAKE_TERM.search(stripped))
@@ -623,12 +625,16 @@ def is_broad_cakes_query(query: str) -> bool:
     return bool(re.match(r"^nevermind\.?\s*cakes?\s*$", stripped, re.I))
 
 
-def _focus_derived_search_q(session_product_focus: str | None) -> str | None:
+def _focus_derived_search_q(
+    session_product_focus: str | None,
+    *,
+    user_message: str = "",
+) -> str | None:
     """Map session product focus to a Kapruka search q when budget-refining."""
     if session_product_focus == "chocolate":
         return "chocolate gift"
     if session_product_focus == "cake":
-        return "birthday cake"
+        return "birthday cake" if is_birthday_cake_intent(user_message) else "cake"
     if session_product_focus == "flowers":
         return "fresh roses bouquet"
     if session_product_focus in ("gift", "combo"):
@@ -653,13 +659,14 @@ def build_budget_refinement_search_args(
     if isinstance(session_q, str) and session_q.strip():
         q = session_q.strip()
     else:
-        q = _focus_derived_search_q(state.get("session_product_focus"))
+        q = _focus_derived_search_q(state.get("session_product_focus"), user_message=user_message)
 
     if not q:
         return None
 
     budget_cap = extract_budget(user_message)
     intent_metadata = state.get("intent_metadata") or {}
+    topic_pivot = bool(intent_metadata.get("topic_pivot"))
     max_price = intent_metadata.get("budget_max") or state.get("session_budget_max")
     if budget_cap is not None:
         max_price = budget_cap.amount
@@ -674,13 +681,24 @@ def build_budget_refinement_search_args(
         "max_price": float(max_price),
         "sort": "price_asc",
     }
-    if state.get("session_product_focus") == "cake" or is_broad_cakes_query(q):
+    if (
+        not topic_pivot
+        and (state.get("session_product_focus") == "cake" or is_broad_cakes_query(q))
+        and is_birthday_cake_intent(user_message)
+    ):
         args["category"] = "Birthday"
     return args
 
 
-def birthday_occasion_from_context(hybrid_context: dict[str, Any] | None) -> bool:
+def birthday_occasion_from_context(
+    hybrid_context: dict[str, Any] | None,
+    *,
+    user_message: str = "",
+    topic_pivot: bool = False,
+) -> bool:
     """True when graph/Zep hints mark the turn as a Birthday occasion."""
+    if topic_pivot:
+        return is_birthday_cake_intent(user_message)
     context = hybrid_context or {}
     hints = context.get("hints") or {}
     occasion = str(hints.get("occasion") or "").strip().lower()
@@ -705,11 +723,17 @@ def anniversary_occasion_from_context(hybrid_context: dict[str, Any] | None) -> 
 def _should_demote_desserts_for_birthday(
     query: str,
     hybrid_context: dict[str, Any] | None,
+    *,
+    topic_pivot: bool = False,
 ) -> bool:
     """Demote generic desserts when the turn is birthday-cake scoped, not chocolate+flowers."""
     if is_birthday_cake_intent(query):
         return True
-    if not birthday_occasion_from_context(hybrid_context):
+    if not birthday_occasion_from_context(
+        hybrid_context,
+        user_message=query,
+        topic_pivot=topic_pivot,
+    ):
         return False
     stripped = query.strip()
     if not stripped:
@@ -896,12 +920,16 @@ def enrich_birthday_cake_hints(
     intent_metadata: IntentMetadata | None = None,
 ) -> dict[str, Any]:
     """Boost birthday cake category and demote dessert departments for cake-scoped turns."""
-    _ = intent_metadata
+    topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
     context = dict(hybrid_context or {})
-    if not _should_demote_desserts_for_birthday(query, context):
+    if not _should_demote_desserts_for_birthday(query, context, topic_pivot=topic_pivot):
         return context
     hints = dict(context.get("hints") or {})
-    if birthday_occasion_from_context(context) or is_birthday_cake_intent(query):
+    if birthday_occasion_from_context(
+        context,
+        user_message=query,
+        topic_pivot=topic_pivot,
+    ) or is_birthday_cake_intent(query):
         hints.setdefault("occasion", "Birthday")
     if _MOM_BIRTHDAY_RE.search(query):
         hints["search_q_boost"] = "Happy Birthday Mom"
@@ -923,24 +951,37 @@ def build_discovery_search_args(
 ) -> dict[str, Any]:
     """Map graph/Zep hybrid_context hints to kapruka_search_products arguments."""
     context = hybrid_context or {}
+    topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
+    from lib.chat.intent_heuristics import is_bare_category_pivot
+
+    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
     category = _resolve_mcp_category_filter(context)
     query = strip_location_from_search_query(user_message.strip(), intent_metadata)
-    birthday_occasion = birthday_occasion_from_context(context) or is_birthday_cake_intent(query)
-    anniversary_occasion = (
-        anniversary_occasion_from_context(context)
-        or is_anniversary_occasion_intent(query, context)
-    )
+    birthday_occasion = birthday_occasion_from_context(
+        context,
+        user_message=query,
+        topic_pivot=topic_pivot,
+    ) or is_birthday_cake_intent(query)
+    anniversary_occasion = is_anniversary_occasion_intent(query, context)
     fallback_category = category or ("Birthday" if birthday_occasion else None)
 
-    if is_broad_cakes_query(query):
+    if topic_pivot and bare_focus == "cake":
+        return {"q": "cake", "currency": currency}
+
+    if is_broad_cakes_query(query) and not topic_pivot:
         query = "birthday cake"
         fallback_category = "Birthday"
 
     args: dict[str, Any] = {"q": query, "currency": currency}
     if category:
         args["category"] = category
-    elif is_broad_cakes_query(user_message) or (
-        birthday_occasion and _should_demote_desserts_for_birthday(query, context)
+    elif not topic_pivot and (
+        is_broad_cakes_query(user_message)
+        or (birthday_occasion and _should_demote_desserts_for_birthday(
+            query,
+            context,
+            topic_pivot=topic_pivot,
+        ))
     ):
         args["category"] = "Birthday"
 
@@ -1042,12 +1083,27 @@ def merge_planner_search_args(
             merged.update(budget_args)
             return merged
 
-    if is_broad_cakes_query(user_message):
+    intent_metadata = intent_metadata or (state.get("intent_metadata") if state else None)
+    topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
+    from lib.chat.intent_heuristics import is_bare_category_pivot
+
+    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
+
+    if topic_pivot and bare_focus == "cake":
+        merged["q"] = "cake"
+        merged.pop("category", None)
+        return merged
+
+    if is_broad_cakes_query(user_message) and not topic_pivot:
         merged["q"] = "birthday cake"
         merged.setdefault("category", "Birthday")
         return merged
 
-    if not is_birthday_cake_scoped_turn(user_message, hybrid_context):
+    if not is_birthday_cake_scoped_turn(
+        user_message,
+        hybrid_context,
+        topic_pivot=topic_pivot,
+    ):
         return merged
 
     canonical = build_discovery_search_args(
