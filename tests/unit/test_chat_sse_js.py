@@ -39,7 +39,16 @@ def test_chat_sse_js_clears_loading_on_success_and_error() -> None:
     assert "elt.id !== CHAT_FORM_ID" in source
     assert "submitButton.disabled = false" in source
     assert "messageInput.readOnly = false" in source
-    assert 'indicator?.classList.remove("htmx-request")' in source
+    assert 'indicator?.classList.remove("htmx-request", "chat-loading")' in source
+
+
+def test_chat_sse_js_uses_abort_controller_timeout() -> None:
+    source = CHAT_SSE_JS.read_text()
+
+    assert "AbortController" in source
+    assert "CHAT_STREAM_TIMEOUT_MS = 90_000" in source
+    assert "controller.abort()" in source
+    assert "signal: controller.signal" in source
 
 
 def test_chat_sse_js_removes_pending_bubble_on_stream_error() -> None:

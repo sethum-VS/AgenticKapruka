@@ -25,9 +25,18 @@ from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
+from lib.chat.off_topic import impossible_request_subject, off_topic_topic
 from lib.chat.product_curation import (
     curate_carousel_products,
+    filter_cake_accessories,
     has_graph_hybrid_context,
+    is_cake_accessory,
+)
+from lib.chat.product_detail import (
+    is_delivery_fee_question,
+    is_product_detail_turn,
+    match_product_from_last_search,
+    summarize_product_from_carousel,
 )
 from lib.chat.product_honesty import (
     artificial_floral_note_for_picks,
@@ -38,6 +47,8 @@ from lib.chat.search_broadening import build_empty_search_reply
 from lib.chat.system_prompts import (
     build_farewell_message,
     build_general_welcome_message,
+    build_impossible_product_redirect,
+    build_off_topic_redirect_message,
     build_response_system_instruction,
     is_farewell_message,
 )
@@ -70,10 +81,6 @@ _LLM_CONTEXT_PRODUCT_LIMIT = 5
 _CAKE_QUERY_PATTERN = re.compile(r"\bcakes?\b", re.I)
 _CAKE_CATEGORY_PATTERN = re.compile(r"\bcake", re.I)
 _CAKE_ID_PREFIX = re.compile(r"^cake", re.I)
-_ACCESSORY_BLACKLIST = re.compile(
-    r"\b(topper|mould|mold|turning\s+table|cake\s+stand|stand)\b",
-    re.I,
-)
 
 _TOOL_ERROR_ACTION_LABELS: dict[str, str] = {
     SEARCH_PRODUCTS_TOOL: "search the Kapruka catalog",
@@ -104,7 +111,8 @@ _CAROUSEL_NEGATION_PATTERN = re.compile(
     r"couldn'?t\s+find|could\s+not\s+find|"
     r"no\s+fresh|"
     r"none\s+within|"
-    r"no\s+options\s+under"
+    r"no\s+options\s+under|"
+    r"no\s+products|nothing\s+matching|don'?t\s+have\s+any"
     r")\b",
     re.I,
 )
@@ -205,6 +213,10 @@ def build_agent_tool_error_message(
         and ("past" in raw_message.lower() or error_code == "past_delivery_date")
     ):
         return delivery_date_clarifying_question()
+    if error_code in ("429", "rate_limit_exceeded"):
+        return (
+            "Kapruka's catalog is busy right now — please try again in a moment."
+        )
     if error_code == "date_not_deliverable":
         return (
             "That delivery date is not available. "
@@ -216,8 +228,22 @@ def build_agent_tool_error_message(
             "We cannot deliver to that city. Please choose a Kapruka delivery area "
             "(for example Colombo 03, Kandy, or Galle)."
         )
+    if error_code == "product_id_unresolved" and tool == GET_PRODUCT_TOOL:
+        return (
+            "I couldn't load that product's details — try tapping it in the carousel above, "
+            "or tell me which item you mean."
+        )
     if error_code == "validation_error":
         lowered = raw_message.lower()
+        if tool == GET_PRODUCT_TOOL and (
+            error_code == "product_id_unresolved"
+            or "product_id_unresolved" in lowered
+            or "product_id" in lowered
+        ):
+            return (
+                "I couldn't load that product's details — try tapping it in the carousel above, "
+                "or tell me which item you mean."
+            )
         if tool == CHECK_DELIVERY_TOOL and (
             "delivery_date" in lowered or "date" in lowered or "past" in lowered
         ):
@@ -265,6 +291,8 @@ def delivery_claim_guard(
     tool_trace: list[ToolInvocation] | None,
     *,
     user_message: str = "",
+    delivery_city_status: str | None = None,
+    delivery_city_confirmed: bool = False,
 ) -> str:
     """Replace ungrounded delivery fee/availability claims when check_delivery is absent."""
     if not _reply_claims_delivery_facts(reply_text):
@@ -289,12 +317,26 @@ def carousel_consistency_guard(
     products: list[dict[str, Any]],
     *,
     user_message: str = "",
+    budget_max: float | None = None,
+    currency: str = "LKR",
 ) -> str:
     """Replace contradictory empty-search copy when MCP search returned carousel products."""
     if not products or not reply_text.strip():
         return reply_text
     if not _CAROUSEL_NEGATION_PATTERN.search(reply_text):
         return reply_text
+    if budget_max is not None and budget_max > 0:
+        in_budget = [
+            product
+            for product in products
+            if not product.get("slightly_over_budget") and not product.get("over_budget")
+        ]
+        if not in_budget and products:
+            budget_label = format_currency(budget_max, currency)
+            return (
+                f"Here are some Kapruka options; a few exceed your {budget_label} budget — "
+                "I've marked those in the carousel."
+            )
     return _build_discovery_template_reply(products, user_message=user_message) or reply_text
 
 
@@ -472,10 +514,54 @@ def _is_likely_cake_product(product: dict[str, Any]) -> bool:
     return bool(_CAKE_CATEGORY_PATTERN.search(_product_category_text(product)))
 
 
+def _build_verified_dated_delivery_reply(
+    *,
+    city: str,
+    checked_date: str,
+    rate: float,
+    currency: str,
+) -> str:
+    fee = format_currency(rate, currency)
+    return (
+        f"Yes, we can deliver to {city} on {checked_date}. "
+        f"Delivery fee is {fee}."
+    )
+
+
+def _apply_verified_dated_delivery_template(
+    reply_text: str,
+    tool_trace: list[ToolInvocation] | None,
+) -> str:
+    """Use verified dated-delivery copy when check_delivery ran with a date."""
+    invocation = _last_check_delivery_invocation(tool_trace)
+    if invocation is None or _is_city_only_check_delivery(invocation):
+        return reply_text
+    delivery = invocation.get("result")
+    if not isinstance(delivery, dict) or not delivery.get("available"):
+        return reply_text
+    city = _canonical_city_from_check_delivery_invocation(invocation)
+    checked_date = delivery.get("checked_date")
+    rate = delivery.get("rate")
+    delivery_currency = delivery.get("currency") or "LKR"
+    if (
+        not city
+        or not isinstance(checked_date, str)
+        or not isinstance(rate, (int, float))
+    ):
+        return reply_text
+    template = _build_verified_dated_delivery_reply(
+        city=city,
+        checked_date=checked_date,
+        rate=float(rate),
+        currency=str(delivery_currency),
+    )
+    if format_currency(float(rate), str(delivery_currency)) in reply_text:
+        return reply_text
+    return template
+
+
 def _is_cake_accessory(product: dict[str, Any]) -> bool:
-    name = str(product.get("name") or "")
-    summary = str(product.get("summary") or "")
-    return bool(_ACCESSORY_BLACKLIST.search(f"{name} {summary}"))
+    return is_cake_accessory(product)
 
 
 def _filter_cake_search_products(
@@ -485,11 +571,12 @@ def _filter_cake_search_products(
     """Drop non-cake items and baking accessories when the search q targets cakes."""
     if not _is_cake_search_query(query):
         return products
-    return [
+    cake_products = [
         product
         for product in products
         if _is_likely_cake_product(product) and not _is_cake_accessory(product)
     ]
+    return filter_cake_accessories(cake_products)
 
 
 def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -501,11 +588,12 @@ def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, An
         for item in raw_results
         if isinstance(item, dict) and item.get("id") and item.get("name")
     ]
+    for product in products:
+        name = product.get("name")
+        if isinstance(name, str):
+            product["name"] = decode_html_entities(name)
     query = _search_query_from_payload(search_payload)
-    curated = _filter_cake_search_products(products, query)
-    if not curated and products and _is_cake_search_query(query):
-        return products
-    return curated
+    return _filter_cake_search_products(products, query)
 
 
 def _discovery_curation_query(
@@ -525,6 +613,7 @@ def _budget_curated_products(
     currency: str,
     graph_context_available: bool,
     hybrid_context: dict[str, Any] | None = None,
+    session_product_focus: str | None = None,
 ) -> list[dict[str, Any]]:
     """Apply birthday/puja relevance and budget-aware carousel ordering."""
     return curate_carousel_products(
@@ -534,7 +623,20 @@ def _budget_curated_products(
         currency=currency,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
     )
+
+
+def _enrich_product_display_price(product: dict[str, Any]) -> dict[str, Any]:
+    """Add display_price for LLM prose synthesis."""
+    enriched = dict(product)
+    raw_price = product.get("price")
+    if isinstance(raw_price, dict):
+        amount = raw_price.get("amount")
+        currency = raw_price.get("currency") or "LKR"
+        if isinstance(amount, (int, float)):
+            enriched["display_price"] = format_currency(float(amount), str(currency))
+    return enriched
 
 
 def _cap_search_products_for_llm_context(
@@ -546,6 +648,7 @@ def _cap_search_products_for_llm_context(
     user_message: str = "",
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
+    session_product_focus: str | None = None,
 ) -> dict[str, Any] | None:
     """Slice curated kapruka_search_products results before Gemini synthesis."""
     if not tool_results:
@@ -566,8 +669,9 @@ def _cap_search_products_for_llm_context(
         currency=currency,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
     )
-    capped_results = curated[:limit]
+    capped_results = [_enrich_product_display_price(product) for product in curated[:limit]]
     if capped_results == raw_results:
         return tool_results
 
@@ -668,6 +772,7 @@ def extract_search_products(
     user_message: str = "",
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
+    session_product_focus: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return curated product dicts from kapruka_search_products tool_results, if any."""
     if not tool_results:
@@ -685,6 +790,7 @@ def extract_search_products(
         currency=currency,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
     )
 
 
@@ -803,16 +909,24 @@ def build_products_carousel_html(
     user_message: str = "",
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
+    session_product_focus: str | None = None,
+    last_search_products: list[dict[str, Any]] | None = None,
+    visible_products: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Render product carousel partial when search_products returned results."""
-    products = extract_search_products(
-        tool_results,
-        budget_max=budget_max,
-        currency=currency,
-        user_message=user_message,
-        graph_context_available=graph_context_available,
-        hybrid_context=hybrid_context,
-    )
+    products = visible_products
+    if products is None:
+        products = extract_search_products(
+            tool_results,
+            budget_max=budget_max,
+            currency=currency,
+            user_message=user_message,
+            graph_context_available=graph_context_available,
+            hybrid_context=hybrid_context,
+            session_product_focus=session_product_focus,
+        )
+    if not products and last_search_products:
+        products = last_search_products
     if not products:
         return None
     return render_product_carousel(products)
@@ -842,6 +956,32 @@ def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> st
         return (
             f"Let's check out your {count} cart {noun}. "
             "Next, tell me the delivery city for your order."
+        )
+    if step == "delivery_city":
+        return (
+            "Which Kapruka delivery city should we send this to? "
+            "For example: Colombo 03, Kandy, or Galle."
+        )
+    if step == "delivery_date":
+        city = checkout.get("delivery_city") or "your city"
+        return (
+            f"When should we deliver to {city}? "
+            "Share a date (for example next Saturday or YYYY-MM-DD)."
+        )
+    if step == "recipient":
+        return (
+            "Who should receive this gift? Share their name and Sri Lankan mobile number "
+            "(for example Amaya, 0771234567)."
+        )
+    if step == "sender":
+        return (
+            "What name should appear on the gift card? "
+            "Say 'anonymous' if you prefer not to include your name."
+        )
+    if step == "review":
+        return (
+            "Please review your order details below. "
+            "Say 'confirm' when you're ready to pay securely."
         )
     if step == "finalize":
         checkout_url = checkout.get("checkout_url")
@@ -927,6 +1067,18 @@ async def generate_response(
             "assistant_message": welcome,
         }
 
+    off_topic_meta = dict(state.get("intent_metadata") or {})
+    if state.get("intent") == "general" and off_topic_meta.get("is_off_topic"):
+        redirect_kind = off_topic_meta.get("redirect_kind")
+        if redirect_kind == "impossible_product":
+            reply = build_impossible_product_redirect(impossible_request_subject(user_message))
+        else:
+            reply = build_off_topic_redirect_message(off_topic_topic(user_message))
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+
     if _is_general_welcome_path(state):
         if is_farewell_message(user_message):
             farewell = build_farewell_message()
@@ -966,7 +1118,10 @@ async def generate_response(
     ):
         tool_name = str(agent_tool_error["tool"])
         raw_message = str(agent_tool_error["message"])
-        error_code = _error_code_from_tool_trace(state.get("tool_trace"), tool_name)
+        error_code = agent_tool_error.get("error") or _error_code_from_tool_trace(
+            state.get("tool_trace"),
+            tool_name,
+        )
         order_number = extract_order_number(user_message)
         error_reply = build_agent_tool_error_message(
             tool=tool_name,
@@ -975,8 +1130,37 @@ async def generate_response(
             order_number=order_number,
             reference_kind=(classify_order_reference(order_number) if order_number else None),
         )
+        last_search = list(state.get("last_search_products") or [])
+        if is_product_detail_turn(user_message):
+            matched = match_product_from_last_search(user_message, last_search)
+            if matched is not None:
+                detail = summarize_product_from_carousel(matched)
+                error_reply = f"{error_reply}\n\nFrom our earlier results: {detail}"
+        tool_trace = state.get("tool_trace")
+        if is_delivery_fee_question(user_message) and _tool_trace_has_check_delivery(tool_trace):
+            reply_text, delivery_status_html = _apply_perishable_delivery_honesty(
+                error_reply,
+                tool_trace,
+            )
+            return {
+                "response_html": render_assistant_html(
+                    reply_text,
+                    delivery_status_html=delivery_status_html,
+                ),
+                "assistant_message": reply_text,
+            }
+        products_html = build_products_carousel_html(
+            _resolve_effective_tool_results(state),
+            budget_max=state.get("session_budget_max"),
+            currency=state.get("currency") or "LKR",
+            user_message=user_message,
+            graph_context_available=has_graph_hybrid_context(state.get("hybrid_context") or {}),
+            hybrid_context=state.get("hybrid_context") or {},
+            session_product_focus=state.get("session_product_focus"),
+            last_search_products=last_search or None,
+        )
         return {
-            "response_html": render_assistant_html(error_reply),
+            "response_html": render_assistant_html(error_reply, products_html=products_html),
             "assistant_message": error_reply,
         }
 
@@ -1119,14 +1303,56 @@ async def generate_response(
         budget_max = float(turn_budget)
     graph_context_available = has_graph_hybrid_context(state.get("hybrid_context") or {})
     hybrid_context = state.get("hybrid_context") or {}
+    session_product_focus = state.get("session_product_focus")
 
-    products = extract_search_products(
+    if is_product_detail_turn(user_message):
+        matched = match_product_from_last_search(
+            user_message,
+            state.get("last_search_products"),
+        )
+        get_payload = (tool_results or {}).get(GET_PRODUCT_TOOL)
+        detail_reply: str | None = None
+        if (
+            isinstance(get_payload, dict)
+            and not get_payload.get("error")
+            and get_payload.get("name")
+        ):
+            detail_reply = summarize_product_from_carousel(get_payload)
+        elif matched is not None:
+            detail_reply = summarize_product_from_carousel(matched)
+        if detail_reply:
+            tool_trace = state.get("tool_trace")
+            detail_reply, delivery_status_html = _apply_perishable_delivery_honesty(
+                detail_reply,
+                tool_trace,
+            )
+            products_html = build_products_carousel_html(
+                tool_results,
+                budget_max=budget_max,
+                currency=currency,
+                user_message=user_message,
+                graph_context_available=graph_context_available,
+                hybrid_context=hybrid_context,
+                session_product_focus=session_product_focus,
+                last_search_products=state.get("last_search_products"),
+            )
+            return {
+                "response_html": render_assistant_html(
+                    detail_reply,
+                    products_html=products_html,
+                    delivery_status_html=delivery_status_html,
+                ),
+                "assistant_message": detail_reply,
+            }
+
+    visible_products = extract_search_products(
         tool_results,
         budget_max=budget_max,
         currency=currency,
         user_message=user_message,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
     )
     products_html = build_products_carousel_html(
         tool_results,
@@ -1135,6 +1361,9 @@ async def generate_response(
         user_message=user_message,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
+        last_search_products=state.get("last_search_products"),
+        visible_products=visible_products,
     )
 
     client = genai_client
@@ -1148,6 +1377,7 @@ async def generate_response(
             user_message=user_message,
             graph_context_available=graph_context_available,
             hybrid_context=hybrid_context,
+            session_product_focus=session_product_focus,
         ),
         budget_max=budget_max,
         currency=currency,
@@ -1169,17 +1399,19 @@ async def generate_response(
     except Exception as exc:
         if not is_resource_exhausted(exc):
             raise
-        reply_text = _build_discovery_template_reply(products, user_message=user_message)
+        reply_text = _build_discovery_template_reply(visible_products, user_message=user_message)
         logger.warning(
             "generate_response: Gemini rate limited; template fallback (%d products)",
-            len(products),
+            len(visible_products),
             exc_info=True,
         )
 
     if not reply_text:
-        reply_text = _build_discovery_template_reply(products, user_message=user_message) or (
-            "I could not generate a response. Please try again."
+        template = _build_discovery_template_reply(
+            visible_products,
+            user_message=user_message,
         )
+        reply_text = template or "I could not generate a response. Please try again."
 
     reply_text = decode_html_entities(reply_text)
     tool_trace = state.get("tool_trace")
@@ -1187,15 +1419,20 @@ async def generate_response(
         reply_text,
         tool_trace,
         user_message=user_message,
+        delivery_city_status=state.get("delivery_city_status"),
+        delivery_city_confirmed=bool(state.get("session_delivery_city_confirmed")),
     )
+    reply_text = _apply_verified_dated_delivery_template(reply_text, tool_trace)
     reply_text = carousel_consistency_guard(
         reply_text,
-        products,
+        visible_products,
         user_message=user_message,
+        budget_max=budget_max,
+        currency=currency,
     )
     reply_text = _apply_artificial_floral_honesty(
         reply_text,
-        products,
+        visible_products,
         user_message=user_message,
     )
     reply_text, delivery_status_html = _apply_perishable_delivery_honesty(reply_text, tool_trace)

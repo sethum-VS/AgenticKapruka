@@ -60,8 +60,15 @@ class AgentState(TypedDict):
     zep_thread_id: str | None
     currency: CurrencyCode | None
     session_budget_max: float | None
+    session_budget_currency: CurrencyCode | None
     session_delivery_city_canonical: str | None
+    session_delivery_date: str | None
+    session_product_focus: str | None
+    session_search_query: str | None
     session_awaiting_delivery_date: bool | None
+    session_awaiting_gift_preferences: bool | None
+    session_delivery_city_confirmed: bool | None
+    session_shipment_address_raw: str | None
     delivery_city_raw: str | None
     delivery_city_canonical: str | None
     delivery_city_status: DeliveryCityStatus | None

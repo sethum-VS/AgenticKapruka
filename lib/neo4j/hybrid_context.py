@@ -349,18 +349,65 @@ _CATALOG_BROWSE_RE = re.compile(
     re.IGNORECASE,
 )
 _MAX_PRICE_RE = re.compile(
-    r"\b(?:under|below|less\s+than|upto|up\s+to)\s*(?:rs\.?|lkr|\$)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
+    r"\b(?:under|below|less\s+than|upto|up\s+to)\s*(?:rs\.?|lkr|usd|\$)?\s*(\d[\d,]*)\s*(?:rs\.?|lkr|usd)?\b",
     re.IGNORECASE,
 )
-_TILDE_BUDGET_RE = re.compile(r"~\s*(\d[\d,]*)\s*(?:rs\.?|lkr)?\b", re.IGNORECASE)
+_TILDE_BUDGET_RE = re.compile(
+    r"~\s*(\d[\d,]*)\s*(?:rs\.?|lkr|usd|\$)?\b",
+    re.IGNORECASE,
+)
 _AROUND_BUDGET_RE = re.compile(
-    r"\b(?:around|about)\s*(?:rs\.?|lkr|\$)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
+    r"\b(?:around|about)\s*(?:rs\.?|lkr|usd|\$)?\s*(\d[\d,]*)\s*(?:rs\.?|lkr|usd)?\b",
     re.IGNORECASE,
 )
 _BUDGET_OF_RE = re.compile(
-    r"\bbudget\s*(?:of|around|about)?\s*(?:rs\.?|lkr|\$)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
+    r"\bbudget\s*(?:of|around|about)?\s*(?:rs\.?|lkr|usd|\$)?\s*(\d[\d,]*)\s*(?:rs\.?|lkr|usd)?\b",
     re.IGNORECASE,
 )
+_CURRENCY_IN_SPAN = re.compile(r"(rs\.?|lkr|usd|\$)", re.I)
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetCap:
+    """Numeric budget cap with explicit currency from the user message."""
+
+    amount: float
+    currency: str
+
+
+def _currency_from_span(span: str) -> str:
+    lowered = span.lower()
+    if lowered.startswith("rs") or lowered == "lkr":
+        return "LKR"
+    if lowered.startswith("usd") or lowered == "$":
+        return "USD"
+    return "LKR"
+
+
+def extract_budget(message: str) -> BudgetCap | None:
+    """Parse budget caps with currency (Rs/LKR/USD/$) from the user message."""
+    for pattern in (_MAX_PRICE_RE, _TILDE_BUDGET_RE, _AROUND_BUDGET_RE, _BUDGET_OF_RE):
+        match = pattern.search(message)
+        if not match:
+            continue
+        digits = match.group(1).replace(",", "")
+        try:
+            value = float(digits)
+        except ValueError:
+            continue
+        if value <= 0:
+            continue
+        span = match.group(0)
+        currency_match = _CURRENCY_IN_SPAN.search(span)
+        currency = _currency_from_span(currency_match.group(1)) if currency_match else "LKR"
+        return BudgetCap(amount=value, currency=currency)
+    return None
+
+
+def extract_max_price(message: str) -> float | None:
+    """Parse budget caps like 'under 2000rs' or '~8000 LKR' into a numeric max_price."""
+    cap = extract_budget(message)
+    return cap.amount if cap is not None else None
 _META_QUERY_TOKENS = frozenset(
     {
         "can",
@@ -402,6 +449,10 @@ _META_QUERY_TOKENS = frozenset(
     }
 )
 _BIRTHDAY_OCCASION_RE = re.compile(r"\bbirthday\b", re.I)
+_MOM_BIRTHDAY_RE = re.compile(
+    r"\b(?:mom|mother|mum|amma)\b.*\bbirthday\b|\bbirthday\b.*\b(?:mom|mother|mum|amma)\b",
+    re.I,
+)
 _BIRTHDAY_CAKE_INTENT = re.compile(
     r"\bbirthday\s+cake\b|\bcake\b.*\bbirthday\b|\bbirthday\b.*\bcake\b",
     re.I,
@@ -491,22 +542,6 @@ def _is_meta_catalog_query(message: str) -> bool:
     return bool(_PRICE_SORT_RE.search(stripped) and not _product_like_tokens(stripped))
 
 
-def extract_max_price(message: str) -> float | None:
-    """Parse budget caps like 'under 2000rs' or '~8000 LKR' into a numeric max_price."""
-    for pattern in (_MAX_PRICE_RE, _TILDE_BUDGET_RE, _AROUND_BUDGET_RE, _BUDGET_OF_RE):
-        match = pattern.search(message)
-        if not match:
-            continue
-        digits = match.group(1).replace(",", "")
-        try:
-            value = float(digits)
-        except ValueError:
-            continue
-        if value > 0:
-            return value
-    return None
-
-
 _extract_max_price = extract_max_price
 
 
@@ -555,14 +590,88 @@ def _should_canonicalize_birthday_search_q(query: str) -> bool:
 def is_birthday_cake_scoped_turn(
     query: str,
     hybrid_context: dict[str, Any] | None = None,
+    *,
+    session_product_focus: str | None = None,
 ) -> bool:
     """True when carousel/search curation should prefer Birthday category cakes."""
+    if session_product_focus == "cake":
+        return True
     if is_birthday_cake_intent(query):
         return True
     if not birthday_occasion_from_context(hybrid_context):
         return False
     stripped = query.strip()
     return bool(stripped and _CAKE_TERM.search(stripped))
+
+
+def is_broad_cakes_query(query: str) -> bool:
+    """True for bare 'cakes' queries that should bias toward birthday cakes."""
+    stripped = query.strip().strip("!.?")
+    if not stripped:
+        return False
+    if _BIRTHDAY_CAKE_INTENT.search(stripped):
+        return False
+    if re.match(r"^cakes?\s*$", stripped, re.I):
+        return True
+    if re.search(r"nevermind.*\bcakes?\b", stripped, re.I):
+        return True
+    return bool(re.match(r"^nevermind\.?\s*cakes?\s*$", stripped, re.I))
+
+
+def _focus_derived_search_q(session_product_focus: str | None) -> str | None:
+    """Map session product focus to a Kapruka search q when budget-refining."""
+    if session_product_focus == "chocolate":
+        return "chocolate gift"
+    if session_product_focus == "cake":
+        return "birthday cake"
+    if session_product_focus == "flowers":
+        return "fresh roses bouquet"
+    if session_product_focus in ("gift", "combo"):
+        return "gift hamper"
+    return None
+
+
+def build_budget_refinement_search_args(
+    state: dict[str, Any],
+    user_message: str,
+    *,
+    currency: str,
+) -> dict[str, Any] | None:
+    """Deterministic kapruka_search_products args for budget-only refinement turns."""
+    from lib.chat.intent_heuristics import is_budget_refinement_message
+
+    if not is_budget_refinement_message(user_message):
+        return None
+
+    session_q = state.get("session_search_query")
+    q: str | None = None
+    if isinstance(session_q, str) and session_q.strip():
+        q = session_q.strip()
+    else:
+        q = _focus_derived_search_q(state.get("session_product_focus"))
+
+    if not q:
+        return None
+
+    budget_cap = extract_budget(user_message)
+    intent_metadata = state.get("intent_metadata") or {}
+    max_price = intent_metadata.get("budget_max") or state.get("session_budget_max")
+    if budget_cap is not None:
+        max_price = budget_cap.amount
+        currency = budget_cap.currency
+
+    if not isinstance(max_price, (int, float)) or max_price <= 0:
+        return {"q": q, "currency": currency}
+
+    args: dict[str, Any] = {
+        "q": q,
+        "currency": currency,
+        "max_price": float(max_price),
+        "sort": "price_asc",
+    }
+    if state.get("session_product_focus") == "cake" or is_broad_cakes_query(q):
+        args["category"] = "Birthday"
+    return args
 
 
 def birthday_occasion_from_context(hybrid_context: dict[str, Any] | None) -> bool:
@@ -749,6 +858,8 @@ def enrich_birthday_cake_hints(
     hints = dict(context.get("hints") or {})
     if birthday_occasion_from_context(context) or is_birthday_cake_intent(query):
         hints.setdefault("occasion", "Birthday")
+    if _MOM_BIRTHDAY_RE.search(query):
+        hints["search_q_boost"] = "Happy Birthday Mom"
     existing = str(hints.get("exclude_categories") or "")
     hints["exclude_categories"] = _merge_exclude_category_hints(
         existing,
@@ -772,27 +883,52 @@ def build_discovery_search_args(
     birthday_occasion = birthday_occasion_from_context(context) or is_birthday_cake_intent(query)
     fallback_category = category or ("Birthday" if birthday_occasion else None)
 
+    if is_broad_cakes_query(query):
+        query = "birthday cake"
+        fallback_category = "Birthday"
+
     args: dict[str, Any] = {"q": query, "currency": currency}
     if category:
         args["category"] = category
-    elif birthday_occasion and _should_demote_desserts_for_birthday(query, context):
+    elif is_broad_cakes_query(user_message) or (
+        birthday_occasion and _should_demote_desserts_for_birthday(query, context)
+    ):
         args["category"] = "Birthday"
 
     if _PRICE_SORT_RE.search(query):
         args["sort"] = "price_asc"
 
-    max_price = _extract_max_price(query)
-    if max_price is not None:
-        args["max_price"] = max_price
+    budget_cap = extract_budget(query)
+    if budget_cap is not None:
+        args["max_price"] = budget_cap.amount
         args["sort"] = "price_asc"
+        args["currency"] = budget_cap.currency
         product_tokens = _product_like_tokens(query)
         if product_tokens:
             args["q"] = _birthday_biased_product_keyword(
                 product_tokens[0],
                 birthday_occasion=birthday_occasion,
             )
+        elif _MOM_BIRTHDAY_RE.search(query):
+            args["q"] = "Happy Birthday Mom"
         else:
             args["q"] = _fallback_search_query(fallback_category)
+    else:
+        max_price = _extract_max_price(query)
+        if max_price is not None:
+            args["max_price"] = max_price
+            args["sort"] = "price_asc"
+            product_tokens = _product_like_tokens(query)
+            if product_tokens:
+                args["q"] = _birthday_biased_product_keyword(
+                    product_tokens[0],
+                    birthday_occasion=birthday_occasion,
+                )
+            else:
+                args["q"] = _fallback_search_query(fallback_category)
+
+    if _MOM_BIRTHDAY_RE.search(query) and "gift" in query.lower():
+        args["q"] = "Happy Birthday Mom"
 
     if _is_meta_catalog_query(query):
         args["q"] = _fallback_search_query(fallback_category)
@@ -807,6 +943,7 @@ def build_discovery_search_args(
 
     if intent_metadata:
         session_budget = intent_metadata.get("budget_max")
+        budget_currency = intent_metadata.get("budget_currency")
         if (
             isinstance(session_budget, (int, float))
             and session_budget > 0
@@ -814,6 +951,8 @@ def build_discovery_search_args(
         ):
             args["max_price"] = float(session_budget)
             args.setdefault("sort", "price_asc")
+        if isinstance(budget_currency, str) and budget_currency.strip():
+            args["currency"] = budget_currency.strip().upper()
 
     return args
 
@@ -840,17 +979,31 @@ def merge_planner_search_args(
     hybrid_context: dict[str, Any] | None,
     currency: str,
     intent_metadata: IntentMetadata | None = None,
+    state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply deterministic discovery search args from hybrid context over planner args."""
+    merged = dict(planner_args)
+
+    if state is not None:
+        budget_args = build_budget_refinement_search_args(state, user_message, currency=currency)
+        if budget_args is not None:
+            merged.update(budget_args)
+            return merged
+
+    if is_broad_cakes_query(user_message):
+        merged["q"] = "birthday cake"
+        merged.setdefault("category", "Birthday")
+        return merged
+
     if not is_birthday_cake_scoped_turn(user_message, hybrid_context):
-        return planner_args
+        return merged
+
     canonical = build_discovery_search_args(
         user_message,
         hybrid_context,
         currency=currency,
         intent_metadata=intent_metadata,
     )
-    merged = dict(planner_args)
     planner_q = str(planner_args.get("q") or "")
     q_overridden = _birthday_planner_q_needs_override(planner_q, user_message)
     if q_overridden and "q" in canonical:

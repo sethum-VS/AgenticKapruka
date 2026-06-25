@@ -32,7 +32,13 @@ def send_chat_message(page: Page, message: str, *, timeout_ms: int = 60_000) -> 
     page.wait_for_function(
         """() => {
           const form = document.getElementById('chat-form');
-          return form && !form.classList.contains('htmx-request');
+          const loading = document.getElementById('chat-loading');
+          const formIdle = form && !form.classList.contains('htmx-request');
+          const loadingIdle = !loading || (
+            !loading.classList.contains('htmx-request')
+            && !loading.classList.contains('chat-loading')
+          );
+          return formIdle && loadingIdle;
         }""",
         timeout=timeout_ms,
     )

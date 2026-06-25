@@ -312,8 +312,6 @@ def _preflight_tools_for_eval_case(case: GoldenCase) -> list[str]:
     """MCP tools resolve_delivery_context may append before agent_loop (PRD-138 preflight)."""
     if case.scenario != "discovery":
         return []
-    if normalize_delivery_date({}, case.user_query) is not None:
-        return []
     metadata = QueryPreprocessor().process(case.user_query)
     if metadata.get("requires_delivery_validation"):
         return [CHECK_DELIVERY_TOOL]

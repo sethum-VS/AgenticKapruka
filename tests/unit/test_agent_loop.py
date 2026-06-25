@@ -501,25 +501,26 @@ def test_planner_user_prompt_includes_broad_gifts_ask_user_hint() -> None:
 
 
 def test_planner_user_prompt_budgeted_gift_ideas_prefers_search() -> None:
-    """Budgeted gift ideas bias planner toward kapruka_search_products before ask_user."""
+    """Budgeted gift ideas bias planner toward dual kapruka_search_products before ask_user."""
     state: AgentState = {
         "messages": [HumanMessage(content="Gift ideas under Rs. 5,000")],
         "intent_metadata": {"budget_max": 5000.0},
     }
     prompt = _build_planner_user_prompt(state)
-    assert "call_tool" in prompt.lower()
+    assert "kapruka_search_products" in prompt.lower()
     assert "gift voucher" in prompt.lower()
+    assert "gift hamper" in prompt.lower()
     assert "max_price=5000" in prompt
     assert "ask_user before" not in prompt.lower()
 
 
 def test_planner_system_instruction_budgeted_gifts_search_before_ask_user() -> None:
-    """System instruction directs budgeted gift queries to search before clarify."""
+    """System instruction directs budgeted gift queries to dual search before clarify."""
     from graphs.nodes.agent_loop import PLANNER_SYSTEM_INSTRUCTION
 
     assert "Budgeted gift queries" in PLANNER_SYSTEM_INSTRUCTION
     assert "gift voucher" in PLANNER_SYSTEM_INSTRUCTION
-    assert "before ask_user" in PLANNER_SYSTEM_INSTRUCTION
+    assert "gift hamper" in PLANNER_SYSTEM_INSTRUCTION
 
 
 @pytest.mark.asyncio
@@ -692,6 +693,25 @@ def test_planner_user_prompt_skips_broad_cakes_hint_when_birthday_cake_named() -
     prompt = _build_planner_user_prompt(state)
     assert 'Broad "cakes" query' not in prompt
     assert 'q="birthday cake"' in prompt
+
+
+def test_planner_user_prompt_session_product_focus_floral_cake_hint() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="She loves floral designs")],
+        "session_product_focus": "cake",
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert "Session shopping focus: cake" in prompt
+    assert "floral birthday cake" in prompt.lower()
+
+
+def test_planner_user_prompt_includes_session_currency() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="under 30 dollars")],
+        "currency": "USD",
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert "Session display currency: USD" in prompt
 
 
 def test_planner_system_instruction_includes_hybrid_soft_hints_only() -> None:

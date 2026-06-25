@@ -75,7 +75,15 @@ def test_sort_and_filter_near_budget_badge() -> None:
     assert curated[1]["id"] == "near"
     assert curated[1].get("slightly_over_budget") is True
     assert curated[2]["id"] == "far"
+    assert curated[2].get("over_budget") is True
     assert "slightly_over_budget" not in curated[2]
+
+
+def test_sort_and_filter_over_near_budget_badge_for_5950_on_5000() -> None:
+    products = [_product("gift", 5950.0)]
+    curated = sort_and_filter_by_budget(products, 5000.0, "LKR")
+    assert len(curated) == 1
+    assert curated[0].get("over_budget") is True
 
 
 def test_sort_and_filter_empty_budget_passthrough() -> None:

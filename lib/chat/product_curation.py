@@ -13,11 +13,20 @@ _FLOWER_FRUIT_INTENT = re.compile(
     re.I,
 )
 _PUJA_DENYLIST = re.compile(r"\b(?:puja|pooja|pooj?a|watti|religious)\b", re.I)
+_PRODUCE_DENYLIST = re.compile(
+    r"\b(?:coconut|banana|grocery|vegetable|potato|onion|tomato|carrot)\b",
+    re.I,
+)
 _BIRTHDAY_PRODUCT_RE = re.compile(r"\bbirthday\b", re.I)
 _CAKE_ID_PREFIX = re.compile(r"^cake", re.I)
 _DESSERT_CATEGORY_RE = re.compile(r"\b(?:chocolate|desserts?)\b", re.I)
 _GENERIC_DESSERT_RE = re.compile(
     r"\b(?:lava\s+cake|dessert|mousse|brownie|loaf\s+cake|pudding|tiramisu)\b",
+    re.I,
+)
+_CAKE_ACCESSORY_BLACKLIST = re.compile(
+    r"\b(?:topper|mould|mold|turning\s+table|cake\s+stand|stand|icing\s+set|"
+    r"fondant|nozzle|decorating|piping\s+bag|spatula)\b",
     re.I,
 )
 
@@ -73,6 +82,25 @@ def product_matches_puja_denylist(product: dict[str, Any]) -> bool:
     return bool(_PUJA_DENYLIST.search(_product_text_blob(product)))
 
 
+def product_matches_produce_denylist(product: dict[str, Any]) -> bool:
+    """True when product looks like grocery produce rather than a gift."""
+    return bool(_PRODUCE_DENYLIST.search(_product_text_blob(product)))
+
+
+def demote_produce_for_vague_gifts(
+    products: list[dict[str, Any]],
+    query: str,
+) -> list[dict[str, Any]]:
+    """Light demotion of obvious produce when the query is a vague gift idea."""
+    from lib.chat.intent_heuristics import is_vague_gift_intent
+
+    if not is_vague_gift_intent(query):
+        return products
+    preferred = [product for product in products if not product_matches_produce_denylist(product)]
+    demoted = [product for product in products if product_matches_produce_denylist(product)]
+    return preferred + demoted
+
+
 def _product_category_text(product: dict[str, Any]) -> str:
     category = product.get("category")
     if isinstance(category, dict):
@@ -101,17 +129,32 @@ def product_is_generic_dessert(product: dict[str, Any]) -> bool:
     return bool(_GENERIC_DESSERT_RE.search(_product_text_blob(product)))
 
 
+def is_cake_accessory(product: dict[str, Any]) -> bool:
+    """True when a search hit is a cake decorating tool rather than an edible cake."""
+    return bool(_CAKE_ACCESSORY_BLACKLIST.search(_product_text_blob(product)))
+
+
+def filter_cake_accessories(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop baking accessories and decorating tools from cake search results."""
+    return [product for product in products if not is_cake_accessory(product)]
+
+
 def apply_birthday_cake_curation(
     products: list[dict[str, Any]],
     *,
     query: str,
     hybrid_context: dict[str, Any] | None = None,
     graph_context_available: bool = False,
+    session_product_focus: str | None = None,
 ) -> list[dict[str, Any]]:
     """Prefer birthday-category cakes and demote generic desserts for birthday turns."""
     from lib.neo4j.hybrid_context import is_birthday_cake_scoped_turn
 
-    if not is_birthday_cake_scoped_turn(query, hybrid_context):
+    if not is_birthday_cake_scoped_turn(
+        query,
+        hybrid_context,
+        session_product_focus=session_product_focus,
+    ):
         return list(products)
 
     birthday: list[dict[str, Any]] = []
@@ -175,25 +218,38 @@ def apply_puja_curation(
     return filter_puja_products(products, query)
 
 
+def _product_currency(product: dict[str, Any]) -> str:
+    raw_price = product.get("price")
+    if isinstance(raw_price, dict):
+        code = raw_price.get("currency")
+        if isinstance(code, str) and code.strip():
+            return code.strip().upper()
+    return "LKR"
+
+
 def sort_and_filter_by_budget(
     products: list[dict[str, Any]],
     budget_max: float | None,
     currency: str,
 ) -> list[dict[str, Any]]:
-    """Hide items above 2× budget; sort in-budget asc, then near-budget (+10%) with badge.
-
-    ``currency`` is accepted for API symmetry with session currency (prices are already
-    normalized by Kapruka MCP for the requested currency).
-    """
-    _ = currency
+    """Hide items above 2× budget; sort in-budget asc, then near-budget (+10%) with badge."""
     if budget_max is None or budget_max <= 0:
         return list(products)
+
+    target_currency = currency.strip().upper() if currency.strip() else "LKR"
+    scoped = [
+        product
+        for product in products
+        if _product_currency(product) == target_currency
+    ]
+    if not scoped:
+        scoped = list(products)
 
     in_budget: list[dict[str, Any]] = []
     near_budget: list[dict[str, Any]] = []
     over_near: list[dict[str, Any]] = []
 
-    for product in products:
+    for product in scoped:
         price = product_price_amount(product)
         if price is None:
             over_near.append(product)
@@ -207,7 +263,9 @@ def sort_and_filter_by_budget(
             tagged["slightly_over_budget"] = True
             near_budget.append(tagged)
         else:
-            over_near.append(product)
+            tagged = dict(product)
+            tagged["over_budget"] = True
+            over_near.append(tagged)
 
     in_budget.sort(key=lambda item: product_price_amount(item) or 0.0)
     near_budget.sort(key=lambda item: product_price_amount(item) or 0.0)
@@ -223,6 +281,7 @@ def curate_carousel_products(
     currency: str,
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
+    session_product_focus: str | None = None,
 ) -> list[dict[str, Any]]:
     """Apply birthday/puja relevance curation then budget-aware carousel ordering."""
     from lib.neo4j.hybrid_context import is_birthday_cake_scoped_turn
@@ -232,8 +291,14 @@ def curate_carousel_products(
         query=query,
         hybrid_context=hybrid_context,
         graph_context_available=graph_context_available,
+        session_product_focus=session_product_focus,
     )
-    if is_birthday_cake_scoped_turn(query, hybrid_context):
+    scoped = demote_produce_for_vague_gifts(scoped, query)
+    if is_birthday_cake_scoped_turn(
+        query,
+        hybrid_context,
+        session_product_focus=session_product_focus,
+    ):
         birthday_items = [
             product for product in scoped if product_is_birthday_cake_product(product)
         ]

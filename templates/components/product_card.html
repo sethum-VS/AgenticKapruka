@@ -75,6 +75,13 @@
     >
       Slightly over budget
     </span>
+    {% elif product.over_budget %}
+    <span
+      class="absolute right-2 top-2 rounded-full bg-orange-600/90 px-2 py-0.5 text-xs font-medium text-white shadow-sm"
+      data-testid="budget-badge-over"
+    >
+      Over budget
+    </span>
     {% endif %}
   </a>
   <div class="flex flex-1 flex-col gap-2 p-3">
@@ -85,7 +92,7 @@
         target="_blank"
         rel="noopener noreferrer"
       >
-        {{ product.name }}
+        {{ product.name | decode_html }}
       </a>
     </h3>
     <p class="text-sm font-semibold text-kapruka-700" data-testid="product-price">

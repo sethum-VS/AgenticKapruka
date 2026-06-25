@@ -187,7 +187,8 @@ pip install -e '.[dev]'
 gcloud auth application-default login
 docker run -d --name agentic-kapruka-redis -p 6379:6379 redis/redis-stack-server:latest
 # Edit NEO4J_*, ZEP_API_KEY, SESSION_SECRET in .env
-python scripts/bootstrap_neo4j.py   # first time: schema, ingest, embed, vector index
+# Required for GraphRAG curation quality — run before first local chat/eval session:
+python scripts/bootstrap_neo4j.py   # first time: schema, ingest, embed, vector index (required for local GraphRAG / product curation quality)
 uvicorn app.main:app --reload
 ```
 

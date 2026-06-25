@@ -9,6 +9,7 @@
 (function () {
   const CHAT_FORM_ID = "chat-form";
   const CHAT_STREAM_PATH = "/chat/stream";
+  const CHAT_STREAM_TIMEOUT_MS = 90_000;
 
   function chatDebugEnabled(form) {
     return form?.dataset?.chatDebug === "true";
@@ -135,7 +136,7 @@
     const messageInput = form.querySelector("#chat-message");
     if (active) {
       form.classList.add("htmx-request");
-      indicator?.classList.add("htmx-request");
+      indicator?.classList.add("htmx-request", "chat-loading");
       if (submitButton) {
         submitButton.disabled = true;
       }
@@ -145,7 +146,7 @@
       }
     } else {
       form.classList.remove("htmx-request");
-      indicator?.classList.remove("htmx-request");
+      indicator?.classList.remove("htmx-request", "chat-loading");
       if (submitButton) {
         submitButton.disabled = false;
       }
@@ -189,12 +190,17 @@
     });
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), CHAT_STREAM_TIMEOUT_MS);
+
       const response = await fetch(connectPath, {
         method: "POST",
         body: formData,
         headers: { "HX-Request": "true" },
         credentials: "same-origin",
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         chatDebugLog(form, "http error", { status: response.status });
@@ -260,6 +266,7 @@
     } catch (error) {
       removePendingAssistantBubbles();
       chatDebugLog(form, "stream failed", error);
+      toggleRequestState(form, false);
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {
           detail: { elt: form, successful: false },

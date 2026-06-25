@@ -21,10 +21,12 @@ from lib.chat.delivery_dates import (
     delivery_date_clarifying_question,
     normalize_delivery_date,
 )
+from lib.chat.intent_heuristics import is_budget_refinement_message
 from lib.chat.product_curation import (
     apply_birthday_cake_curation,
     apply_puja_curation,
     has_graph_hybrid_context,
+    is_cake_accessory,
     is_flower_fruit_intent,
 )
 from lib.chat.search_broadening import apply_first_broaden
@@ -33,6 +35,7 @@ from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tool_executor import (
     canonical_tool_args_for_dedup,
+    enrich_get_product_args,
     inject_currency,
     invoke_tool,
     normalize_planner_tool_args,
@@ -42,7 +45,9 @@ from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.neo4j.hybrid_context import (
+    build_budget_refinement_search_args,
     is_birthday_cake_intent,
+    is_broad_cakes_query,
     merge_planner_search_args,
 )
 from lib.utils.timezone import colombo_today_iso
@@ -107,8 +112,20 @@ occasion, recipient, or budget named → action MUST be ask_user to learn who th
 gift is for or what occasion before running kapruka_search_products.
 
 Budgeted gift queries: When the customer names a budget (e.g. "gift ideas under
-Rs. 5,000") → action MUST be call_tool kapruka_search_products with
-q="gift voucher" and max_price from their budget before ask_user.
+Rs. 5,000") with no product topic in session → run two kapruka_search_products calls:
+(1) q="gift voucher" with max_price from their budget, then (2) q="gift hamper" or
+q="chocolates gift" with the same max_price. Merge voucher and physical gift results
+before finish.
+
+When session shopping focus or session_search_query is set, budget-only turns must
+reuse that product context with max_price — do not switch to gift vouchers.
+
+Display currency (authoritative): use the session currency from the user prompt
+for all price filters; do not ask the customer to choose LKR vs USD when the UI
+session currency is set.
+
+When a delivery date is already resolved in the user prompt, do not ask_user for
+the date again — use kapruka_check_delivery with that date when delivery is needed.
 
 Prior session facts (Zep) are conversational context only — not catalog truth.
 Hybrid context hints and preferences are soft hints; the explicit user message
@@ -294,6 +311,31 @@ def format_planner_prior_iterations(tool_trace: list[ToolInvocation] | None) -> 
     return json.dumps(entries, ensure_ascii=False)
 
 
+def _resolve_budget_currency(state: AgentState) -> str | None:
+    """Message-explicit budget currency wins over session display currency."""
+    return state.get("session_budget_currency") or None
+
+
+def _has_budget_query(state: AgentState) -> bool:
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    budget_max = intent_metadata.get("budget_max") or state.get("session_budget_max")
+    return isinstance(budget_max, (int, float)) and budget_max > 0
+
+
+def _inject_tool_currency(
+    tool_name: str,
+    args: dict[str, Any],
+    state: AgentState,
+    session_currency: str,
+) -> dict[str, Any]:
+    return inject_currency(
+        tool_name,
+        args,
+        session_currency,
+        budget_currency=_resolve_budget_currency(state),
+    )
+
+
 def _resolve_currency(state: AgentState) -> str:
     """Session currency wins; fall back to Zep hints then LKR."""
     hybrid_context = state.get("hybrid_context") or {}
@@ -318,6 +360,8 @@ _SHORT_CATEGORY_REPLY = re.compile(
     re.I,
 )
 _FLOWERS_REQUEST = re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)s?\b", re.I)
+_FLORAL_DESIGN = re.compile(r"\b(?:floral|design|designs)\b", re.I)
+_GIFT_VOUCHER_Q = re.compile(r"\bgift\s+voucher\b", re.I)
 _CATALOG_INTENT = re.compile(
     r"\b(?:cake|flower|chocolate|gift|hamper|bouquet|roses?|product|search|find|show|"
     r"deliver|track|VIMP)\b",
@@ -367,10 +411,78 @@ def _last_search_products_from_trace(
                 query=user_message,
                 hybrid_context=hybrid_context,
                 graph_context_available=has_graph_hybrid_context(hybrid_context),
+                session_product_focus=state.get("session_product_focus"),
             )
             or None
         )
     return None
+
+
+def _merge_search_results(
+    primary: dict[str, Any],
+    secondary: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge two search_products payloads, deduping by product id (primary order first)."""
+    if not isinstance(primary, dict):
+        return secondary if isinstance(secondary, dict) else primary
+    if not isinstance(secondary, dict):
+        return primary
+    if "error" in primary:
+        return secondary if "error" not in secondary else primary
+    if "error" in secondary:
+        return primary
+
+    seen: set[str] = set()
+    merged_results: list[dict[str, Any]] = []
+
+    for payload in (primary, secondary):
+        raw_results = payload.get("results")
+        if not isinstance(raw_results, list):
+            continue
+        for product in raw_results:
+            if not isinstance(product, dict):
+                continue
+            product_id = product.get("id")
+            key = str(product_id) if product_id is not None else None
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            merged_results.append(product)
+
+    merged = dict(primary)
+    merged["results"] = merged_results
+    return merged
+
+
+def _dual_gift_physical_query(user_message: str) -> str:
+    """Pick a physical-gift search query to pair with gift voucher searches."""
+    lowered = user_message.lower()
+    if "chocolate" in lowered:
+        return "chocolates gift"
+    if "hamper" in lowered:
+        return "gift hamper"
+    return "gift hamper"
+
+
+def _should_run_dual_gift_search(
+    state: AgentState,
+    tool_args: dict[str, Any],
+    *,
+    already_ran: bool,
+) -> bool:
+    """True when a budgeted gift turn should also search physical gifts."""
+    if already_ran:
+        return False
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    budget_max = intent_metadata.get("budget_max") or state.get("session_budget_max")
+    if not isinstance(budget_max, (int, float)) or budget_max <= 0:
+        return False
+    query = str(tool_args.get("q") or tool_args.get("query") or "")
+    if not _GIFT_VOUCHER_Q.search(query):
+        return False
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    return bool(_GIFT_WORD.search(user_message))
 
 
 def _curate_search_trace_result(
@@ -390,6 +502,7 @@ def _curate_search_trace_result(
     user_message = _extract_latest_user_message(state.get("messages") or [])
     hybrid_context = state.get("hybrid_context") or {}
     graph_up = has_graph_hybrid_context(hybrid_context)
+    session_focus = state.get("session_product_focus")
     curated = apply_birthday_cake_curation(
         apply_puja_curation(
             products,
@@ -399,6 +512,7 @@ def _curate_search_trace_result(
         query=user_message,
         hybrid_context=hybrid_context,
         graph_context_available=graph_up,
+        session_product_focus=session_focus,
     )
     if curated == products:
         return result
@@ -430,6 +544,55 @@ def _max_iterations_for_state(state: AgentState, refined_intent: Intent | None) 
     return UTILITY_GENERAL_MAX_ITERATIONS
 
 
+def _search_query_from_result(result: Any) -> str | None:
+    """Extract applied_filters.q from a kapruka_search_products payload."""
+    if not isinstance(result, dict):
+        return None
+    filters = result.get("applied_filters")
+    if isinstance(filters, dict):
+        query = filters.get("q")
+        if isinstance(query, str) and query.strip():
+            return query.strip()
+    return None
+
+
+def _accessory_ratio(products: list[dict[str, Any]]) -> float:
+    if not products:
+        return 0.0
+    accessories = sum(1 for product in products if is_cake_accessory(product))
+    return accessories / len(products)
+
+
+def _trace_has_dated_check_delivery(tool_trace: list[ToolInvocation]) -> bool:
+    for invocation in reversed(tool_trace):
+        if invocation["name"] != CHECK_DELIVERY_TOOL:
+            continue
+        args = invocation.get("args")
+        if isinstance(args, dict):
+            delivery_date = args.get("delivery_date")
+            if isinstance(delivery_date, str) and delivery_date.strip():
+                return True
+    return False
+
+
+def _delivery_check_pending(state: AgentState, tool_trace: list[ToolInvocation]) -> bool:
+    """True when city+date are known but kapruka_check_delivery has not run with a date."""
+    session_date = state.get("session_delivery_date") or state.get("delivery_date")
+    if not (isinstance(session_date, str) and session_date.strip()):
+        return False
+    canonical_city = state.get("delivery_city_canonical") or state.get(
+        "session_delivery_city_canonical",
+    )
+    if not (isinstance(canonical_city, str) and canonical_city.strip()):
+        return False
+    if _trace_has_dated_check_delivery(tool_trace):
+        return False
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    if intent_metadata.get("requires_delivery_validation") or intent_metadata.get("target_city"):
+        return True
+    return bool(state.get("session_delivery_city_confirmed"))
+
+
 def _should_force_finish_after_search(
     state: AgentState,
     tool_trace: list[ToolInvocation],
@@ -454,10 +617,16 @@ def _format_planner_query_rewrite_hints(
     message_count: int = 1,
     budget_max: float | None = None,
     graph_context_available: bool = False,
+    session_product_focus: str | None = None,
 ) -> str:
     """Soft search-query rewrite suggestions for broad cake and mom/birthday turns."""
     hints: list[str] = []
     has_budget = budget_max is not None and budget_max > 0
+    if session_product_focus == "cake" and _FLORAL_DESIGN.search(user_message):
+        hints.append(
+            'Session shopping focus is cake: prefer kapruka_search_products with '
+            'q="floral birthday cake" and category="Birthday" rather than jewelry or apparel.'
+        )
     if message_count > 1 and _SHORT_CATEGORY_REPLY.match(user_message.strip()):
         hints.append(
             "Follow-up category reply after a prior clarifying turn: prefer action call_tool "
@@ -486,8 +655,9 @@ def _format_planner_query_rewrite_hints(
     if _BROAD_GIFTS.match(user_message.strip()):
         if has_budget:
             hints.append(
-                f'Budgeted "gifts" query: prefer action call_tool with kapruka_search_products '
-                f'q="gift voucher" and max_price={budget_max} rather than ask_user.'
+                f'Budgeted "gifts" query: prefer two kapruka_search_products calls — '
+                f'(1) q="gift voucher" max_price={budget_max}, then '
+                f'(2) q="gift hamper" max_price={budget_max} — rather than ask_user.'
             )
         else:
             hints.append(
@@ -496,8 +666,9 @@ def _format_planner_query_rewrite_hints(
             )
     elif has_budget and _GIFT_WORD.search(user_message):
         hints.append(
-            f"Budgeted gift query: prefer action call_tool with kapruka_search_products "
-            f'q="gift voucher" and max_price={budget_max} before ask_user.'
+            f"Budgeted gift query: prefer two kapruka_search_products calls — "
+            f'(1) q="gift voucher" max_price={budget_max}, then '
+            f'(2) q="gift hamper" max_price={budget_max} — before ask_user.'
         )
     if _FLOWERS_REQUEST.search(user_message):
         hints.append(
@@ -541,12 +712,36 @@ def _build_planner_system_instruction(
         f"Today in Sri Lanka: {colombo_today_iso()}\n"
         "For kapruka_check_delivery, delivery_date must be YYYY-MM-DD on or after today."
     )
+    currency = state.get("currency")
+    if isinstance(currency, str) and currency.strip():
+        instruction += (
+            f"\n\nDisplay currency (authoritative): {currency.strip()} — use for all price "
+            "filters; do not ask the customer to choose currency."
+        )
+    session_date = state.get("session_delivery_date") or state.get("delivery_date")
+    if isinstance(session_date, str) and session_date.strip():
+        instruction += (
+            f"\n\nResolved delivery date: {session_date.strip()} — do not ask_user for the "
+            "date when delivery validation is needed; use this date in kapruka_check_delivery."
+        )
+    session_focus = state.get("session_product_focus")
+    if isinstance(session_focus, str) and session_focus.strip():
+        instruction += f"\n\nSession shopping focus: {session_focus.strip()} (from earlier turn)."
+    session_search_q = state.get("session_search_query")
+    if isinstance(session_search_q, str) and session_search_q.strip():
+        instruction += (
+            f"\n\nSession search topic: {session_search_q.strip()} — reuse for budget refinements."
+        )
     zep_memory_facts = state.get("zep_memory_facts")
     if zep_memory_facts:
         user_message = _extract_latest_user_message(state.get("messages") or [])
         scoped_facts = scope_memory_facts_for_turn(zep_memory_facts, user_message)
         if scoped_facts:
-            instruction += format_memory_facts_block(scoped_facts)
+            facts_block = format_memory_facts_block(scoped_facts).replace(
+                "Prior session facts (context only):",
+                "Prior context — do not mention unless the customer asks:",
+            )
+            instruction += facts_block
     hybrid_block = _format_hybrid_soft_hints(state)
     if hybrid_block:
         instruction += (
@@ -564,6 +759,15 @@ def _build_planner_user_prompt(state: AgentState) -> str:
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
     prompt = f"Customer message:\n{user_message}"
+    currency = state.get("currency")
+    if isinstance(currency, str) and currency.strip():
+        prompt += f"\n\nSession display currency: {currency.strip()}"
+    session_date = state.get("session_delivery_date") or state.get("delivery_date")
+    if isinstance(session_date, str) and session_date.strip():
+        prompt += f"\n\nResolved delivery date: {session_date.strip()}"
+    session_focus = state.get("session_product_focus")
+    if isinstance(session_focus, str) and session_focus.strip():
+        prompt += f"\n\nSession shopping focus: {session_focus.strip()}"
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     budget_max = intent_metadata.get("budget_max")
     hybrid_context = state.get("hybrid_context") or {}
@@ -572,6 +776,7 @@ def _build_planner_user_prompt(state: AgentState) -> str:
         message_count=len(messages),
         budget_max=budget_max if isinstance(budget_max, (int, float)) else None,
         graph_context_available=has_graph_hybrid_context(hybrid_context),
+        session_product_focus=session_focus if isinstance(session_focus, str) else None,
     )
     if rewrite_hints:
         prompt += f"\n\n{rewrite_hints}"
@@ -688,6 +893,17 @@ async def agent_loop(
     refined_intent: Intent | None = None
     search_broaden_applied = False
     discovery_search_merged = False
+    dual_gift_search_applied = False
+    budget_refinement_search_applied = False
+    session_delivery_date_update: str | None = None
+    session_search_query_update: str | None = None
+
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    budget_refinement_args = build_budget_refinement_search_args(
+        dict(state),
+        user_message,
+        currency=currency,
+    )
 
     _emit_status(_DEFAULT_STATUS_MESSAGE)
 
@@ -705,6 +921,65 @@ async def agent_loop(
             exit_reason = force_finish_reason or "duplicate_guard"
             agent_loop_done = True
             break
+
+        if (
+            iteration == 0
+            and budget_refinement_args is not None
+            and not budget_refinement_search_applied
+            and is_budget_refinement_message(user_message)
+            and (
+                state.get("session_search_query")
+                or state.get("session_product_focus")
+            )
+        ):
+            tool_name = SEARCH_PRODUCTS_TOOL
+            enriched_args = _inject_tool_currency(
+                tool_name,
+                dict(budget_refinement_args),
+                state,
+                currency,
+            )
+            enriched_args = merge_planner_search_args(
+                enriched_args,
+                user_message=user_message,
+                hybrid_context=state.get("hybrid_context") or {},
+                currency=currency,
+                intent_metadata=state.get("intent_metadata"),
+                state=dict(state),
+            )
+            discovery_search_merged = True
+            budget_refinement_search_applied = True
+            _emit_status(_status_message_for_tool(tool_name))
+            result = await invoke_tool(
+                tool_name,
+                enriched_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+            result = _curate_search_trace_result(result, state=state)
+            tool_trace.append(
+                {"name": tool_name, "args": enriched_args, "result": result},
+            )
+            tool_call_count += 1
+            search_q = _search_query_from_result(result)
+            if search_q:
+                session_search_query_update = search_q
+            if isinstance(result, dict) and result.get("error"):
+                agent_tool_error = {
+                    "tool": tool_name,
+                    "message": str(result.get("message") or result.get("error")),
+                }
+                exit_reason = "tool_error"
+                agent_loop_done = True
+                break
+            if _search_has_products(result) and _should_force_finish_after_search(
+                state,
+                tool_trace,
+            ):
+                force_finish = True
+                force_finish_reason = "finish"
+            continue
 
         _emit_status(_DEFAULT_STATUS_MESSAGE)
 
@@ -744,6 +1019,43 @@ async def agent_loop(
             break
 
         if step.action == "finish":
+            if _delivery_check_pending(state, tool_trace):
+                tool_name = CHECK_DELIVERY_TOOL
+                canonical_city = state.get("delivery_city_canonical") or state.get(
+                    "session_delivery_city_canonical",
+                )
+                session_date = state.get("session_delivery_date") or state.get("delivery_date")
+                delivery_args: dict[str, Any] = {
+                    "city": str(canonical_city).strip(),
+                    "delivery_date": str(session_date).strip(),
+                }
+                delivery_args = _inject_tool_currency(
+                    tool_name,
+                    delivery_args,
+                    state,
+                    currency,
+                )
+                if not _is_duplicate_invocation(tool_trace, tool_name, delivery_args):
+                    _emit_status(_status_message_for_tool(tool_name))
+                    delivery_result = await invoke_tool(
+                        tool_name,
+                        delivery_args,
+                        kapruka_service=kapruka_service,
+                        client_ip=rate_limit_key,
+                        currency=currency,
+                    )
+                    tool_trace.append(
+                        {
+                            "name": tool_name,
+                            "args": delivery_args,
+                            "result": delivery_result,
+                        },
+                    )
+                    tool_call_count += 1
+                    if isinstance(delivery_result, dict) and not delivery_result.get("error"):
+                        session_awaiting_delivery_date = False
+                        session_delivery_date_update = delivery_args["delivery_date"]
+                    continue
             exit_reason = "finish"
             agent_loop_done = True
             break
@@ -762,7 +1074,19 @@ async def agent_loop(
             break
 
         raw_args = normalize_planner_tool_args(tool_name, dict(step.tool_args or {}))
-        enriched_args = inject_currency(tool_name, raw_args, currency)
+        enriched_args = _inject_tool_currency(tool_name, raw_args, state, currency)
+
+        if tool_name == GET_PRODUCT_TOOL:
+            enriched_args, product_error = enrich_get_product_args(enriched_args, state)
+            if product_error is not None:
+                agent_tool_error = {
+                    "tool": GET_PRODUCT_TOOL,
+                    "message": str(product_error.get("message", "product_id_unresolved")),
+                    "error": str(product_error.get("error", "product_id_unresolved")),
+                }
+                exit_reason = "tool_error"
+                agent_loop_done = True
+                break
 
         if tool_name == SEARCH_PRODUCTS_TOOL and not discovery_search_merged:
             enriched_args = merge_planner_search_args(
@@ -771,7 +1095,13 @@ async def agent_loop(
                 hybrid_context=state.get("hybrid_context") or {},
                 currency=currency,
                 intent_metadata=state.get("intent_metadata"),
+                state=dict(state),
             )
+            if is_broad_cakes_query(user_message) or is_broad_cakes_query(
+                str(enriched_args.get("q") or ""),
+            ):
+                enriched_args["q"] = "birthday cake"
+                enriched_args.setdefault("category", "Birthday")
             discovery_search_merged = True
 
         if tool_name == CHECK_DELIVERY_TOOL:
@@ -781,10 +1111,18 @@ async def agent_loop(
                 session_city = state.get("session_delivery_city_canonical")
                 if isinstance(session_city, str) and session_city.strip():
                     canonical_city = session_city.strip()
+            if not (isinstance(enriched_args.get("city"), str) and enriched_args["city"].strip()):
+                intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+                target_city = intent_metadata.get("target_city")
+                if isinstance(target_city, str) and target_city.strip():
+                    enriched_args["city"] = target_city.strip()
             if isinstance(canonical_city, str) and canonical_city.strip():
                 enriched_args["city"] = canonical_city.strip()
             state_date = state.get("delivery_date")
-            if isinstance(state_date, str) and state_date.strip():
+            session_date = state.get("session_delivery_date")
+            if isinstance(session_date, str) and session_date.strip():
+                enriched_args["delivery_date"] = session_date.strip()
+            elif isinstance(state_date, str) and state_date.strip():
                 enriched_args["delivery_date"] = state_date.strip()
             resolved_date = normalize_delivery_date(enriched_args, user_message)
             if resolved_date is None:
@@ -816,6 +1154,98 @@ async def agent_loop(
         )
         if tool_name == SEARCH_PRODUCTS_TOOL:
             result = _curate_search_trace_result(result, state=state)
+            search_q = _search_query_from_result(result)
+            if search_q:
+                session_search_query_update = search_q
+            if _search_has_products(result):
+                raw_results = result.get("results")
+                products = [
+                    item for item in (raw_results or []) if isinstance(item, dict)
+                ]
+                if products and _accessory_ratio(products) > 0.5 and (
+                    is_broad_cakes_query(user_message)
+                    or is_broad_cakes_query(str(enriched_args.get("q") or ""))
+                ):
+                    retry_args = {
+                        **enriched_args,
+                        "q": "birthday cake",
+                        "category": "Birthday",
+                    }
+                    if not _is_duplicate_invocation(tool_trace, SEARCH_PRODUCTS_TOOL, retry_args):
+                        _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+                        retry_result = await invoke_tool(
+                            SEARCH_PRODUCTS_TOOL,
+                            _inject_tool_currency(
+                                SEARCH_PRODUCTS_TOOL,
+                                retry_args,
+                                state,
+                                currency,
+                            ),
+                            kapruka_service=kapruka_service,
+                            client_ip=rate_limit_key,
+                            currency=currency,
+                        )
+                        retry_result = _curate_search_trace_result(
+                            retry_result,
+                            state=state,
+                        )
+                        tool_trace.append(
+                            {
+                                "name": SEARCH_PRODUCTS_TOOL,
+                                "args": retry_args,
+                                "result": retry_result,
+                            },
+                        )
+                        tool_call_count += 1
+                        if _search_has_products(retry_result):
+                            result = retry_result
+                            retry_q = _search_query_from_result(retry_result)
+                            if retry_q:
+                                session_search_query_update = retry_q
+            if _should_run_dual_gift_search(
+                state,
+                enriched_args,
+                already_ran=dual_gift_search_applied,
+            ):
+                dual_gift_search_applied = True
+                user_message = _extract_latest_user_message(state.get("messages") or [])
+                physical_args = _inject_tool_currency(
+                    SEARCH_PRODUCTS_TOOL,
+                    {
+                        **enriched_args,
+                        "q": _dual_gift_physical_query(user_message),
+                    },
+                    state,
+                    currency,
+                )
+                if not _is_duplicate_invocation(tool_trace, SEARCH_PRODUCTS_TOOL, physical_args):
+                    _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+                    physical_result = await invoke_tool(
+                        SEARCH_PRODUCTS_TOOL,
+                        physical_args,
+                        kapruka_service=kapruka_service,
+                        client_ip=rate_limit_key,
+                        currency=currency,
+                    )
+                    physical_result = _curate_search_trace_result(
+                        physical_result,
+                        state=state,
+                    )
+                    tool_trace.append(
+                        {
+                            "name": SEARCH_PRODUCTS_TOOL,
+                            "args": physical_args,
+                            "result": physical_result,
+                        },
+                    )
+                    tool_call_count += 1
+                    if isinstance(physical_result, dict) and physical_result.get("error"):
+                        logger.debug(
+                            "agent_loop: dual gift physical search returned error %r",
+                            physical_result.get("error"),
+                        )
+                    else:
+                        result = _merge_search_results(result, physical_result)
         tool_trace.append(
             {
                 "name": tool_name,
@@ -848,6 +1278,9 @@ async def agent_loop(
             isinstance(result, dict) and result.get("error")
         ):
             session_awaiting_delivery_date = False
+            delivery_date_arg = enriched_args.get("delivery_date")
+            if isinstance(delivery_date_arg, str) and delivery_date_arg.strip():
+                session_delivery_date_update = delivery_date_arg.strip()
 
         if (
             tool_name == SEARCH_PRODUCTS_TOOL
@@ -864,7 +1297,7 @@ async def agent_loop(
                 _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
                 broaden_result = await invoke_tool(
                     SEARCH_PRODUCTS_TOOL,
-                    broadened_args,
+                    _inject_tool_currency(SEARCH_PRODUCTS_TOOL, broadened_args, state, currency),
                     kapruka_service=kapruka_service,
                     client_ip=rate_limit_key,
                     currency=currency,
@@ -901,6 +1334,12 @@ async def agent_loop(
                 ):
                     logger.debug(
                         "agent_loop: broaden search returned products; forcing finish",
+                    )
+                    force_finish = True
+                    force_finish_reason = "finish"
+                elif not _search_has_products(broaden_result) and _has_budget_query(state):
+                    logger.debug(
+                        "agent_loop: budget search empty after broaden; forcing finish",
                     )
                     force_finish = True
                     force_finish_reason = "finish"
@@ -944,6 +1383,11 @@ async def agent_loop(
         updates["search_broaden_applied"] = True
     if session_awaiting_delivery_date is not None:
         updates["session_awaiting_delivery_date"] = session_awaiting_delivery_date
+    if session_delivery_date_update is not None:
+        updates["session_delivery_date"] = session_delivery_date_update
+        updates["delivery_date"] = session_delivery_date_update
+    if session_search_query_update is not None:
+        updates["session_search_query"] = session_search_query_update
 
     last_search_products = _last_search_products_from_trace(tool_trace, state=state)
     if last_search_products:

@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 from typing import Literal
 
+from lib.chat.off_topic import is_off_topic_message
 from lib.checkout.tracking import KA_LEGACY_RE, ORD_REF_RE, VIMP_RE
+from lib.neo4j.hybrid_context import extract_budget, extract_max_price
 
 Intent = Literal["discovery", "checkout", "tracking", "general", "cart"]
 
@@ -46,6 +48,28 @@ _CHECKOUT_TRIGGER_TOKENS: frozenset[str] = frozenset(
 )
 
 PROCEED_CHECKOUT_MESSAGE = "Proceed to checkout"
+
+_VAGUE_GIFT_RE = re.compile(
+    r"\b(?:gift ideas|present ideas|what should i gift)\b",
+    re.I,
+)
+_GIFT_SPECIFIC_RE = re.compile(
+    r"\b(?:cake|flower|hamper|voucher|mom|dad|mother|father|birthday|anniversary|chocolate|roses?)\b",
+    re.I,
+)
+
+GIFT_PREFERENCES_QUESTION = (
+    "Who is the gift for, and do you have a style in mind — flowers, cake, voucher, or hamper? "
+    "For example: 'birthday cake for mom under Rs 5,000'."
+)
+
+
+def is_vague_gift_intent(message: str) -> bool:
+    """True for broad gift-idea queries without occasion, recipient, or product type."""
+    stripped = message.strip()
+    if not stripped or not _VAGUE_GIFT_RE.search(stripped):
+        return False
+    return not _GIFT_SPECIFIC_RE.search(stripped)
 
 
 def is_cart_add_trigger(message: str) -> bool:
@@ -107,6 +131,44 @@ def classify_routing_guard(message: str) -> Intent | None:
     if is_checkout_trigger(message):
         return "checkout"
     return None
+
+
+_PRODUCT_CATEGORY_TOKENS = re.compile(
+    r"\b(?:cake|cupcakes?|flower|flowers|rose|roses|bouquet|chocolate|chocolates|"
+    r"hamper|voucher|gift|gifts|combo|combopack)\b",
+    re.I,
+)
+_TOPIC_PIVOT_PREFIX = re.compile(
+    r"^(?:never\s*mind|nevermind|instead|actually)\b",
+    re.I,
+)
+_BARE_CATEGORY_REPLY = re.compile(
+    r"^(?:cakes?|flowers?|chocolates?|roses?|bouquets?|gifts?)\s*[!.?]*$",
+    re.I,
+)
+
+
+def is_budget_refinement_message(message: str) -> bool:
+    """True when the turn states a budget without naming a new product category."""
+    stripped = message.strip()
+    if not stripped or is_off_topic_message(stripped):
+        return False
+    has_budget = extract_budget(stripped) is not None or extract_max_price(stripped) is not None
+    if not has_budget:
+        return False
+    return not _PRODUCT_CATEGORY_TOKENS.search(stripped)
+
+
+def is_topic_pivot_message(message: str) -> bool:
+    """True when the customer abandons the prior topic for a new product category."""
+    stripped = message.strip()
+    if not stripped:
+        return False
+    if _TOPIC_PIVOT_PREFIX.search(stripped):
+        return True
+    if _BARE_CATEGORY_REPLY.match(stripped):
+        return True
+    return bool(re.search(r"nevermind.*\b(?:cakes?|flowers?|chocolates?)\b", stripped, re.I))
 
 
 def infer_intent_from_message(message: str) -> Intent:

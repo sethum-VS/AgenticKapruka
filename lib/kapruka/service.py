@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from lib.kapruka.errors import KaprukaRateLimitError
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.tools import (
     check_delivery,
@@ -82,7 +85,19 @@ class KaprukaService:
         if cached is not None:
             return from_cache(cached)
 
-        result = await fetch()
+        try:
+            result = await fetch()
+        except KaprukaRateLimitError as exc:
+            delay = min(exc.retry_after_seconds, 5)
+            logger = logging.getLogger(__name__)
+            logger.info(
+                "Kapruka rate limit on %s; retrying after %ss",
+                tool_name,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            result = await fetch()
+
         await set_cached(self._redis, tool_name, cache_args, to_cache(result))
         return result
 

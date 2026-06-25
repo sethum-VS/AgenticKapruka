@@ -194,12 +194,30 @@ async def test_resolve_delivery_context_preflight_check_delivery_on_city_resolve
 
 
 @pytest.mark.asyncio
-async def test_resolve_delivery_context_preflight_skipped_when_date_present() -> None:
-    """Preflight is skipped when the user message already names a delivery date."""
+async def test_resolve_delivery_context_dated_preflight_when_date_present() -> None:
+    """Dated preflight runs kapruka_check_delivery when city and date are both known."""
     service = AsyncMock(spec=KaprukaService)
+    preflight_output = {
+        "city": "Galle",
+        "now": "2026-06-12T12:00:00+05:30",
+        "checked_date": "2026-06-13",
+        "available": True,
+        "rate": 500.0,
+        "currency": "LKR",
+        "reason": None,
+        "next_available_date": None,
+        "perishable_warning": None,
+    }
+
+    class _MockOutput:
+        def model_dump(self) -> dict[str, object]:
+            return preflight_output
+
+    service.check_delivery.return_value = _MockOutput()
+
     state: AgentState = {
         "messages": [HumanMessage(content="roses for Galle tomorrow")],
-        "session_id": "sess-resolve-preflight-skip",
+        "session_id": "sess-resolve-preflight-dated",
         "intent_metadata": {
             "is_situational": False,
             "detected_vernacular": "en",
@@ -227,8 +245,14 @@ async def test_resolve_delivery_context_preflight_skipped_when_date_present() ->
             client_ip=_CLIENT_IP,
         )
 
-    service.check_delivery.assert_not_awaited()
-    assert result.get("tool_trace") in (None, [])
+    service.check_delivery.assert_awaited_once_with(
+        _CLIENT_IP,
+        city="Galle",
+        delivery_date="2026-06-13",
+    )
+    tool_trace = result.get("tool_trace") or []
+    assert len(tool_trace) == 1
+    assert tool_trace[0]["args"] == {"city": "Galle", "delivery_date": "2026-06-13"}
 
 
 @pytest.mark.asyncio

@@ -464,3 +464,49 @@ def test_enrich_flower_fruit_negative_hints_skips_without_graph_context() -> Non
         {"hints": {"category": "Flowers"}},
     )
     assert "exclude_categories" not in context.get("hints", {})
+
+
+def test_is_broad_cakes_query_matches_bare_cakes_only() -> None:
+    from lib.neo4j.hybrid_context import is_broad_cakes_query
+
+    assert is_broad_cakes_query("cakes")
+    assert is_broad_cakes_query("Nevermind. Cakes.")
+    assert not is_broad_cakes_query("cake for mom")
+    assert not is_broad_cakes_query("birthday cake for mom")
+
+
+def test_build_budget_refinement_search_args_uses_session_query() -> None:
+    from lib.neo4j.hybrid_context import build_budget_refinement_search_args
+
+    args = build_budget_refinement_search_args(
+        {
+            "session_search_query": "chocolate gift",
+            "session_product_focus": "chocolate",
+            "session_budget_max": 6000.0,
+            "intent_metadata": {"budget_max": 6000.0},
+        },
+        "under 6000",
+        currency="LKR",
+    )
+    assert args is not None
+    assert args["q"] == "chocolate gift"
+    assert args["max_price"] == 6000.0
+
+
+def test_merge_planner_search_args_budget_refinement() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "gift voucher"},
+        user_message="under 6000",
+        hybrid_context={},
+        currency="LKR",
+        state={
+            "session_search_query": "chocolate gift",
+            "session_product_focus": "chocolate",
+            "session_budget_max": 6000.0,
+            "intent_metadata": {"budget_max": 6000.0},
+        },
+    )
+    assert merged["q"] == "chocolate gift"
+    assert merged["max_price"] == 6000.0

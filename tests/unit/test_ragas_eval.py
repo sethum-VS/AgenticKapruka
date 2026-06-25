@@ -131,7 +131,7 @@ async def test_agent_loop_multi_step_anniversary_kandy(redis_client: RedisClient
         id="agent-001-anniversary-kandy-dinner",
         scenario="discovery",
         user_query="Plan a surprise anniversary dinner in Kandy next Saturday — flowers and a cake",
-        expected_tools=[SEARCH_PRODUCTS_TOOL, CHECK_DELIVERY_TOOL],
+        expected_tools=[CHECK_DELIVERY_TOOL, SEARCH_PRODUCTS_TOOL],
         reference_answer="Search then check Kandy delivery.",
     )
     graph = await build_eval_graph_for_case(case, redis_client)

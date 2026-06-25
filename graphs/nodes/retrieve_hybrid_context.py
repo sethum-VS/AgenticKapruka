@@ -41,6 +41,7 @@ RouteAfterAnalyzeIntent = Literal[
     "run_checkout_graph",
     "resolve_cart_product",
     "resolve_delivery_context",
+    "generate_response",
 ]
 
 _INTENTS_SKIP_HYBRID_CONTEXT: frozenset[Intent] = frozenset({"tracking"})
@@ -55,6 +56,16 @@ EmbedTextsFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
     """Conditional edge after analyze_intent: checkout sub-graph or HybridRAG skip."""
+    clarifying = state.get("agent_clarifying_question")
+    if isinstance(clarifying, str) and clarifying.strip():
+        trace_route_decision(
+            from_node="analyze_intent",
+            target="generate_response",
+            intent=state.get("intent"),
+            reason="clarifying question from intent preprocessing",
+        )
+        return "generate_response"
+
     intent = state.get("intent")
     if intent == "checkout":
         logger.debug("route_after_analyze_intent: routing to checkout sub-graph")
@@ -212,6 +223,21 @@ async def retrieve_hybrid_context(
             )
             if graph_context:
                 hybrid_context = _merge_graph_hybrid_context(hybrid_context, graph_context)
+                product_count = len(graph_context.get("vector_hits") or []) + len(
+                    graph_context.get("categories") or [],
+                )
+                if product_count == 0:
+                    logger.warning(
+                        "retrieve_hybrid_context: Neo4j graph returned 0 products for %r — "
+                        "run `python scripts/bootstrap_neo4j.py` for local GraphRAG",
+                        user_message[:80],
+                    )
+            else:
+                logger.warning(
+                    "retrieve_hybrid_context: Neo4j graph returned 0 products for %r — "
+                    "run `python scripts/bootstrap_neo4j.py` before local eval",
+                    user_message[:80],
+                )
         except Exception:
             logger.exception(
                 "retrieve_hybrid_context: Neo4j GraphRAG failed; continuing with Zep only",

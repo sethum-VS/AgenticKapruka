@@ -6,7 +6,8 @@ import re
 from typing import Literal
 
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
-from lib.neo4j.hybrid_context import extract_max_price
+from lib.chat.off_topic import is_off_topic_message
+from lib.neo4j.hybrid_context import extract_budget, extract_max_price
 
 QueryMode = Literal["utility", "situational"]
 
@@ -165,14 +166,20 @@ class QueryPreprocessor:
         stripped = text.strip()
         mode = classify_query_mode(stripped)
         vernacular = detect_vernacular(stripped)
-        target_city = extract_target_city(stripped)
-        requires_delivery = target_city is not None and (
-            _has_delivery_intent(stripped) or _has_perishable_gift_intent(stripped)
+        off_topic = is_off_topic_message(stripped)
+        target_city = None if off_topic else extract_target_city(stripped)
+        requires_delivery = (
+            not off_topic
+            and target_city is not None
+            and (_has_delivery_intent(stripped) or _has_perishable_gift_intent(stripped))
         )
+        budget_cap = extract_budget(stripped)
         return {
             "is_situational": mode == "situational",
             "detected_vernacular": vernacular,
             "requires_delivery_validation": requires_delivery,
             "target_city": target_city,
-            "budget_max": extract_max_price(stripped),
+            "budget_max": budget_cap.amount if budget_cap else extract_max_price(stripped),
+            "budget_currency": budget_cap.currency if budget_cap else None,
+            "vernacular_score_hint": vernacular_score_hint(stripped),
         }

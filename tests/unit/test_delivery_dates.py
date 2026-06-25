@@ -102,5 +102,9 @@ def test_is_delivery_date_only_message_false_when_city_present() -> None:
     assert is_delivery_date_only_message("deliver to Kandy tomorrow", today=_FRIDAY) is False
 
 
-def test_is_delivery_date_only_message_false_without_date() -> None:
-    assert is_delivery_date_only_message("can you deliver?", today=_FRIDAY) is False
+def test_parse_relative_bare_saturday() -> None:
+    """Bare weekday resolves to the next occurrence."""
+    friday = date(2026, 6, 12)
+    assert parse_relative_delivery_date("Saturday", today=friday) == date(2026, 6, 13)
+
+

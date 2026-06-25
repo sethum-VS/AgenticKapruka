@@ -7,17 +7,22 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from graphs.nodes.resolve_cart_product import match_products_by_phrase
+from graphs.state import AgentState
 from lib.kapruka.errors import KaprukaError
 from lib.kapruka.service import KaprukaService
-from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import (
     CheckDeliveryInput,
+    DeliveryCity,
     GetProductInput,
     ListCategoriesInput,
+    ListDeliveryCitiesInput,
+    ListDeliveryCitiesOutput,
     SearchProductsInput,
     TrackOrderInput,
 )
@@ -31,6 +36,7 @@ SUPPORTED_TOOL_NAMES: frozenset[str] = frozenset(
         LIST_CATEGORIES_TOOL,
         TRACK_ORDER_TOOL,
         CHECK_DELIVERY_TOOL,
+        LIST_CITIES_TOOL,
     },
 )
 
@@ -42,6 +48,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     LIST_CATEGORIES_TOOL: ListCategoriesInput,
     TRACK_ORDER_TOOL: TrackOrderInput,
     CHECK_DELIVERY_TOOL: CheckDeliveryInput,
+    LIST_CITIES_TOOL: ListDeliveryCitiesInput,
 }
 
 _SERVICE_KWARG_EXCLUDE: dict[str, frozenset[str]] = {
@@ -50,6 +57,7 @@ _SERVICE_KWARG_EXCLUDE: dict[str, frozenset[str]] = {
     LIST_CATEGORIES_TOOL: frozenset({"response_format"}),
     TRACK_ORDER_TOOL: frozenset({"response_format"}),
     CHECK_DELIVERY_TOOL: frozenset({"response_format"}),
+    LIST_CITIES_TOOL: frozenset({"response_format"}),
 }
 
 
@@ -66,6 +74,18 @@ def normalize_planner_tool_args(name: str, args: dict[str, Any]) -> dict[str, An
             normalized["category"] = category_id.strip()
             normalized.pop("category_id", None)
     if name == CHECK_DELIVERY_TOOL:
+        city = normalized.get("city")
+        for alias in ("delivery_city", "city_name", "destination"):
+            alias_value = normalized.get(alias)
+            if (
+                (not isinstance(city, str) or not city.strip())
+                and isinstance(alias_value, str)
+                and alias_value.strip()
+            ):
+                normalized["city"] = alias_value.strip()
+                city = normalized["city"]
+            normalized.pop(alias, None)
+        normalized.pop("q", None)
         delivery_date = normalized.get("delivery_date")
         date_alias = normalized.get("date")
         if (
@@ -78,6 +98,56 @@ def normalize_planner_tool_args(name: str, args: dict[str, Any]) -> dict[str, An
     return normalized
 
 
+def enrich_get_product_args(
+    args: dict[str, Any],
+    state: AgentState,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Resolve product_id from carousel/session context before kapruka_get_product."""
+    enriched = dict(args)
+    product_id = enriched.get("product_id")
+    if isinstance(product_id, str) and product_id.strip():
+        return enriched, None
+
+    last_search = [
+        item for item in (state.get("last_search_products") or []) if isinstance(item, dict)
+    ]
+    name_keys = ("q", "product_name", "name")
+    phrase = ""
+    for key in name_keys:
+        raw = enriched.get(key)
+        if isinstance(raw, str) and raw.strip():
+            phrase = raw.strip()
+            break
+
+    if not phrase:
+        session_focus = state.get("session_product_focus")
+        if isinstance(session_focus, str) and session_focus.strip():
+            phrase = session_focus.strip()
+
+    if phrase and last_search:
+        for threshold in (0.6, 0.4):
+            matched, _tied, _question = match_products_by_phrase(
+                phrase,
+                last_search,
+                threshold=threshold,
+            )
+            if matched is not None:
+                pid = matched.get("id")
+                if pid is not None:
+                    resolved = {**enriched, "product_id": str(pid)}
+                    for key in name_keys:
+                        resolved.pop(key, None)
+                    return resolved, None
+
+    if phrase or any(key in args for key in name_keys):
+        return enriched, {
+            "error": "product_id_unresolved",
+            "message": "Could not resolve product name to a Kapruka product id.",
+        }
+
+    return enriched, None
+
+
 def canonical_tool_args_for_dedup(name: str, args: dict[str, Any]) -> dict[str, Any]:
     """Normalize args for duplicate-tool detection (ignore session currency injection)."""
     canonical = normalize_planner_tool_args(name, dict(args))
@@ -86,11 +156,18 @@ def canonical_tool_args_for_dedup(name: str, args: dict[str, Any]) -> dict[str, 
     return canonical
 
 
-def inject_currency(name: str, args: dict[str, Any], currency: str) -> dict[str, Any]:
-    """Ensure price-bearing MCP tools receive the session currency."""
-    if name in _CURRENCY_TOOLS and "currency" not in args:
-        return {**args, "currency": currency}
-    return args
+def inject_currency(
+    name: str,
+    args: dict[str, Any],
+    currency: str,
+    *,
+    budget_currency: str | None = None,
+) -> dict[str, Any]:
+    """Ensure price-bearing MCP tools receive session or explicit budget currency."""
+    if name not in _CURRENCY_TOOLS or "currency" in args:
+        return args
+    effective = budget_currency if budget_currency else currency
+    return {**args, "currency": effective}
 
 
 def serialize_tool_result(result: Any) -> dict[str, Any]:
@@ -146,6 +223,13 @@ async def _dispatch_tool(
         return await service.track_order(client_ip, **kwargs)
     if name == CHECK_DELIVERY_TOOL:
         return await service.check_delivery(client_ip, **kwargs)
+    if name == LIST_CITIES_TOOL:
+        names = await service.list_delivery_cities(client_ip, **kwargs)
+        return ListDeliveryCitiesOutput(
+            cities=[DeliveryCity(name=name) for name in names],
+            total_matched=len(names),
+            showing=len(names),
+        )
     msg = f"Unsupported MCP tool: {name}"
     raise ValueError(msg)
 
@@ -157,12 +241,18 @@ async def invoke_tool(
     kapruka_service: KaprukaService,
     client_ip: str,
     currency: str = "LKR",
+    budget_currency: str | None = None,
 ) -> dict[str, Any]:
     """Validate args, invoke KaprukaService, and return a serialized MCP payload.
 
     On Kapruka MCP or local validation failure, returns ``{"error": code, "message": ...}``.
     """
-    enriched = inject_currency(name, normalize_planner_tool_args(name, dict(args)), currency)
+    enriched = inject_currency(
+        name,
+        normalize_planner_tool_args(name, dict(args)),
+        currency,
+        budget_currency=budget_currency,
+    )
 
     try:
         validated = _validate_tool_args(name, enriched)

@@ -61,4 +61,8 @@
   .prose-assistant :where(strong) {
     @apply font-semibold text-commerce-ink;
   }
+
+  #chat-loading:not(.htmx-request) {
+    display: none;
+  }
 }

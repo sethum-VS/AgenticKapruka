@@ -42,6 +42,7 @@ from lib.chat.system_prompts import (
     select_response_system_instruction,
 )
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
+from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 
 _CHECKOUT_REVIEW_HTML = '<section data-testid="checkout-review">Review summary</section>'
@@ -576,11 +577,11 @@ def test_select_response_system_instruction_situational_tanglish() -> None:
         "requires_delivery_validation": False,
         "target_city": None,
         "budget_max": None,
+        "vernacular_score_hint": 0.45,
     }
     prompt = select_response_system_instruction(metadata)
     assert prompt.startswith(LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION)
     assert "Tanglish" in prompt
-    assert "machan" in prompt
 
 
 def test_select_response_system_instruction_defaults_to_utility() -> None:
@@ -636,6 +637,7 @@ async def test_generate_response_situational_metadata_uses_concierge_prompt() ->
             "requires_delivery_validation": False,
             "target_city": None,
             "budget_max": None,
+            "vernacular_score_hint": 0.45,
         },
         "session_id": "sess-gen-concierge",
     }
@@ -1085,6 +1087,15 @@ def test_build_agent_tool_error_message_generic_mcp() -> None:
     assert "adjust your request" in message.lower()
 
 
+def test_build_agent_tool_error_message_rate_limit() -> None:
+    message = build_agent_tool_error_message(
+        tool=SEARCH_PRODUCTS_TOOL,
+        raw_message="Rate limit exceeded",
+        error_code="429",
+    )
+    assert "catalog is busy" in message.lower()
+
+
 def test_build_agent_tool_error_message_city_not_deliverable() -> None:
     message = build_agent_tool_error_message(
         tool=CHECK_DELIVERY_TOOL,
@@ -1094,6 +1105,15 @@ def test_build_agent_tool_error_message_city_not_deliverable() -> None:
     assert "cannot deliver to that city" in message.lower()
     assert "Colombo 03" in message
     assert "loc:" not in message.lower()
+
+
+def test_build_agent_tool_error_message_get_product_unresolved() -> None:
+    message = build_agent_tool_error_message(
+        tool=GET_PRODUCT_TOOL,
+        raw_message="product_id_unresolved",
+        error_code="product_id_unresolved",
+    )
+    assert "carousel" in message.lower()
 
 
 def test_build_agent_tool_error_message_validation_error_hides_pydantic_loc() -> None:

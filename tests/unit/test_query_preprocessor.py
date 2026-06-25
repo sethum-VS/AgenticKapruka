@@ -68,6 +68,8 @@ def test_query_preprocessor_utility_transactional() -> None:
         "requires_delivery_validation": False,
         "target_city": None,
         "budget_max": 5000.0,
+        "budget_currency": "LKR",
+        "vernacular_score_hint": 0.0,
     }
 
 

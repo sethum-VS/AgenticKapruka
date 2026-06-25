@@ -124,6 +124,7 @@ def build_shopping_graph(
             state,
             kapruka_service=kapruka_service,
             client_ip=client_ip,
+            genai_client=genai_client,
         )
 
     graph = StateGraph(AgentState)
@@ -150,6 +151,7 @@ def build_shopping_graph(
             "run_checkout_graph": "run_checkout_graph",
             "resolve_cart_product": "resolve_cart_product",
             "resolve_delivery_context": "resolve_delivery_context",
+            "generate_response": "generate_response",
         },
     )
     graph.add_edge("retrieve_hybrid_context", "resolve_delivery_context")
@@ -228,7 +230,6 @@ def _per_turn_agent_reset_fields() -> dict[str, Any]:
         "delivery_city_canonical": None,
         "delivery_city_status": None,
         "delivery_city_candidates": None,
-        "delivery_date": None,
         "delivery_context_ready": None,
     }
 

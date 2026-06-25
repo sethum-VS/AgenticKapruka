@@ -7,14 +7,21 @@ from typing import Any, cast
 
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.checkout_graph import CheckoutGraphDeps, get_checkout_graph
-from graphs.checkout_state import CheckoutState, initial_checkout_state
+from graphs.checkout_state import (
+    CHECKOUT_STEP_ORDER,
+    CheckoutState,
+    initial_checkout_state,
+    next_checkout_step,
+)
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, CheckoutStep
 from lib.checkout.chat_parser import (
     apply_chat_message_to_checkout,
     prepare_checkout_invoke_state,
+    should_auto_advance_step,
     should_chain_finalize,
 )
+from lib.checkout.prefill import seed_checkout_from_agent_state
 from lib.checkout.review import review_context_from_checkout_state
 from lib.kapruka.service import KaprukaService
 from lib.redis.cart import get_cart
@@ -76,6 +83,28 @@ async def _invoke_checkout_graph(
         result = cast(dict[str, Any], await graph.ainvoke(merged))
         merged = {**merged, **result}
 
+    auto_guard = 0
+    while should_auto_advance_step(cast(CheckoutState, merged)) and auto_guard < len(
+        CHECKOUT_STEP_ORDER,
+    ):
+        auto_guard += 1
+        current = cast(CheckoutStep, merged.get("current_step") or "cart")
+        nxt = next_checkout_step(current)
+        if nxt is None:
+            break
+        merged["action"] = "advance"
+        merged["target_step"] = nxt
+        prev = current
+        result = cast(dict[str, Any], await graph.ainvoke(merged))
+        merged = {**merged, **result}
+        new_step = cast(CheckoutStep, merged.get("current_step") or prev)
+        if should_chain_finalize(prev, new_step, merged):
+            merged["action"] = "advance"
+            merged["target_step"] = "finalize"
+            result = cast(dict[str, Any], await graph.ainvoke(merged))
+            merged = {**merged, **result}
+            break
+
     return merged
 
 
@@ -100,6 +129,8 @@ async def run_checkout_graph(
     if redis_client is not None and session_id:
         persisted = await get_checkout_session(redis_client, session_id)
         checkout_input = _merge_persisted_into_checkout(checkout_input, persisted)
+
+    checkout_input = seed_checkout_from_agent_state(checkout_input, state)
 
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if user_message.strip():

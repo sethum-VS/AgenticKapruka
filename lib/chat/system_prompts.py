@@ -29,7 +29,8 @@ Synthesize a curated reply using ONLY the tool_results JSON provided.
 Rules:
 - Open with one brief sentence acknowledging the customer's occasion or recipient when mentioned.
 - Recommend your top 2–3 picks with a short rationale for each — do not dump the full catalog.
-- Quote product names and prices exactly as they appear in tool_results.
+- Quote product names exactly as they appear in tool_results.
+- Use each product's display_price field (Rs. X,XXX) for LKR prices in prose — not raw amount JSON.
 - When delivery city or date appears in tool_results or the customer message, mention it briefly.
 - Never invent products, prices, stock status, categories, or delivery facts.
 """
@@ -48,10 +49,11 @@ Rules:
 - Acknowledge the customer's situation with genuine empathy in one sentence before recommending.
 - Curate your top 2–3 picks with brief rationale — do not dump the full catalog.
 - Never invent products, prices, stock status, categories, or delivery facts.
-- Quote product names and prices exactly as they appear in tool_results.
+- Quote product names exactly as they appear in tool_results.
+- Use each product's display_price field (Rs. X,XXX) for LKR prices in prose — not raw amount JSON.
 - When delivery city or date is known, mention it with contextual hand-delivery advice for
   personal occasions (condolence, breakup, apology).
-- Use natural Sri Lankan warmth — phrases like Aiyo, bro, sis, or machan when appropriate.
+- Warm professional concierge tone by default.
 """
     + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
     + _CONCIERGE_EMPTY_TOOL_RESULTS_RULE
@@ -68,7 +70,7 @@ Rules:
 - Open warmly in one sentence when the customer shares an occasion or recipient.
 - Curate top 2–3 relevant picks with brief rationale when catalog data is present.
 - Never invent products, prices, stock status, categories, or delivery facts.
-- Quote names and facts exactly as they appear in tool_results.
+- Quote names exactly as they appear in tool_results; use display_price for LKR prose.
 - Mention delivery city or date when present in tool_results.
 """
     + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
@@ -121,17 +123,50 @@ def build_farewell_message() -> str:
 
 _VERNACULAR_GUIDANCE: dict[Vernacular, str] = {
     "en": (
-        "\nTone: Standard English with light Sri Lankan warmth (Aiyo, bro, sis) where natural.\n"
+        "\nTone: Mirror the customer's casual English tokens only when they used them "
+        "in this message.\n"
     ),
     "si": (
         "\nTone: Match Sinhala script when the customer writes in Sinhala; "
         "code-switch naturally between Sinhala and English.\n"
     ),
     "tanglish": (
-        "\nTone: Mirror Tanglish code-switching — use tokens like mage, machan, malli, "
-        "nangi, ona, denna alongside English product facts.\n"
+        "\nTone: Mirror Tanglish code-switching only when the customer initiated it "
+        "in this message.\n"
     ),
 }
+
+_PROFESSIONAL_TONE_RULE = (
+    "\nTone: Warm professional concierge. Mirror casual tokens (machan, bro, sis) "
+    "only if the customer used them in this message.\n"
+)
+
+
+def build_off_topic_redirect_message(topic: str) -> str:
+    """Polite redirect when the customer asks about weather, news, or general knowledge."""
+    if topic == "weather":
+        return (
+            "I can't check the weather, but I can help you send a gift anywhere in Sri Lanka — "
+            "cakes, flowers, chocolates, and hampers with delivery dates and rates. "
+            "What would you like to explore?"
+        )
+    return (
+        f"I can't help with {topic} here, but I'm your Kapruka gift concierge for cakes, "
+        "flowers, chocolates, and delivery across Sri Lanka. What gift can I help you find?"
+    )
+
+
+def build_impossible_product_redirect(subject: str) -> str:
+    """Redirect for live-animal or other impossible catalog requests."""
+    if "elephant" in subject.lower():
+        return (
+            "We can't deliver a live elephant, but stuffed elephant toys and gift hampers "
+            "are popular Kapruka picks. Would you like me to search for stuffed elephant toys?"
+        )
+    return (
+        f"We can't deliver {subject}, but Kapruka has thoughtful gift alternatives — "
+        "cakes, flowers, chocolates, hampers, and toys. What occasion are you shopping for?"
+    )
 
 
 def select_response_system_instruction(
@@ -143,9 +178,12 @@ def select_response_system_instruction(
     if intent == "general":
         return GENERAL_TOOL_RESULTS_SYSTEM_INSTRUCTION
     if intent_metadata and intent_metadata.get("is_situational"):
-        vernacular = intent_metadata.get("detected_vernacular", "en")
-        guidance = _VERNACULAR_GUIDANCE.get(vernacular, _VERNACULAR_GUIDANCE["en"])
-        return LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION + guidance
+        hint = intent_metadata.get("vernacular_score_hint", 0.0)
+        if isinstance(hint, (int, float)) and hint >= 0.3:
+            vernacular = intent_metadata.get("detected_vernacular", "en")
+            guidance = _VERNACULAR_GUIDANCE.get(vernacular, _VERNACULAR_GUIDANCE["en"])
+            return LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION + guidance
+        return LOCALIZED_CONCIERGE_SYSTEM_INSTRUCTION + _PROFESSIONAL_TONE_RULE
     return UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION
 
 

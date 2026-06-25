@@ -7,7 +7,7 @@ from typing import Literal, TypedDict
 Vernacular = Literal["en", "si", "tanglish"]
 
 
-class IntentMetadata(TypedDict):
+class IntentMetadata(TypedDict, total=False):
     """Pre-LLM signals from query preprocessing (utility vs concierge routing)."""
 
     is_situational: bool
@@ -15,3 +15,7 @@ class IntentMetadata(TypedDict):
     requires_delivery_validation: bool
     target_city: str | None
     budget_max: float | None
+    budget_currency: str | None
+    redirect_kind: str | None
+    is_off_topic: bool
+    vernacular_score_hint: float

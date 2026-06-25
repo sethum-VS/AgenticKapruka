@@ -21,6 +21,11 @@ _WEEKDAY_NAMES: dict[str, int] = {
     "sunday": 6,
 }
 
+_BARE_WEEKDAY = re.compile(
+    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.I,
+)
+
 
 def _resolve_weekday(today: date, target_weekday: int, *, is_next: bool) -> date:
     """Resolve this/next weekday relative to today in Colombo calendar."""
@@ -77,6 +82,11 @@ def parse_relative_delivery_date(text: str, *, today: date | None = None) -> dat
         for name, weekday in _WEEKDAY_NAMES.items():
             if re.search(rf"\b{prefix}\s+{name}\b", normalized):
                 return _resolve_weekday(today, weekday, is_next=is_next)
+
+    bare_match = _BARE_WEEKDAY.search(normalized)
+    if bare_match:
+        weekday = _WEEKDAY_NAMES[bare_match.group(1).lower()]
+        return _resolve_weekday(today, weekday, is_next=True)
 
     return None
 
