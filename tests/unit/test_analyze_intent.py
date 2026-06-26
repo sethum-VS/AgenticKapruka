@@ -43,6 +43,8 @@ async def test_analyze_intent_shopping_turn_skips_gemini() -> None:
     assert result == {
         "intent": "discovery",
         "intent_metadata": expected_metadata,
+        "specificity_score": 75.0,
+        "specificity_band": "proceed",
         "session_product_focus": "cake",
         "session_occasion": "birthday",
         "session_recipient_hint": "mom",
@@ -280,7 +282,25 @@ async def test_analyze_intent_vague_gift_asks_preferences() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     assert result.get("agent_clarifying_question")
-    assert result.get("session_awaiting_gift_preferences") is True
+    assert result.get("session_awaiting_clarification_dimension") == "product"
+    assert result.get("specificity_band") == "clarify"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_cakes_followup_after_product_clarify_proceeds() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="cakes")],
+        "session_id": "sess-cakes-followup",
+        "session_awaiting_clarification_dimension": "product",
+        "session_product_focus": "gift",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("agent_clarifying_question") is None
+    assert result.get("session_awaiting_clarification_dimension") is None
+    assert result.get("specificity_band") == "proceed"
 
 
 @pytest.mark.asyncio
@@ -294,7 +314,7 @@ async def test_analyze_intent_budgeted_gift_chip_routes_to_search() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     assert result.get("agent_clarifying_question") is None
-    assert result.get("session_awaiting_gift_preferences") is not True
+    assert result.get("session_awaiting_clarification_dimension") is None
     assert result["intent_metadata"].get("budgeted_gift_discovery") is True
 
 

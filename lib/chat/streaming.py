@@ -13,7 +13,6 @@ from langgraph.graph.state import CompiledStateGraph
 
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
-from lib.chat.intent_heuristics import is_vague_gift_intent
 from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
 from lib.chat.sse import chunk_text, format_sse_event
 from lib.chat.status_copy import SEARCHING_CATALOG
@@ -38,7 +37,7 @@ def _skip_early_search_status(state: AgentState) -> bool:
         return False
     if is_off_topic_message(user_message) or is_impossible_catalog_request(user_message):
         return True
-    if is_vague_gift_intent(user_message):
+    if state.get("specificity_band") == "clarify":
         return True
     q = state.get("agent_clarifying_question")
     return bool(isinstance(q, str) and q.strip())

@@ -207,6 +207,11 @@ def summarize_node_update(node_name: str, update: dict[str, Any]) -> dict[str, A
             "intent_metadata": summarize_value(update.get("intent_metadata")),
             "model_tier": update.get("model_tier"),
             "tool_calls": summarize_value(update.get("tool_calls")),
+            "specificity_score": update.get("specificity_score"),
+            "specificity_band": update.get("specificity_band"),
+            "session_awaiting_clarification_dimension": update.get(
+                "session_awaiting_clarification_dimension",
+            ),
         }
     if node_name == "load_zep_memory":
         facts = update.get("zep_memory_facts") or []

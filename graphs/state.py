@@ -69,7 +69,9 @@ class AgentState(TypedDict):
     session_occasion: str | None
     session_recipient_hint: str | None
     session_awaiting_delivery_date: bool | None
-    session_awaiting_gift_preferences: bool | None
+    session_awaiting_clarification_dimension: Literal["product", "occasion", "budget"] | None
+    specificity_score: float | None
+    specificity_band: Literal["proceed", "clarify", "ambiguous"] | None
     session_delivery_city_confirmed: bool | None
     session_shipment_address_raw: str | None
     delivery_city_raw: str | None

@@ -16,14 +16,12 @@ from lib.chat.delivery_dates import (
     normalize_delivery_date,
 )
 from lib.chat.intent_heuristics import (
-    GIFT_PREFERENCES_QUESTION,
     PROCEED_CHECKOUT_MESSAGE,
     classify_routing_guard,
     is_budgeted_gift_ideas_message,
     is_cart_add_trigger,
     is_order_intent_message,
     is_topic_pivot_message,
-    is_vague_gift_intent,
 )
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.off_topic import (
@@ -33,6 +31,12 @@ from lib.chat.off_topic import (
     off_topic_topic,
 )
 from lib.chat.query_preprocessor import QueryPreprocessor
+from lib.chat.request_specificity import (
+    refine_specificity_with_llm,
+    resolve_awaiting_clarification_dimension,
+    score_request_specificity,
+    should_bypass_specificity_scorer,
+)
 from lib.chat.support_faq import classify_support_topic, is_support_question
 from lib.neo4j.hybrid_context import extract_budget
 from lib.redis.cart import get_cart
@@ -404,7 +408,6 @@ async def analyze_intent(
     redis_client: RedisClient | None = None,
 ) -> dict[str, Any]:
     """LangGraph node: guard-only routing plus query preprocessing (no LLM)."""
-    _ = genai_client
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
     intent_metadata = _query_preprocessor.process(user_message)
@@ -551,34 +554,86 @@ async def analyze_intent(
         logger.info("analyze_intent: order intent with non-empty cart -> checkout")
         return _with_budget({"intent": "checkout", "intent_metadata": intent_metadata})
 
-    if state.get("session_awaiting_gift_preferences"):
-        logger.debug("analyze_intent: gift preferences follow-up — proceeding to search")
-        return _with_budget(
-            {
-                "intent": _SHOPPING_PATH_INTENT,
-                "intent_metadata": intent_metadata,
-                "session_awaiting_gift_preferences": False,
-            },
+    specificity_fields: dict[str, Any] = {}
+    if not should_bypass_specificity_scorer(user_message, guard_intent=None):
+        specificity = score_request_specificity(
+            user_message,
+            session_product_focus=session_product_focus,
+            session_occasion=session_occasion,
+            session_recipient_hint=session_recipient_hint,
+            session_budget_max=session_budget_max,
+            session_flavor_hint=session_flavor_hint,
+            intent_metadata=intent_metadata,
         )
-
-    if is_vague_gift_intent(user_message):
-        logger.info("analyze_intent: vague gift query — asking for preferences")
-        question = GIFT_PREFERENCES_QUESTION
-        if intent_metadata.get("is_situational"):
-            question = (
-                "I'm sorry to hear you're going through this. "
-                f"{question}"
+        if specificity.band == "ambiguous" and genai_client is not None:
+            specificity = await refine_specificity_with_llm(
+                user_message,
+                specificity,
+                genai_client=genai_client,
+                session_product_focus=session_product_focus,
+                session_occasion=session_occasion,
+                session_recipient_hint=session_recipient_hint,
+                session_budget_max=session_budget_max,
+                intent_metadata=intent_metadata,
             )
-        return _with_budget(
-            {
-                "intent": _SHOPPING_PATH_INTENT,
-                "intent_metadata": intent_metadata,
-                "agent_clarifying_question": question,
-                "session_awaiting_gift_preferences": True,
-            },
-        )
+
+        awaiting_dimension = resolve_awaiting_clarification_dimension(state)
+        if awaiting_dimension is not None:
+            answered_threshold = 0.5 if awaiting_dimension == "occasion" else 1.0
+            if specificity.dimension_scores.get(awaiting_dimension, 0.0) >= answered_threshold:
+                logger.debug(
+                    "analyze_intent: specificity follow-up answered %s — proceeding",
+                    awaiting_dimension,
+                )
+                return _with_budget(
+                    {
+                        "intent": _SHOPPING_PATH_INTENT,
+                        "intent_metadata": intent_metadata,
+                        "specificity_score": specificity.score,
+                        "specificity_band": "proceed",
+                        "session_awaiting_clarification_dimension": None,
+                    },
+                )
+
+        if specificity.band in ("clarify", "ambiguous") and specificity.clarifying_question:
+            logger.info(
+                "analyze_intent: specificity gate clarify (score=%.1f, missing=%s)",
+                specificity.score,
+                specificity.missing_dimension,
+            )
+            return _with_budget(
+                {
+                    "intent": _SHOPPING_PATH_INTENT,
+                    "intent_metadata": intent_metadata,
+                    "agent_clarifying_question": specificity.clarifying_question,
+                    "session_awaiting_clarification_dimension": specificity.missing_dimension,
+                    "specificity_score": specificity.score,
+                    "specificity_band": "clarify",
+                },
+            )
+        specificity_fields = {
+            "specificity_score": specificity.score,
+            "specificity_band": specificity.band,
+        }
+        if resolve_awaiting_clarification_dimension(state):
+            logger.debug(
+                "analyze_intent: specificity gate proceed (score=%.1f) — clearing await flag",
+                specificity.score,
+            )
+            specificity_fields["session_awaiting_clarification_dimension"] = None
+        else:
+            logger.debug(
+                "analyze_intent: specificity gate proceed (score=%.1f)",
+                specificity.score,
+            )
 
     logger.debug(
         "analyze_intent: shopping turn — deferring discovery/general to agent_loop planner",
     )
-    return _with_budget({"intent": _SHOPPING_PATH_INTENT, "intent_metadata": intent_metadata})
+    return _with_budget(
+        {
+            "intent": _SHOPPING_PATH_INTENT,
+            "intent_metadata": intent_metadata,
+            **specificity_fields,
+        },
+    )
