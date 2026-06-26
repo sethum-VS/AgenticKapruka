@@ -1,0 +1,62 @@
+{# Welcome empty state — shared by chat/index.html and chat new-session OOB swap. #}
+<div
+  id="chat-empty-state"
+  class="mb-8 flex flex-col items-center gap-4 text-center"
+  data-testid="chat-empty-state"
+>
+  <img
+    src="/static/img/kapruka-smile.png"
+    alt="Kapruka AI"
+    class="h-20 w-20 object-contain"
+    width="80"
+    height="80"
+  />
+  <div class="space-y-1">
+    <h2 class="text-headline-md font-bold text-primary">Welcome!</h2>
+    <p class="text-body-lg text-on-surface-variant">
+      I'm Kapruka AI, your personal gifting concierge.
+    </p>
+  </div>
+
+  <p class="mt-4 text-label-sm font-label-sm uppercase tracking-wide text-on-surface-variant">
+    Try asking
+  </p>
+  <ul class="flex w-full max-w-md flex-col gap-2 text-left" role="list">
+    <li>
+      <button
+        type="button"
+        data-chat-suggestion="Birthday cake for mom in Colombo"
+        class="chip-suggestion block w-full text-left"
+      >
+        Birthday cake for mom in Colombo
+      </button>
+    </li>
+    <li>
+      <button
+        type="button"
+        data-chat-suggestion="Fresh roses delivery to Galle tomorrow"
+        class="chip-suggestion block w-full text-left"
+      >
+        Fresh roses delivery to Galle tomorrow
+      </button>
+    </li>
+    <li>
+      <button
+        type="button"
+        data-chat-suggestion="Gift ideas under Rs. 5,000"
+        class="chip-suggestion block w-full text-left"
+      >
+        Gift ideas under Rs. 5,000
+      </button>
+    </li>
+    <li>
+      <button
+        type="button"
+        data-chat-suggestion="Track order VIMP34456CB2"
+        class="chip-suggestion block w-full text-left"
+      >
+        Track order VIMP34456CB2
+      </button>
+    </li>
+  </ul>
+</div>

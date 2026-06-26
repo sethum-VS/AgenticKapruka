@@ -1,11 +1,11 @@
 {# Header currency select — hx-post updates Redis session preference. #}
 <div class="flex shrink-0 items-center gap-2">
-  <label for="header-currency" class="text-xs font-medium text-commerce-muted">Currency</label>
+  <label for="header-currency" class="sr-only">Currency</label>
   <select
     id="header-currency"
     name="currency"
     data-testid="header-currency"
-    class="rounded-lg border border-commerce-parchment bg-white px-2 py-1.5 text-sm text-commerce-ink focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
+    class="rounded-lg border border-outline-variant/40 bg-canvas px-2 py-1.5 text-body-sm text-on-surface focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
     hx-post="/session/currency"
     hx-swap="none"
     hx-trigger="change"

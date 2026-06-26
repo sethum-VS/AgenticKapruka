@@ -1,4 +1,4 @@
-{# Horizontal product carousel. Expects products: list of product dicts (see product_card.html). #}
+{# Product grid in assistant messages — bento 2-col on md+. #}
 {% if products %}
 <div
   class="relative w-full min-w-0"
@@ -6,47 +6,14 @@
   role="region"
   aria-label="Product carousel"
   tabindex="0"
-  x-data="{
-    scrollCarousel(direction) {
-      const track = $refs.track;
-      if (!track) return;
-      const card = track.querySelector('[data-testid=\'product-card\']');
-      const gap = 12;
-      const amount = card ? card.getBoundingClientRect().width + gap : 236;
-      track.scrollBy({ left: direction * amount, behavior: 'smooth' });
-    }
-  }"
-  @keydown.arrow-left.prevent="scrollCarousel(-1)"
-  @keydown.arrow-right.prevent="scrollCarousel(1)"
 >
-  <div class="mb-2 flex items-center justify-end gap-1">
-    <button
-      type="button"
-      class="btn-secondary flex h-8 w-8 shrink-0 items-center justify-center p-0"
-      aria-label="Previous products"
-      data-testid="carousel-prev"
-      @click="scrollCarousel(-1)"
-    >
-      <span aria-hidden="true">&larr;</span>
-    </button>
-    <button
-      type="button"
-      class="btn-secondary flex h-8 w-8 shrink-0 items-center justify-center p-0"
-      aria-label="Next products"
-      data-testid="carousel-next"
-      @click="scrollCarousel(1)"
-    >
-      <span aria-hidden="true">&rarr;</span>
-    </button>
-  </div>
   <div
-    x-ref="track"
     id="product-carousel-track"
-    class="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain scroll-smooth px-1 pb-1"
+    class="grid grid-cols-1 gap-4 md:grid-cols-2"
     data-testid="product-carousel-track"
   >
     {% for product in products %}
-    <div class="snap-start shrink-0">
+    <div class="min-w-0">
       {% with lazy_image=loop.index0 >= 2 %}
         {% include "components/product_card.html" %}
       {% endwith %}

@@ -7,13 +7,13 @@
   {% set price_currency = product.currency | default("LKR") %}
 {% endif %}
 <article
-  class="group card-commerce flex w-56 shrink-0 flex-col overflow-hidden transition-shadow hover:shadow-md"
+  class="group flex flex-col overflow-hidden rounded-lg border border-outline-variant/40 bg-canvas transition-colors hover:border-primary"
   data-product-id="{{ product.id }}"
   data-testid="product-card"
 >
   <a
     href="{{ product.url }}"
-    class="relative block aspect-[4/3] overflow-hidden bg-commerce-parchment"
+    class="relative block h-40 overflow-hidden bg-surface-muted"
     target="_blank"
     rel="noopener noreferrer"
     aria-label="View {{ product.name | normalize_catalog }}"
@@ -27,7 +27,7 @@
       data-src="{{ product.image_url }}"
     >
       <div
-        class="absolute inset-0 animate-pulse bg-commerce-parchment"
+        class="absolute inset-0 animate-pulse bg-surface-muted"
         x-show="!loaded"
         x-transition:leave="transition ease-in duration-200"
         x-transition:leave-start="opacity-100"
@@ -40,10 +40,10 @@
           :src="src"
           alt="{{ product.name | normalize_catalog }}"
           @load="onLoad()"
-          class="h-full w-full object-cover opacity-0 transition-opacity duration-300 group-hover:scale-105 transition-transform duration-300"
+          class="h-full w-full object-cover opacity-0 transition-opacity duration-300"
           :class="{ 'opacity-100': loaded }"
-          width="224"
-          height="168"
+          width="320"
+          height="160"
         />
       </template>
     </div>
@@ -53,13 +53,13 @@
       alt="{{ product.name | normalize_catalog }}"
       class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
       loading="lazy"
-      width="224"
-      height="168"
+      width="320"
+      height="160"
     />
     {% endif %}
     {% else %}
     <div
-      class="flex h-full w-full items-center justify-center text-xs text-commerce-muted"
+      class="flex h-full w-full items-center justify-center text-body-sm text-on-surface-variant"
       aria-hidden="true"
     >
       No image
@@ -70,44 +70,49 @@
     {% endwith %}
     {% if product.slightly_over_budget %}
     <span
-      class="absolute right-2 top-2 rounded-full bg-amber-500/90 px-2 py-0.5 text-xs font-medium text-white shadow-sm"
+      class="absolute right-2 top-2 flex items-center gap-1 rounded-full border border-surface-variant bg-white/90 px-2 py-1 text-label-sm font-label-sm font-medium text-primary"
       data-testid="budget-badge"
     >
       Slightly over budget
     </span>
     {% elif product.over_budget %}
     <span
-      class="absolute right-2 top-2 rounded-full bg-orange-600/90 px-2 py-0.5 text-xs font-medium text-white shadow-sm"
+      class="absolute right-2 top-2 flex items-center gap-1 rounded-full border border-surface-variant bg-white/90 px-2 py-1 text-label-sm font-label-sm font-medium text-error"
       data-testid="budget-badge-over"
     >
       Over budget
     </span>
     {% endif %}
   </a>
-  <div class="flex flex-1 flex-col gap-2 p-3">
-    <h3 class="line-clamp-2 text-sm font-medium leading-snug text-commerce-ink">
+  <div class="flex flex-1 flex-col p-4">
+    <h3 class="mb-1 line-clamp-1 text-label-md font-label-md font-semibold text-text-main">
       <a
         href="{{ product.url }}"
-        class="hover:text-kapruka-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-kapruka-500/30"
+        class="hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         target="_blank"
         rel="noopener noreferrer"
       >
         {{ product.name | normalize_catalog }}
       </a>
     </h3>
-    <p class="text-sm font-semibold text-kapruka-700" data-testid="product-price">
-      {{ price_amount | format_currency(price_currency) }}
+    <p class="mb-3 line-clamp-2 flex-1 text-body-sm font-body-sm text-on-surface-variant">
+      {% if product.description %}{{ product.description }}{% else %}Available on Kapruka with island-wide delivery.{% endif %}
     </p>
-    <button
-      type="button"
-      class="btn-primary mt-auto w-full text-sm disabled:cursor-not-allowed disabled:opacity-50"
-      hx-post="/cart/add"
-      hx-vals='{"product_id": "{{ product.id }}"}'
-      hx-target="#cart-panel"
-      hx-swap="outerHTML"
-      {% if not product.in_stock %}disabled aria-disabled="true"{% endif %}
-    >
-      Add to cart
-    </button>
+    <div class="mt-auto flex items-center justify-between">
+      <span class="text-label-md font-label-md font-bold text-primary" data-testid="product-price">
+        {{ price_amount | format_currency(price_currency) }}
+      </span>
+      <button
+        type="button"
+        class="rounded-lg bg-primary px-3 py-1.5 text-label-sm font-label-sm text-on-primary transition-colors hover:bg-primary-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+        hx-post="/cart/add"
+        hx-vals='{"product_id": "{{ product.id }}"}'
+        hx-target="#cart-panel"
+        hx-swap="outerHTML"
+        {% if not product.in_stock %}disabled aria-disabled="true"{% endif %}
+      >
+        Add to cart
+      </button>
+    </div>
   </div>
 </article>

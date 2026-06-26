@@ -37,7 +37,7 @@ def _load_products() -> list[dict[str, object]]:
 
 
 def _many_products() -> list[dict[str, object]]:
-    """Repeat fixtures so carousel overflow is deterministic on narrow CI viewports."""
+    """Repeat fixtures so the grid has enough cards for lazy-load testing."""
     return _load_products() * 4
 
 
@@ -50,33 +50,20 @@ def _carousel_harness_html(carousel_html: str) -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
 {css}
-      /* Pin carousel width so overflow is deterministic on all CI runners. */
+      body {{
+        width: 375px;
+        max-width: 375px;
+      }}
       [data-testid="product-carousel"] {{
-        width: 100px;
-        max-width: 100px;
-      }}
-      [data-testid="product-carousel-track"] {{
-        display: flex;
-        flex-direction: row;
-        flex-wrap: nowrap;
-        width: 100px;
-        max-width: 100px;
-        overflow-x: auto;
-      }}
-      [data-testid="product-carousel-track"] > .snap-start {{
-        flex-shrink: 0;
-        min-width: 14rem;
-      }}
-      [data-testid="product-card"] {{
-        width: 14rem;
-        flex-shrink: 0;
+        width: 100%;
+        max-width: 343px;
       }}
     </style>
     <script>{LAZY_IMAGE_JS}</script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
   </head>
-  <body class="bg-commerce-cream p-4">
-    <div class="mx-auto max-w-[85%] rounded-2xl border border-commerce-parchment bg-white p-3">
+  <body class="bg-canvas p-4">
+    <div class="mx-auto max-w-[85%] rounded-xl border border-surface-muted bg-canvas p-3">
       {carousel_html}
     </div>
   </body>
@@ -90,8 +77,8 @@ def _wait_for_alpine(page: Page) -> None:
 
 
 @pytest.mark.browser
-def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
-    """Three or more cards render inside the carousel without widening the page."""
+def test_product_carousel_no_horizontal_overflow_on_mobile_viewport() -> None:
+    """Grid stacks cards in a single column without widening the page on mobile."""
     carousel_html = render_product_carousel(_many_products())
 
     with sync_playwright() as playwright:
@@ -104,13 +91,10 @@ def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
         layout = page.evaluate(
             """() => {
               const cards = document.querySelectorAll('[data-testid="product-card"]');
-              const track = document.querySelector('[data-testid="product-carousel-track"]');
               const doc = document.documentElement;
               return {
                 cardCount: cards.length,
                 pageOverflow: doc.scrollWidth > doc.clientWidth,
-                trackOverflow: track ? track.scrollWidth > track.clientWidth : false,
-                trackClientWidth: track ? track.clientWidth : 0,
               };
             }"""
         )
@@ -119,18 +103,16 @@ def test_product_carousel_no_page_overflow_on_mobile_viewport() -> None:
 
     assert layout["cardCount"] >= 12
     assert layout["pageOverflow"] is False
-    assert layout["trackOverflow"] is True
-    assert layout["trackClientWidth"] > 0
 
 
 @pytest.mark.browser
-def test_lazy_images_defer_load_until_carousel_scroll() -> None:
-    """Off-screen carousel images load and fade in after scrolling into view."""
+def test_lazy_images_defer_load_until_scrolled_into_view() -> None:
+    """Off-screen grid images load and fade in after scrolling into view."""
     carousel_html = render_product_carousel(_many_products())
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
-        page = browser.new_page(viewport={"width": 375, "height": 812})
+        page = browser.new_page(viewport={"width": 375, "height": 400})
 
         def _stub_images(route, request) -> None:
             if request.resource_type == "image":
@@ -146,16 +128,13 @@ def test_lazy_images_defer_load_until_carousel_scroll() -> None:
         off_screen = page.evaluate(
             """() => {
               const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
-              const track = document.querySelector('[data-testid="product-carousel-track"]');
-              track.scrollLeft = 0;
-              const trackRect = track.getBoundingClientRect();
-              const rightmost = lazyImages.reduce((best, el) => {
-                const left = el.getBoundingClientRect().left;
-                return left > best.left ? { el, left } : best;
-              }, { el: lazyImages[0], left: -1 });
-              const target = rightmost.el;
+              const bottom = lazyImages.reduce((best, el) => {
+                const top = el.getBoundingClientRect().top;
+                return top > best.top ? { el, top } : best;
+              }, { el: lazyImages[0], top: -1 });
+              const target = bottom.el;
               const rect = target.getBoundingClientRect();
-              const offScreen = rect.left >= trackRect.right - 1;
+              const offScreen = rect.top >= window.innerHeight;
               const data = target._x_dataStack?.[0];
               return {
                 offScreen,
@@ -173,8 +152,12 @@ def test_lazy_images_defer_load_until_carousel_scroll() -> None:
 
         page.evaluate(
             """() => {
-              const track = document.querySelector('[data-testid="product-carousel-track"]');
-              track.scrollLeft = track.scrollWidth;
+              const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
+              const bottom = lazyImages.reduce((best, el) => {
+                const top = el.getBoundingClientRect().top;
+                return top > best.top ? { el, top } : best;
+              }, { el: lazyImages[0], top: -1 });
+              bottom.el.scrollIntoView({ block: 'center' });
             }"""
         )
         page.wait_for_timeout(100)
@@ -182,26 +165,25 @@ def test_lazy_images_defer_load_until_carousel_scroll() -> None:
         page.wait_for_function(
             """() => {
               const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
-              const track = document.querySelector('[data-testid="product-carousel-track"]');
-              const rightmost = lazyImages.reduce((best, el) => {
-                const left = el.getBoundingClientRect().left;
-                return left > best.left ? { el, left } : best;
-              }, { el: lazyImages[0], left: -1 });
-              const target = rightmost.el;
+              const bottom = lazyImages.reduce((best, el) => {
+                const top = el.getBoundingClientRect().top;
+                return top > best.top ? { el, top } : best;
+              }, { el: lazyImages[0], top: -1 });
+              const target = bottom.el;
               const data = target._x_dataStack?.[0];
               const img = target.querySelector('img');
-              return Boolean(track.scrollLeft > 0 && data?.inView && img);
+              return Boolean(data?.inView && img);
             }"""
         )
 
         page.wait_for_function(
             """() => {
               const lazyImages = [...document.querySelectorAll('[data-testid="lazy-image"]')];
-              const rightmost = lazyImages.reduce((best, el) => {
-                const left = el.getBoundingClientRect().left;
-                return left > best.left ? { el, left } : best;
-              }, { el: lazyImages[0], left: -1 });
-              const target = rightmost.el;
+              const bottom = lazyImages.reduce((best, el) => {
+                const top = el.getBoundingClientRect().top;
+                return top > best.top ? { el, top } : best;
+              }, { el: lazyImages[0], top: -1 });
+              const target = bottom.el;
               const data = target._x_dataStack?.[0];
               const img = target.querySelector('img');
               return Boolean(data?.loaded && img?.classList.contains('opacity-100'));

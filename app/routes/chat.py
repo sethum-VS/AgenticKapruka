@@ -44,26 +44,19 @@ router = APIRouter()
 
 RedisDep = Annotated[RedisClient, Depends(get_redis)]
 
-_CHAT_NEW_EMPTY_STATE_HTML = (
-    '<div id="chat-messages" hx-swap-oob="innerHTML">'
-    '<div id="chat-empty-state" class="flex flex-1 flex-col items-center justify-center '
-    'px-4 py-12 text-center">'
-    '<div class="card-commerce max-w-md p-8">'
-    '<p class="mb-1 text-sm font-medium uppercase tracking-wide text-kapruka-600">'
-    "Welcome</p>"
-    '<h2 class="mb-2 text-xl font-semibold text-commerce-ink">'
-    "What would you like to send today?</h2>"
-    '<p class="mb-6 text-sm leading-relaxed text-commerce-muted">'
-    "Ask me to find birthday cakes, fresh flowers, thoughtful combos, or check delivery "
-    "to any city in Sri Lanka."
-    "</p></div></div></div>"
-)
+def _chat_new_empty_state_html() -> str:
+    """OOB swap HTML that restores the welcome empty state after new session."""
+    templates = get_templates()
+    empty = templates.get_template("chat/empty_state.html").render()
+    return f'<div id="chat-messages" hx-swap-oob="innerHTML">{empty}</div>'
+
 
 _STREAM_SETUP_ERROR_HTML = (
-    '<div class="flex justify-start">'
-    '<div class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 '
-    'text-sm text-red-800" role="alert">'
-    "Something went wrong. Please try again.</div></div>"
+    '<div class="mb-4 flex flex-col gap-4" data-role="assistant-message">'
+    '<div class="flex items-start gap-3">'
+    '<div class="max-w-[85%] rounded-xl rounded-tl-none border border-error-container '
+    'bg-error-container/30 p-4 text-body-md text-on-error-container" role="alert">'
+    "Something went wrong. Please try again.</div></div></div>"
 )
 
 
@@ -186,6 +179,6 @@ async def chat_new(request: Request, redis_client: RedisDep) -> Response:
     prior_thread_id, new_thread_id, signed_cookie = rotate_chat_thread(request)
     if prior_thread_id:
         await migrate_cart(redis_client, prior_thread_id, new_thread_id)
-    response = Response(content=_CHAT_NEW_EMPTY_STATE_HTML, media_type="text/html")
+    response = Response(content=_chat_new_empty_state_html(), media_type="text/html")
     response.set_cookie(SESSION_COOKIE_NAME, signed_cookie, **cookie_params())
     return response

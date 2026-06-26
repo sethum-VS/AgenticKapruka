@@ -1,0 +1,91 @@
+{# Fixed concierge sidebar — 280px rail on md+, overlay drawer on mobile. #}
+<nav
+  class="fixed left-0 top-0 z-50 hidden h-screen w-[280px] flex-col border-r border-outline-variant bg-sidebar-bg py-stack-md md:flex"
+  :class="{ '!flex': sidebarOpen }"
+  data-testid="sidebar-nav"
+  aria-label="Main navigation"
+>
+  <div class="mb-4 border-b border-white/10 px-6 pb-6">
+    <div class="flex items-center justify-center">
+      <a
+        href="/chat"
+        class="block w-full rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary-container/50"
+      >
+        <img
+          src="/static/img/kapruka-logo-white.png"
+          alt="Kapruka Logo"
+          class="h-auto w-full object-contain"
+          width="232"
+          height="48"
+        />
+      </a>
+    </div>
+  </div>
+
+  <div class="mb-6 px-6">
+    <button
+      type="button"
+      class="btn-cta flex w-full items-center justify-center gap-2 py-3"
+      hx-post="/chat/new"
+      hx-swap="none"
+      data-testid="new-chat-button"
+    >
+      <span class="material-symbols-outlined material-symbols-filled text-[20px]" aria-hidden="true">add</span>
+      New Session
+    </button>
+  </div>
+
+  <ul class="flex flex-1 flex-col gap-2 px-3" role="list">
+    <li>
+      <a
+        href="/chat"
+        class="flex min-h-[44px] scale-95 items-center gap-3 rounded-lg border-l-4 border-secondary-container bg-primary-container/20 px-3 py-3 text-label-md font-label-md text-white opacity-90 transition-all"
+        aria-current="page"
+        data-testid="nav-new-chat"
+      >
+        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">add_comment</span>
+        New Chat
+      </a>
+    </li>
+    <li>
+      <span
+        class="flex cursor-not-allowed items-center gap-3 rounded-lg border-l-4 border-transparent px-3 py-3 text-label-md font-label-md text-white/50"
+        title="Coming soon"
+        data-testid="nav-recent-sessions"
+      >
+        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">history</span>
+        Recent Sessions
+      </span>
+    </li>
+    <li>
+      <button
+        type="button"
+        class="flex min-h-[44px] w-full items-center gap-3 rounded-lg border-l-4 border-transparent px-3 py-3 text-left text-label-md font-label-md text-white/80 transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+        data-chat-suggestion="Track order VIMP34456CB2"
+        data-testid="nav-track-orders"
+      >
+        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">local_shipping</span>
+        Track Orders
+      </button>
+    </li>
+  </ul>
+
+  <div class="mt-auto border-t border-white/10 px-6 pt-6">
+    <div class="flex items-center gap-3 text-white">
+      <span
+        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 bg-primary-container text-label-sm font-label-sm"
+        aria-hidden="true"
+      >K</span>
+      <span class="text-label-md font-label-md">Kapruka Guest</span>
+    </div>
+  </div>
+</nav>
+
+<div
+  x-show="sidebarOpen"
+  x-transition.opacity
+  class="fixed inset-0 z-40 bg-on-surface/40 md:hidden"
+  aria-hidden="true"
+  data-testid="sidebar-backdrop"
+  @click="sidebarOpen = false"
+></div>

@@ -1,83 +1,86 @@
 {# Order review summary — cart, delivery, recipient, and sender before place-order. #}
 <section
   id="checkout-review"
-  class="flex flex-col gap-4 rounded-xl border border-commerce-parchment bg-commerce-parchment/30 p-4"
+  class="flex flex-col gap-4 rounded-lg border border-outline-variant/30 bg-surface p-5"
   data-testid="checkout-review"
   aria-label="Order review summary"
 >
-  <header class="flex items-center justify-between gap-2 border-b border-commerce-parchment pb-3">
-    <h3 class="text-sm font-semibold text-commerce-ink">Review your order</h3>
-    <span class="text-xs font-medium text-commerce-muted" data-testid="checkout-review-item-count">
+  <header class="mb-4 flex items-center justify-between gap-2 border-b border-outline-variant/20 pb-3">
+    <h3 class="text-label-md font-label-md font-bold text-primary">Order Summary</h3>
+    <span class="rounded bg-primary-container/10 px-2 py-1 text-label-sm font-label-sm text-primary" data-testid="checkout-review-item-count">
       {{ review.item_count }} item{% if review.item_count != 1 %}s{% endif %}
     </span>
   </header>
 
-  <div class="flex flex-col gap-2" data-testid="checkout-review-cart">
-    <h4 class="text-xs font-semibold uppercase tracking-wide text-commerce-muted">Cart</h4>
-    <ul class="flex flex-col gap-2">
+  <div class="mb-4 flex flex-col gap-3" data-testid="checkout-review-cart">
+    <ul class="flex flex-col gap-3">
       {% for item in review.cart_items %}
       <li
-        class="flex items-start justify-between gap-3 rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm"
+        class="flex items-start justify-between gap-3 text-body-sm font-body-sm"
         data-testid="checkout-review-line-item"
         data-product-id="{{ item.product_id }}"
       >
-        <div class="min-w-0 flex-1">
-          <p class="font-medium text-commerce-ink">{{ item.name }}</p>
-          {% if item.icing_text %}
-          <p class="text-xs text-commerce-muted">Icing: {{ item.icing_text }}</p>
-          {% endif %}
-          <p class="text-xs text-commerce-muted">Qty {{ item.quantity }}</p>
-        </div>
-        <p class="shrink-0 font-medium text-kapruka-700" data-testid="checkout-review-line-total">
+        <span class="flex min-w-0 flex-1 items-center gap-2 text-on-surface-variant">
+          <span class="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">redeem</span>
+          <span class="min-w-0">
+            <span class="font-medium text-on-surface">{{ item.name }}</span>
+            {% if item.icing_text %}
+            <span class="block text-on-surface-variant">Icing: {{ item.icing_text }}</span>
+            {% endif %}
+            <span class="block text-on-surface-variant">Qty {{ item.quantity }}</span>
+          </span>
+        </span>
+        <span class="shrink-0 font-medium" data-testid="checkout-review-line-total">
           {{ (item.price_amount * item.quantity) | format_currency(review.currency) }}
-        </p>
+        </span>
       </li>
       {% endfor %}
     </ul>
-    <p class="text-right text-sm font-semibold text-commerce-ink" data-testid="checkout-review-subtotal">
-      Subtotal: {{ review.items_subtotal | format_currency(review.currency) }}
-    </p>
   </div>
 
-  <div class="flex flex-col gap-1" data-testid="checkout-review-delivery">
-    <h4 class="text-xs font-semibold uppercase tracking-wide text-commerce-muted">Delivery</h4>
-    <dl class="rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink">
-      <div class="flex flex-col gap-0.5">
-        <dt class="sr-only">Address</dt>
-        <dd data-testid="checkout-review-address">{{ review.delivery_address }}</dd>
-        <dd data-testid="checkout-review-city">{{ review.delivery_city }}</dd>
-        <dd class="text-commerce-muted capitalize" data-testid="checkout-review-location-type">
-          {{ review.delivery_location_type }}
-        </dd>
-        <dd data-testid="checkout-review-date">Date: {{ review.delivery_date }}</dd>
-        {% if review.delivery_instructions %}
-        <dd class="text-commerce-muted" data-testid="checkout-review-instructions">
-          Instructions: {{ review.delivery_instructions }}
-        </dd>
-        {% endif %}
-      </div>
+  <div class="flex flex-col gap-1 border-t border-outline-variant/20 pt-3" data-testid="checkout-review-delivery">
+    <h4 class="text-label-sm font-label-sm font-semibold uppercase tracking-wide text-on-surface-variant">Delivery</h4>
+    <dl class="text-body-sm text-on-surface">
+      <dd data-testid="checkout-review-address">{{ review.delivery_address }}</dd>
+      <dd data-testid="checkout-review-city">{{ review.delivery_city }}</dd>
+      <dd class="capitalize text-on-surface-variant" data-testid="checkout-review-location-type">
+        {{ review.delivery_location_type }}
+      </dd>
+      <dd data-testid="checkout-review-date">Date: {{ review.delivery_date }}</dd>
+      {% if review.delivery_instructions %}
+      <dd class="text-on-surface-variant" data-testid="checkout-review-instructions">
+        Instructions: {{ review.delivery_instructions }}
+      </dd>
+      {% endif %}
     </dl>
   </div>
 
   <div class="flex flex-col gap-1" data-testid="checkout-review-recipient">
-    <h4 class="text-xs font-semibold uppercase tracking-wide text-commerce-muted">Recipient</h4>
-    <dl class="rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink">
+    <h4 class="text-label-sm font-label-sm font-semibold uppercase tracking-wide text-on-surface-variant">Recipient</h4>
+    <dl class="text-body-sm text-on-surface">
       <dd data-testid="checkout-review-recipient-name">{{ review.recipient_name }}</dd>
-      <dd class="text-commerce-muted" data-testid="checkout-review-recipient-phone">
+      <dd class="text-on-surface-variant" data-testid="checkout-review-recipient-phone">
         {{ review.recipient_phone }}
       </dd>
     </dl>
   </div>
 
   <div class="flex flex-col gap-1" data-testid="checkout-review-sender">
-    <h4 class="text-xs font-semibold uppercase tracking-wide text-commerce-muted">Gift card sender</h4>
-    <dl class="rounded-lg border border-commerce-parchment bg-white px-3 py-2 text-sm text-commerce-ink">
+    <h4 class="text-label-sm font-label-sm font-semibold uppercase tracking-wide text-on-surface-variant">Gift card sender</h4>
+    <dl class="text-body-sm text-on-surface">
       <dd data-testid="checkout-review-sender-name">{{ review.sender_display }}</dd>
       {% if review.gift_message %}
-      <dd class="mt-2 border-t border-commerce-parchment/60 pt-2 text-commerce-muted" data-testid="checkout-review-gift-message">
-        “{{ review.gift_message }}”
+      <dd class="mt-2 border-t border-outline-variant/20 pt-2 text-on-surface-variant" data-testid="checkout-review-gift-message">
+        "{{ review.gift_message }}"
       </dd>
       {% endif %}
     </dl>
+  </div>
+
+  <div class="flex items-center justify-between border-t border-outline-variant/20 pt-3">
+    <span class="text-label-md font-label-md font-bold text-text-main">Subtotal</span>
+    <span class="text-headline-md font-headline-md font-bold text-primary" data-testid="checkout-review-subtotal">
+      {{ review.items_subtotal | format_currency(review.currency) }}
+    </span>
   </div>
 </section>

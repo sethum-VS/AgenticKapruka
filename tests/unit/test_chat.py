@@ -60,7 +60,8 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert "text/html" in response.headers["content-type"]
     assert 'id="chat-messages"' in html
     assert 'id="chat-empty-state"' in html
-    assert "What would you like to send today?" in html
+    assert "Welcome!" in html
+    assert "personal gifting concierge" in html
     assert "Birthday cake for mom in Colombo" in html
     assert 'data-chat-suggestion="Birthday cake for mom in Colombo"' in html
     assert 'type="button"' in html

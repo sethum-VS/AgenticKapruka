@@ -4,6 +4,7 @@
 document.addEventListener("alpine:init", () => {
   Alpine.data("cartDrawer", (initialCount = 0) => ({
     open: false,
+    sidebarOpen: false,
     itemCount: Number(initialCount) || 0,
 
     init() {

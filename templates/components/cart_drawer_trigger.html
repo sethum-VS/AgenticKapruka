@@ -2,31 +2,17 @@
 {% set cart_item_count = cart_item_count | default(0) %}
 <button
   type="button"
-  class="relative flex h-9 w-9 items-center justify-center rounded-lg text-commerce-ink hover:bg-commerce-parchment focus:outline-none focus-visible:ring-2 focus-visible:ring-kapruka-500/30"
+  class="relative flex h-11 w-11 items-center justify-center rounded-lg text-primary transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
   aria-label="Open shopping cart"
   :aria-expanded="open"
   data-testid="cart-icon"
   @click="openDrawer()"
 >
-  <svg
-    class="h-5 w-5"
-    xmlns="http://www.w3.org/2000/svg"
-    fill="none"
-    viewBox="0 0 24 24"
-    stroke-width="1.5"
-    stroke="currentColor"
-    aria-hidden="true"
-  >
-    <path
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 0 0-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 0 0-16.536-1.84M7.5 14.25 5.106 5.272M6 20.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm12.75 0a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z"
-    />
-  </svg>
+  <span class="material-symbols-outlined text-[22px]" aria-hidden="true">shopping_cart</span>
   <span
     x-show="itemCount > 0"
     x-text="itemCount"
-    class="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-kapruka-600 px-1 text-xs font-semibold tabular-nums text-white"
+    class="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-secondary-container px-1 text-label-sm font-label-sm font-semibold tabular-nums text-primary"
     data-testid="cart-badge"
     {% if cart_item_count > 0 %}aria-label="{{ cart_item_count }} items in cart"{% else %}aria-hidden="true"{% endif %}
   >{% if cart_item_count > 0 %}{{ cart_item_count }}{% endif %}</span>
