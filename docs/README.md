@@ -37,6 +37,7 @@ You want to run, extend, or deploy the system.
 | [Environment variables](reference-environment.md) | Reference | You are configuring secrets |
 | [Cloud Run deploy](DEPLOY.md) | How-to | You are shipping to production |
 | [AGENTS.md](../AGENTS.md) | Reference | You are contributing code |
+| [DESIGN.md](../DESIGN.md) | Reference | You are working on UI tokens or layout |
 
 ## By Diataxis quadrant
 
@@ -44,7 +45,7 @@ You want to run, extend, or deploy the system.
 | --- | --- | --- |
 | **Tutorial** | Learning-oriented — walk through a working example | [tutorial-first-conversation.md](tutorial-first-conversation.md) |
 | **How-to** | Task-oriented — accomplish a specific goal | [howto-find-and-order-gifts.md](howto-find-and-order-gifts.md), [howto-complete-checkout.md](howto-complete-checkout.md), [howto-track-delivery.md](howto-track-delivery.md), [howto-developer-setup.md](howto-developer-setup.md), [DEPLOY.md](DEPLOY.md) |
-| **Reference** | Information-oriented — complete technical facts | [reference-customer-capabilities.md](reference-customer-capabilities.md), [reference-http-api.md](reference-http-api.md), [reference-environment.md](reference-environment.md) |
+| **Reference** | Information-oriented — complete technical facts | [reference-customer-capabilities.md](reference-customer-capabilities.md), [reference-http-api.md](reference-http-api.md), [reference-environment.md](reference-environment.md), [DESIGN.md](../DESIGN.md) |
 | **Explanation** | Understanding-oriented — why things work this way | [explanation-product-overview.md](explanation-product-overview.md), [explanation-shopping-journey.md](explanation-shopping-journey.md), [explanation-architecture.md](explanation-architecture.md) |
 
 ## Entry points

@@ -12,16 +12,24 @@ In this tutorial you will start the assistant locally, search for a gift, view p
 
 ```bash
 source .venv/bin/activate
-uvicorn app.main:app --reload
+make dev
 ```
+
+Or directly: `uvicorn app.main:app --reload` on port 8080 (see [Developer setup](howto-developer-setup.md)).
 
 You should see `Application startup complete` in the terminal. If Redis or Neo4j failed to connect, the app still starts but some features will be limited.
 
 ## Step 2: Open the chat
 
-Navigate to [http://localhost:8000/chat](http://localhost:8000/chat).
+Navigate to [http://localhost:8080/chat](http://localhost:8080/chat) (or port 8000 if using `uvicorn` directly).
 
-You will see the chat interface with a message input and currency selector. The page redirects from `/` automatically.
+You will see the **Kapruka Concierge** workspace:
+
+- Purple sidebar with **New Session** button
+- Welcome state with suggestion chips
+- Message input and currency selector in the header
+
+The page redirects from `/` automatically.
 
 ## Step 3: Send your first message
 
@@ -31,13 +39,13 @@ Type a gift request and press Enter:
 I need a birthday cake for my sister in Colombo, budget around 5000 LKR
 ```
 
-Within a few seconds, the assistant streams a reply. You should see:
+Within a few seconds, the assistant streams a reply. You may briefly see status text like "Searching our catalog…" above the composer. You should see:
 
 1. Your message in a right-aligned bubble
-2. An assistant reply on the left
-3. A product carousel (if MCP and Neo4j are connected) with cake options, prices, and images
+2. An assistant reply on the left with the Kapruka avatar
+3. A product carousel (if MCP and Neo4j are connected) with cake options in a 2-column grid, prices, and images
 
-**What just happened:** Your message was classified as `discovery`, HybridRAG retrieved relevant cake categories from Neo4j, Kapruka MCP searched the live catalog, and Gemini wrote a summary grounded in those results.
+**What just happened:** Your message passed the specificity gate, was classified as `discovery`, HybridRAG retrieved relevant cake categories from Neo4j, the agent loop called Kapruka MCP, product curation ranked birthday-appropriate cakes, and Gemini wrote a summary grounded in those results.
 
 ## Step 4: Change currency (optional)
 
