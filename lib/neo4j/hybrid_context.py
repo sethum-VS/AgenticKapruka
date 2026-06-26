@@ -476,6 +476,13 @@ ANNIVERSARY_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
     "Greeting Cards",
 )
 
+CHOCOLATE_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
+    "Flower",
+    "Flowers",
+    "Bouquet",
+    "Floral",
+)
+
 _CATEGORY_SEARCH_TERMS: dict[str, str] = {
     "chocolates": "chocolate",
     "flowers": "flower",
@@ -535,6 +542,31 @@ def _product_like_tokens(message: str) -> list[str]:
         for token in re.findall(r"[a-z0-9']+", message.lower())
         if len(token) >= 3 and token not in _META_QUERY_TOKENS
     ]
+
+
+_PRODUCT_TOKEN_PRIORITY: tuple[str, ...] = (
+    "chocolate",
+    "chocolates",
+    "cake",
+    "cakes",
+    "flower",
+    "flowers",
+    "roses",
+    "bouquet",
+    "hamper",
+    "gift",
+    "gifts",
+)
+
+
+def _primary_product_token(message: str) -> str | None:
+    """Pick the most product-specific token for budget-scoped Kapruka search q."""
+    lowered = message.lower()
+    for token in _PRODUCT_TOKEN_PRIORITY:
+        if re.search(rf"\b{re.escape(token)}\b", lowered):
+            return token
+    tokens = _product_like_tokens(message)
+    return tokens[0] if tokens else None
 
 
 def _is_meta_catalog_query(message: str) -> bool:
@@ -836,9 +868,21 @@ def _fallback_search_query(category: str | None) -> str:
     return "cake"
 
 
-def _birthday_biased_product_keyword(token: str, *, birthday_occasion: bool) -> str:
+def _birthday_biased_product_keyword(
+    token: str,
+    *,
+    birthday_occasion: bool,
+    query: str = "",
+) -> str:
     """Map a budget/meta token to a Kapruka keyword, preferring birthday cakes."""
     normalized = token.lower().strip()
+    if (
+        normalized in {"chocolate", "chocolates"}
+        and birthday_occasion
+        and not is_birthday_cake_intent(query)
+        and not _CAKE_TERM.search(query)
+    ):
+        return "chocolate gift"
     if birthday_occasion and normalized in {"cake", "cakes", "chocolate", "chocolates"}:
         return "birthday cake"
     return _product_search_keyword(token)
@@ -940,6 +984,29 @@ def enrich_flower_fruit_negative_hints(
         return context
     hints = dict(context.get("hints") or {})
     hints["exclude_categories"] = ", ".join(PUJA_NEGATIVE_CATEGORY_HINTS)
+    context["hints"] = hints
+    return context
+
+
+def enrich_chocolate_focus_hints(
+    query: str,
+    hybrid_context: dict[str, Any] | None,
+    *,
+    session_product_focus: str | None = None,
+) -> dict[str, Any]:
+    """Demote floral categories when the turn targets chocolate gifts, not cakes."""
+    context = dict(hybrid_context or {})
+    chocolate_focus = session_product_focus == "chocolate" or bool(
+        _CHOCOLATE_FLAVOR_RE.search(query),
+    )
+    if not chocolate_focus or is_birthday_cake_intent(query) or _CAKE_TERM.search(query):
+        return context
+    hints = dict(context.get("hints") or {})
+    existing = str(hints.get("exclude_categories") or "")
+    hints["exclude_categories"] = _merge_exclude_category_hints(
+        existing,
+        CHOCOLATE_NEGATIVE_CATEGORY_HINTS,
+    )
     context["hints"] = hints
     return context
 
@@ -1053,11 +1120,12 @@ def build_discovery_search_args(
         args["max_price"] = budget_cap.amount
         args["sort"] = "price_asc"
         args["currency"] = budget_cap.currency
-        product_tokens = _product_like_tokens(query)
-        if product_tokens:
+        primary_token = _primary_product_token(query)
+        if primary_token:
             args["q"] = _birthday_biased_product_keyword(
-                product_tokens[0],
+                primary_token,
                 birthday_occasion=birthday_occasion,
+                query=query,
             )
         elif _MOM_BIRTHDAY_RE.search(query):
             args["q"] = "Happy Birthday Mom"
@@ -1068,11 +1136,12 @@ def build_discovery_search_args(
         if max_price is not None:
             args["max_price"] = max_price
             args["sort"] = "price_asc"
-            product_tokens = _product_like_tokens(query)
-            if product_tokens:
+            primary_token = _primary_product_token(query)
+            if primary_token:
                 args["q"] = _birthday_biased_product_keyword(
-                    product_tokens[0],
+                    primary_token,
                     birthday_occasion=birthday_occasion,
+                    query=query,
                 )
             else:
                 args["q"] = _fallback_search_query(fallback_category)

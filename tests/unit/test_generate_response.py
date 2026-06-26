@@ -18,6 +18,7 @@ from graphs.nodes.generate_response import (
     _build_verified_city_delivery_line,
     _build_verified_delivery_fee_line,
     _cap_search_products_for_llm_context,
+    _carousel_strict_budget,
     _format_product_line,
     _resolve_effective_tool_results,
     build_agent_tool_error_message,
@@ -328,7 +329,7 @@ def test_render_assistant_html_structure() -> None:
     assert "Hello from Kapruka!" in html
     assert 'role="assistant"' in html
     assert "prose-assistant" in html
-    assert "justify-start" in html
+    assert 'data-role="assistant-message"' in html
 
 
 def test_extract_search_products_from_tool_results() -> None:
@@ -1336,6 +1337,22 @@ def test_carousel_consistency_guard_passes_through_positive_reply() -> None:
 def test_carousel_consistency_guard_skips_when_no_products() -> None:
     reply = "I couldn't find any fresh roses within your budget."
     assert carousel_consistency_guard(reply, []) == reply
+
+
+def test_carousel_strict_budget_anniversary_under_6000() -> None:
+    assert _carousel_strict_budget("anniversary gifts under 6000", 6000.0)
+
+
+def test_carousel_strict_budget_chocolate_under_6000() -> None:
+    assert _carousel_strict_budget("chocolate for wife under 6000", 6000.0)
+
+
+def test_carousel_strict_budget_false_on_topic_pivot() -> None:
+    state: AgentState = {
+        "intent_metadata": {"topic_pivot": True},
+        "session_budget_max": 6000.0,
+    }
+    assert not _carousel_strict_budget("Nevermind. Cakes.", 6000.0, state=state)
 
 
 @pytest.mark.asyncio

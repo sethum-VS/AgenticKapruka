@@ -22,6 +22,7 @@ from lib.chat.delivery_dates import (
     normalize_delivery_date,
 )
 from lib.chat.intent_heuristics import (
+    has_explicit_budget_constraint,
     is_bare_category_pivot,
     is_budget_refinement_message,
     is_budgeted_gift_ideas_message,
@@ -33,7 +34,9 @@ from lib.chat.product_curation import (
     apply_puja_curation,
     apply_recipient_curation,
     carousel_focus_guard,
+    demote_non_chocolate_for_chocolate_focus,
     demote_off_focus_products,
+    filter_excluded_category_hints,
     filter_gift_noise_products,
     has_graph_hybrid_context,
     is_cake_accessory,
@@ -152,6 +155,11 @@ On every step also set refined_intent:
 
 Shopping turns that need no catalog tools should use refined_intent general with
 action finish.
+
+Situational empathy turns: When the customer shares emotional context (breakup,
+condolence, apology) AND names a product type (flowers, roses, bouquet), action
+MUST be call_tool with kapruka_search_products — not ask_user. Search first, then
+finish so the response can pair empathy with product options.
 """
 
 
@@ -372,6 +380,7 @@ _SHORT_CATEGORY_REPLY = re.compile(
     re.I,
 )
 _FLOWERS_REQUEST = re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)s?\b", re.I)
+_APOLOGY_PATTERN = re.compile(r"\b(?:apolog(?:y|ize|ise)|sorry|forgive|make\s+up)\b", re.I)
 _FLORAL_DESIGN = re.compile(r"\b(?:floral|design|designs)\b", re.I)
 _GIFT_VOUCHER_Q = re.compile(r"\bgift\s+voucher\b", re.I)
 _CATALOG_INTENT = re.compile(
@@ -520,6 +529,31 @@ def _should_run_dual_gift_search(
     return bool(_GIFT_WORD.search(user_message))
 
 
+def _should_run_situational_flowers_search(
+    state: AgentState,
+    user_message: str,
+    *,
+    already_ran: bool,
+) -> bool:
+    """True when a distress turn names flowers and needs a deterministic search."""
+    if already_ran:
+        return False
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    if not intent_metadata.get("is_situational"):
+        return False
+    return bool(_FLOWERS_REQUEST.search(user_message))
+
+
+def _situational_flowers_search_args(user_message: str) -> dict[str, Any]:
+    """Build iteration-0 search args for situational flower/apology turns."""
+    query = (
+        "apology flowers"
+        if _APOLOGY_PATTERN.search(user_message)
+        else "roses bouquet"
+    )
+    return {"q": query, "category": "Flowers"}
+
+
 def _agent_tool_error_from_result(tool_name: str, result: dict[str, Any]) -> dict[str, str]:
     error_message = result.get("message")
     payload: dict[str, str] = {
@@ -608,7 +642,17 @@ def _curate_search_trace_result(
     session_focus = state.get("session_product_focus")
     session_recipient = state.get("session_recipient_hint")
     session_occasion_val = state.get("session_occasion")
-    strict_budget = bool(is_budget_refinement_message(user_message))
+    intent_metadata = state.get("intent_metadata") or {}
+    topic_pivot = bool(
+        isinstance(intent_metadata, dict) and intent_metadata.get("topic_pivot"),
+    )
+    strict_budget = has_explicit_budget_constraint(
+        user_message,
+        state.get("session_budget_max")
+        if isinstance(state.get("session_budget_max"), (int, float))
+        else None,
+        topic_pivot=topic_pivot,
+    )
     curated = apply_anniversary_curation(
         apply_gift_curation(
             apply_birthday_cake_curation(
@@ -634,10 +678,29 @@ def _curate_search_trace_result(
         curated,
         session_recipient if isinstance(session_recipient, str) else None,
     )
+    curated = demote_non_chocolate_for_chocolate_focus(
+        curated,
+        user_message,
+        session_product_focus=session_focus if isinstance(session_focus, str) else None,
+    )
+    curated = filter_excluded_category_hints(
+        curated,
+        hybrid_context,
+        session_product_focus=session_focus if isinstance(session_focus, str) else None,
+        query=user_message,
+    )
+    curated = demote_off_focus_products(
+        curated,
+        session_focus if isinstance(session_focus, str) else None,
+    )
     curated = filter_gift_noise_products(curated, strict=strict_budget)
     budget_max = state.get("session_budget_max")
     currency = state.get("currency") or state.get("session_budget_currency") or "LKR"
-    if isinstance(budget_max, (int, float)) and budget_max > 0:
+    if (
+        not topic_pivot
+        and isinstance(budget_max, (int, float))
+        and budget_max > 0
+    ):
         from lib.chat.product_curation import sort_and_filter_by_budget
 
         curated = sort_and_filter_by_budget(
@@ -1092,6 +1155,7 @@ async def agent_loop(
     dual_gift_search_applied = False
     budgeted_gift_ideas_search_applied = False
     budget_refinement_search_applied = False
+    situational_flowers_search_applied = False
     session_delivery_date_update: str | None = None
     session_search_query_update: str | None = None
 
@@ -1266,6 +1330,52 @@ async def agent_loop(
             exit_reason = "finish"
             agent_loop_done = True
             break
+
+        if (
+            iteration == 0
+            and not situational_flowers_search_applied
+            and _should_run_situational_flowers_search(
+                state,
+                user_message,
+                already_ran=situational_flowers_search_applied,
+            )
+        ):
+            situational_flowers_search_applied = True
+            tool_name = SEARCH_PRODUCTS_TOOL
+            enriched_args = _inject_tool_currency(
+                tool_name,
+                _situational_flowers_search_args(user_message),
+                state,
+                currency,
+            )
+            _emit_status(_status_message_for_tool(tool_name))
+            result = await _invoke_tool_with_rate_limit_retry(
+                tool_name,
+                enriched_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+            result = _curate_search_trace_result(result, state=state)
+            search_q_arg = enriched_args.get("q")
+            if isinstance(search_q_arg, str) and search_q_arg.strip():
+                session_search_query_update = search_q_arg.strip()
+            tool_trace.append(
+                {"name": tool_name, "args": enriched_args, "result": result},
+            )
+            tool_call_count += 1
+            if isinstance(result, dict) and result.get("error"):
+                agent_tool_error = _agent_tool_error_from_result(tool_name, result)
+                exit_reason = "tool_error"
+                agent_loop_done = True
+                break
+            if _search_has_products(result) and _should_force_finish_after_search(
+                state,
+                tool_trace,
+            ):
+                exit_reason = "finish"
+                agent_loop_done = True
+                break
 
         if iteration > 0 or not budget_refinement_search_applied:
             _emit_status(_DEFAULT_STATUS_MESSAGE)
@@ -1588,7 +1698,18 @@ async def agent_loop(
             and not _search_has_products(result)
             and not search_broaden_applied
         ):
-            broadened_args, _broaden_step = apply_first_broaden(enriched_args)
+            broadened_args, _broaden_step = apply_first_broaden(
+                enriched_args,
+                preserve_max_price=has_explicit_budget_constraint(
+                    _extract_latest_user_message(state.get("messages") or []),
+                    state.get("session_budget_max")
+                    if isinstance(state.get("session_budget_max"), (int, float))
+                    else None,
+                    topic_pivot=bool(
+                        (state.get("intent_metadata") or {}).get("topic_pivot"),
+                    ),
+                ),
+            )
             if broadened_args is not None and not _is_duplicate_invocation(
                 tool_trace,
                 SEARCH_PRODUCTS_TOOL,

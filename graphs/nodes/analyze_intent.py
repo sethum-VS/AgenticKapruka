@@ -432,6 +432,9 @@ async def analyze_intent(
             result["session_search_query"] = None
             result["session_occasion"] = None
             result["session_recipient_hint"] = None
+            if session_budget_max is None:
+                result["session_budget_max"] = None
+                result["session_budget_currency"] = None
             result.update(pivot_session_clear)
             if hybrid_context_update is not None:
                 result["hybrid_context"] = hybrid_context_update

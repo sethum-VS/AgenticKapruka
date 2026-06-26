@@ -270,6 +270,17 @@ def test_build_discovery_search_args_parses_under_price_budget() -> None:
     assert args["category"] == "Birthday"
 
 
+def test_build_discovery_search_args_wife_birthday_chocolate_prefers_chocolate_gift() -> None:
+    args = build_discovery_search_args(
+        "wife birthday chocolate under 6000",
+        {"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "chocolate gift"
+    assert args["max_price"] == 6000.0
+
+
 def test_is_birthday_cake_intent_detects_explicit_and_occasion_cake() -> None:
     assert is_birthday_cake_intent("Birthday cake for mom in Colombo")
     assert is_birthday_cake_intent("cake for mom's birthday")

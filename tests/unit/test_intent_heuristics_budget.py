@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from lib.chat.intent_heuristics import (
+    has_explicit_budget_constraint,
     is_bare_category_pivot,
     is_budget_refinement_message,
     is_topic_pivot_message,
@@ -33,3 +34,19 @@ def test_is_bare_category_pivot_nevermind_cakes() -> None:
     assert is_bare_category_pivot("Nevermind. Cakes.") == "cake"
     assert is_bare_category_pivot("cakes") == "cake"
     assert is_bare_category_pivot("birthday cake for mom") is None
+
+
+def test_has_explicit_budget_constraint_anniversary_under_6000() -> None:
+    assert has_explicit_budget_constraint("anniversary gifts under 6000")
+
+
+def test_has_explicit_budget_constraint_chocolate_under_6000() -> None:
+    assert has_explicit_budget_constraint("chocolate for wife under 6000")
+
+
+def test_has_explicit_budget_constraint_false_on_topic_pivot() -> None:
+    assert not has_explicit_budget_constraint(
+        "Nevermind. Cakes.",
+        6000.0,
+        topic_pivot=True,
+    )

@@ -233,7 +233,7 @@ async def test_tracking_turn_with_money_shaped_amount_renders_without_crash(
 
     assert result["intent"] == "tracking"
     assert 'data-testid="order-tracking-status"' in (result.get("response_html") or "")
-    assert "LKR 4,970" in (result.get("response_html") or "")
+    assert "Rs. 4,970" in (result.get("response_html") or "")
     mock_service.track_order.assert_awaited_once()
 
 

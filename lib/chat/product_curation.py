@@ -19,7 +19,11 @@ _PRODUCE_DENYLIST = re.compile(
     re.I,
 )
 _GIFT_PROMOTE_RE = re.compile(
-    r"\b(?:hamper|hampers|combo|combopack|bouquet|ferrero|chocolate bouquet|gift box)\b",
+    r"\b(?:hamper|hampers|combo|combopack|ferrero|chocolate bouquet|gift box)\b",
+    re.I,
+)
+_GIFT_PROMOTE_WITH_BOUQUET_RE = re.compile(
+    r"\b(?:bouquet)\b",
     re.I,
 )
 _GIFT_DEMOTE_RE = re.compile(
@@ -54,14 +58,26 @@ _MALE_RECIPIENTS = frozenset(
     },
 )
 _FOR_HIM_RE = re.compile(
-    r"\b(?:for him|for dad|father'?s?|men'?s?|gentleman|boyfriend)\b", re.I
+    r"\b(?:for him|for dad|father'?s?|men'?s?|gentleman|boyfriend)\b|^Dad\b",
+    re.I,
 )
+_TITLE_LEADING_DAD_RE = re.compile(r"^Dad\b", re.I)
 _FOR_HER_RE = re.compile(
     r"\b(?:for her|for mom|mother'?s?|women'?s?|ladies|girlfriend)\b", re.I
 )
 _NON_FLORAL_FLOWER_DENYLIST = re.compile(
     r"\b(?:air freshener|freshener|fragrance|deodorizer|room spray|scented)\b",
     re.I,
+)
+_FLORAL_FOR_CHOCOLATE_DENYLIST = re.compile(
+    r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b",
+    re.I,
+)
+_CHOCOLATE_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
+    "Flower",
+    "Flowers",
+    "Bouquet",
+    "Floral",
 )
 _BIRTHDAY_PRODUCT_RE = re.compile(r"\bbirthday\b", re.I)
 _CAKE_ID_PREFIX = re.compile(r"^cake", re.I)
@@ -347,13 +363,44 @@ def _gift_curation_active(
     user_message: str,
     hybrid_context: dict[str, Any] | None = None,
 ) -> bool:
-    if session_product_focus in ("chocolate", "gift"):
+    if session_product_focus == "gift":
+        return True
+    if session_product_focus == "chocolate":
         return True
     if _BIRTHDAY_PRODUCT_RE.search(user_message):
         return True
     hints = (hybrid_context or {}).get("hints") or {}
     occasion = hints.get("occasion")
     return isinstance(occasion, str) and "birthday" in occasion.lower()
+
+
+def demote_non_chocolate_for_chocolate_focus(
+    products: list[dict[str, Any]],
+    query: str,
+    *,
+    session_product_focus: str | None = None,
+) -> list[dict[str, Any]]:
+    """Demote floral arrangements when the customer wants chocolate gifts."""
+    if not products:
+        return []
+    chocolate_focus = session_product_focus == "chocolate" or bool(
+        _FOCUS_TOKEN_PATTERNS["chocolate"].search(query),
+    )
+    if not chocolate_focus:
+        return list(products)
+
+    preferred: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        blob = _product_text_blob(product)
+        if (
+            _FLORAL_FOR_CHOCOLATE_DENYLIST.search(blob)
+            and not _FOCUS_TOKEN_PATTERNS["chocolate"].search(blob)
+        ):
+            demoted.append(product)
+        else:
+            preferred.append(product)
+    return preferred + demoted
 
 
 def demote_non_floral_for_flower_intent(
@@ -424,7 +471,10 @@ def apply_gift_curation(
         blob = _product_text_blob(product)
         if _GIFT_DEMOTE_RE.search(blob) or _PRODUCE_DENYLIST.search(blob):
             demoted.append(product)
-        elif _GIFT_PROMOTE_RE.search(blob):
+        elif _GIFT_PROMOTE_RE.search(blob) or (
+            session_product_focus != "chocolate"
+            and _GIFT_PROMOTE_WITH_BOUQUET_RE.search(blob)
+        ):
             promoted.append(product)
         else:
             neutral.append(product)
@@ -472,13 +522,66 @@ def apply_recipient_curation(
     preferred: list[dict[str, Any]] = []
     mismatched: list[dict[str, Any]] = []
     for product in products:
-        if mismatch.search(_product_text_blob(product)):
+        blob = _product_text_blob(product)
+        name = str(product.get("name") or "")
+        if mismatch.search(blob) or (
+            recipient in _FEMALE_RECIPIENTS and _TITLE_LEADING_DAD_RE.search(name)
+        ):
             mismatched.append(product)
         else:
             preferred.append(product)
     if len(preferred) >= 3:
         return preferred
     return preferred + mismatched
+
+
+def _merge_exclude_category_tokens(existing: str, additions: tuple[str, ...]) -> str:
+    tokens = [part.strip() for part in existing.split(",") if part.strip()]
+    seen = {token.lower() for token in tokens}
+    for item in additions:
+        if item.lower() not in seen:
+            tokens.append(item)
+            seen.add(item.lower())
+    return ", ".join(tokens)
+
+
+def _product_matches_excluded_category(product: dict[str, Any], exclude_hints: str) -> bool:
+    cat_text = _product_category_text(product).lower()
+    blob = _product_text_blob(product).lower()
+    for token in exclude_hints.split(","):
+        needle = token.strip().lower()
+        if needle and (needle in cat_text or needle in blob):
+            return True
+    return False
+
+
+def filter_excluded_category_hints(
+    products: list[dict[str, Any]],
+    hybrid_context: dict[str, Any] | None,
+    *,
+    session_product_focus: str | None = None,
+    query: str = "",
+) -> list[dict[str, Any]]:
+    """Drop products matching graph exclude_categories hints or chocolate floral noise."""
+    if not products:
+        return []
+    hints = (hybrid_context or {}).get("hints") or {}
+    exclude = str(hints.get("exclude_categories") or "")
+    chocolate_focus = session_product_focus == "chocolate" or bool(
+        _FOCUS_TOKEN_PATTERNS["chocolate"].search(query),
+    )
+    if chocolate_focus:
+        exclude = _merge_exclude_category_tokens(exclude, _CHOCOLATE_NEGATIVE_CATEGORY_HINTS)
+    if not exclude.strip():
+        return list(products)
+    filtered = [
+        product
+        for product in products
+        if not _product_matches_excluded_category(product, exclude)
+    ]
+    if len(filtered) >= 3:
+        return filtered
+    return list(products)
 
 
 def refine_last_search_by_budget(
@@ -675,6 +778,18 @@ def curate_carousel_products(
         query,
         session_product_focus=session_product_focus,
     )
+    scoped = demote_non_chocolate_for_chocolate_focus(
+        scoped,
+        query,
+        session_product_focus=session_product_focus,
+    )
+    scoped = filter_excluded_category_hints(
+        scoped,
+        hybrid_context,
+        session_product_focus=session_product_focus,
+        query=query,
+    )
+    scoped = demote_off_focus_products(scoped, session_product_focus)
     scoped = boost_carousel_relevance(scoped, query)
     scoped = apply_recipient_curation(scoped, session_recipient_hint)
     scoped = filter_gift_noise_products(scoped, strict=strict_budget)

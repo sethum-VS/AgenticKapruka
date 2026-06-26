@@ -158,6 +158,25 @@ _BARE_CATEGORY_REPLY = re.compile(
 )
 
 
+def has_explicit_budget_constraint(
+    message: str,
+    _session_budget: float | None = None,
+    *,
+    topic_pivot: bool = False,
+) -> bool:
+    """True when the turn carries an explicit budget cap (strict carousel filter mode)."""
+    if topic_pivot:
+        return False
+    stripped = message.strip()
+    if not stripped:
+        return False
+    if extract_budget(stripped) is not None or extract_max_price(stripped) is not None:
+        return True
+    if is_budget_refinement_message(stripped):
+        return True
+    return is_budgeted_gift_ideas_message(stripped)
+
+
 def is_budget_refinement_message(message: str) -> bool:
     """True when the turn states a budget without naming a new product category."""
     stripped = message.strip()

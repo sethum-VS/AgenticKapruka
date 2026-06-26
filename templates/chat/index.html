@@ -75,7 +75,7 @@
           aria-hidden="true"
         ></div>
         <div
-          class="flex items-end gap-2 rounded-xl border border-outline-variant/40 bg-canvas p-2 transition-all focus-within:border-primary focus-within:ring-1 focus-within:ring-primary"
+          class="flex items-end gap-2 rounded-xl border border-outline-variant/40 bg-canvas p-2 transition-colors focus-within:border-primary"
         >
           <label for="chat-message" class="sr-only">Message</label>
           <textarea
@@ -85,7 +85,7 @@
             rows="1"
             required
             placeholder="Type a message…"
-            class="max-h-32 min-h-[44px] w-full resize-none border-none bg-transparent py-2.5 text-body-md font-body-md text-on-surface placeholder:text-outline focus:ring-0"
+            class="max-h-32 min-h-[44px] w-full resize-none border-0 bg-transparent py-2.5 text-body-md font-body-md text-on-surface placeholder:text-outline outline-none focus:border-0 focus:outline-none focus:ring-0"
             style="min-height: 44px;"
           ></textarea>
           <button
@@ -124,7 +124,7 @@
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
             ></path>
           </svg>
-          <span>Sending…</span>
+          <span data-testid="chat-loading-text">Sending…</span>
         </div>
       </form>
       <p class="mt-2 text-center text-[11px] text-outline">

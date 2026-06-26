@@ -110,8 +110,15 @@ def _date_from_raw_value(raw: str, *, today: date) -> str | None:
     iso_match = _ISO_DATE.search(raw)
     if iso_match:
         candidate = iso_match.group(1)
-        ok, _ = validate_delivery_date_iso(candidate)
-        return candidate if ok else None
+        if not _ISO_DATE.fullmatch(candidate):
+            return None
+        try:
+            parsed = date.fromisoformat(candidate)
+        except ValueError:
+            return None
+        if parsed < today:
+            return None
+        return candidate
 
     parsed = parse_relative_delivery_date(raw, today=today)
     if parsed is None:

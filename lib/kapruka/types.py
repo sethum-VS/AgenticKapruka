@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from lib.utils.currency import format_currency
 from lib.utils.text import normalize_catalog_text
 
 SUPPORTED_CURRENCIES = frozenset({"LKR", "USD", "GBP", "AUD", "CAD", "EUR"})
@@ -410,14 +411,6 @@ class TrackOrderItem(BaseModel):
     selling_price: float
 
 
-def _format_track_amount_currency_code(raw_amount: float | int | str, currency: str) -> str:
-    """Format MCP money as a display string (e.g. ``LKR 4,970``)."""
-    code = currency.upper()
-    num = float(str(raw_amount).replace(",", ""))
-    formatted = f"{round(num):,}" if code == "LKR" else f"{num:,.2f}"
-    return f"{code} {formatted}"
-
-
 def coerce_track_order_amount(value: Any) -> str:
     """Normalize track-order amount from MCP string or Money-shaped payload."""
     if isinstance(value, str):
@@ -437,7 +430,8 @@ def coerce_track_order_amount(value: Any) -> str:
         msg = "amount money object missing value/amount"
         raise ValueError(msg)
 
-    return _format_track_amount_currency_code(raw_amount, currency)
+    num = float(str(raw_amount).replace(",", ""))
+    return format_currency(num, currency)
 
 
 class TrackOrderOutput(BaseModel):

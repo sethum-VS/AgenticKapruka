@@ -583,7 +583,7 @@ async def test_agent_loop_emits_status_events() -> None:
         AgentPlannerStep(
             action="call_tool",
             tool_name=CHECK_DELIVERY_TOOL,
-            tool_args={"city": "Kandy", "date": "2026-06-25"},
+            tool_args={"city": "Kandy", "delivery_date": "2026-07-01"},
             rationale="check delivery",
         ),
         AgentPlannerStep(action="finish", rationale="done"),
@@ -1322,6 +1322,43 @@ async def test_agent_loop_budget_refinement_exits_without_second_planner_iterati
     assert mock_service.search_products.await_count == 1
     assert result.get("session_search_query") == "chocolate gift"
     assert result["last_search_products"] == state["last_search_products"]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_situational_breakup_flowers_searches_on_turn_one() -> None:
+    """Breakup + apology flowers invokes kapruka_search_products before the planner."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "messages": [
+            HumanMessage(content="We just broke up and I need flowers to apologize to her."),
+        ],
+        "intent_metadata": {"is_situational": True},
+    }
+    planner_should_not_run = AgentPlannerStep(
+        action="ask_user",
+        rationale="Who are the flowers for?",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=[planner_should_not_run],
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_not_called()
+    assert mock_service.search_products.await_count == 1
+    search_call = mock_service.search_products.await_args
+    assert search_call is not None
+    assert search_call.kwargs["q"] == "apology flowers"
+    assert search_call.kwargs.get("category") == "Flowers"
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert len(result["tool_trace"]) == 1
+    assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
 
 
 def test_delivery_check_pending_false_on_breakup_with_session_city() -> None:

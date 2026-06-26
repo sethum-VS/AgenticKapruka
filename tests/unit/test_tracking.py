@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import HumanMessage
 
+from graphs.nodes.call_mcp_tools import select_tool_calls
 from graphs.nodes.generate_response import build_agent_tool_error_message, generate_response
 from graphs.state import AgentState
 from lib.checkout.tracking import (
@@ -81,6 +82,14 @@ def test_classify_order_references_extracts_multiple_kinds() -> None:
 )
 def test_extract_order_number(message: str, expected: str | None) -> None:
     assert extract_order_number(message) == expected
+
+
+def test_select_tool_calls_ka_legacy_skips_mcp() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="Track KA987654")],
+        "intent": "tracking",
+    }
+    assert select_tool_calls(state) == []
 
 
 def test_tracking_output_from_tool_results_ignores_error_payload() -> None:

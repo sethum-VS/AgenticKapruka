@@ -59,6 +59,17 @@ def test_artificial_floral_note_for_picks_on_flowers_request() -> None:
     assert "not fresh-cut" in note.lower()
 
 
+def test_artificial_floral_note_for_picks_on_fresh_flowers_request() -> None:
+    silk = _product("Kit Kat Silk Roses Bouquet")
+    note = artificial_floral_note_for_picks(
+        [silk],
+        user_message="I need fresh flowers for an anniversary",
+    )
+    assert note is not None
+    assert "artificial" in note.lower()
+    assert "not fresh-cut" in note.lower()
+
+
 def test_artificial_floral_note_skipped_without_flowers_request() -> None:
     silk = _product("Kit Kat Silk Roses Bouquet")
     assert (

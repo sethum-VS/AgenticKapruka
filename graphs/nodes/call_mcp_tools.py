@@ -7,7 +7,7 @@ from typing import Any
 
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
-from lib.checkout.tracking import extract_order_number
+from lib.checkout.tracking import classify_order_reference, extract_order_number
 from lib.kapruka.product_id import extract_product_id
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tool_executor import SUPPORTED_TOOL_NAMES, inject_currency, invoke_tool
@@ -92,6 +92,8 @@ def select_tool_calls(state: AgentState) -> list[dict[str, Any]]:
     if intent == "tracking":
         order_number = extract_order_number(user_message)
         if order_number:
+            if classify_order_reference(order_number) == "ka_legacy":
+                return []
             return [{"name": TRACK_ORDER_TOOL, "args": {"order_number": order_number}}]
         return []
 

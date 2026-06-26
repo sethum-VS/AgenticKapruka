@@ -59,3 +59,13 @@ def test_chat_sse_js_removes_pending_bubble_on_stream_error() -> None:
     assert '[id^="assistant-stream-"]' in source
     assert "removePendingAssistantBubbles();" in source
     assert "successful: false" in source
+
+
+def test_chat_sse_js_updates_loading_text_from_status_events() -> None:
+    """Status SSE payloads update #chat-loading span text and aria-label."""
+    source = CHAT_SSE_JS.read_text()
+
+    assert "updateLoadingStatusText" in source
+    assert 'data-testid="chat-loading-text"' in source
+    assert "parseStatusTextFromHtml" in source
+    assert 'DEFAULT_LOADING_TEXT = "Sending…"' in source

@@ -10,6 +10,7 @@ from lib.chat.product_curation import (
     apply_recipient_curation,
     carousel_focus_guard,
     curate_carousel_products,
+    demote_non_chocolate_for_chocolate_focus,
     demote_non_floral_for_flower_intent,
     demote_off_focus_products,
     demote_puja_products,
@@ -333,13 +334,16 @@ def test_apply_gift_curation_promotes_hampers_over_convenience_candy() -> None:
         _product("kitkat", 1200.0, name="KitKat Minis"),
         _product("ferrero", 4500.0, name="Ferrero Rocher Chocolate Gift Box"),
         _product("hamper", 5500.0, name="Birthday Chocolate Hamper"),
+        _product("bouquet", 4800.0, name="Rose Chocolate Bouquet"),
     ]
     curated = apply_gift_curation(
         products,
         session_product_focus="chocolate",
         user_message="wife birthday chocolate under 6000",
     )
-    assert curated[0]["id"] in {"hamper", "ferrero"}
+    top_ids = {item["id"] for item in curated[:2]}
+    assert "bouquet" not in top_ids
+    assert top_ids & {"hamper", "ferrero"}
     assert curated[-1]["id"] in {"curry", "kitkat"}
 
 
@@ -350,6 +354,55 @@ def test_demote_off_focus_products_keeps_matches_first() -> None:
     ]
     demoted = demote_off_focus_products(products, "chocolate")
     assert demoted[0]["id"] == "choc"
+
+
+def test_demote_non_chocolate_for_chocolate_focus_demotes_bouquets() -> None:
+    products = [
+        _product("roses", 4500.0, name="Blush Roses Bouquet"),
+        _product("choc", 5200.0, name="Dark Chocolate Truffles"),
+    ]
+    curated = demote_non_chocolate_for_chocolate_focus(
+        products,
+        "wife birthday chocolate under 6000",
+        session_product_focus="chocolate",
+    )
+    assert curated[0]["id"] == "choc"
+    assert curated[-1]["id"] == "roses"
+
+
+def test_apply_recipient_curation_drops_title_leading_dad_box_for_wife() -> None:
+    products = [
+        _product("dad", 4500.0, name="Dad Chocolate Gift Box"),
+        _product("her1", 5200.0, name="Chocolate Truffles Gift Box"),
+        _product("her2", 4000.0, name="Heart Chocolate Assortment"),
+        _product("her3", 3500.0, name="Luxury Chocolate Hamper"),
+    ]
+    curated = apply_recipient_curation(products, "wife")
+    ids = [item["id"] for item in curated]
+    assert "dad" not in ids
+
+
+def test_curate_carousel_products_wife_birthday_chocolate_excludes_bouquet_and_dad() -> None:
+    products = [
+        _product("bouquet", 4500.0, name="Rose Bouquet Premium"),
+        _product("dad", 4200.0, name="Dad Chocolate Gift Box"),
+        _product("choc1", 5200.0, name="Heart Chocolate Gift Box"),
+        _product("choc2", 4800.0, name="Ferrero Rocher Collection"),
+        _product("choc3", 3900.0, name="Milk Chocolate Truffles"),
+    ]
+    curated = curate_carousel_products(
+        products,
+        query="wife birthday chocolate under 6000",
+        budget_max=6000.0,
+        currency="LKR",
+        session_product_focus="chocolate",
+        session_recipient_hint="wife",
+        strict_budget=True,
+        hybrid_context={"hints": {"occasion": "Birthday"}},
+    )
+    names = [str(item.get("name") or "").lower() for item in curated]
+    assert not any("bouquet" in name for name in names)
+    assert not any(name.startswith("dad") for name in names)
 
 
 def test_filter_gift_noise_products_drops_curry_and_snack_bar() -> None:

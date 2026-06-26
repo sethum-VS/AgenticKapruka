@@ -310,6 +310,33 @@ async def test_shopping_graph_tracking_skips_hybrid_context_and_agent_loop(
 
 
 @pytest.mark.asyncio
+async def test_shopping_graph_tracking_ka_legacy_skips_mcp(
+    graph_deps: ShoppingGraphDeps,
+) -> None:
+    """KA legacy order numbers must not invoke kapruka_track_order (rate-limit guard)."""
+    kapruka_service = graph_deps.kapruka_service
+    assert isinstance(kapruka_service, AsyncMock)
+
+    graph_deps = ShoppingGraphDeps(
+        kapruka_service=kapruka_service,
+        client_ip=graph_deps.client_ip,
+        genai_client=_mock_genai_client(intent="tracking"),
+    )
+    graph = build_shopping_graph(deps=graph_deps)
+    state: AgentState = initial_shopping_state(
+        message="Track KA987654",
+        session_id=_SESSION_ID,
+    )
+    result = await graph.ainvoke(state)
+
+    assert result["intent"] == "tracking"
+    assert result.get("tool_call_count") in (None, 0)
+    assert TRACK_ORDER_TOOL not in (result.get("tool_results") or {})
+    kapruka_service.track_order.assert_not_awaited()
+    assert "legacy" in (result.get("assistant_message") or "").lower()
+
+
+@pytest.mark.asyncio
 async def test_shopping_graph_product_id_fast_path_skips_agent_loop(
     graph_deps: ShoppingGraphDeps,
 ) -> None:

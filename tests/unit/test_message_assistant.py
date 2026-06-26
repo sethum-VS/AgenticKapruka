@@ -30,7 +30,7 @@ def test_message_assistant_renders_message_only_structure() -> None:
     assert 'data-role="assistant-message"' in html
     assert 'role="assistant"' in html
     assert 'aria-label="Assistant message"' in html
-    assert "justify-start" in html
+    assert "items-start" in html
     assert "prose-assistant" in html
     assert 'data-slot="product-carousel"' not in html
 

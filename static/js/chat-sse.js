@@ -158,10 +158,43 @@
   }
 
   const STATUS_MIN_VISIBLE_MS = 800;
+  const DEFAULT_LOADING_TEXT = "Sending…";
   let statusShownAt = 0;
   let statusFlushTimer = null;
 
+  function updateLoadingStatusText(text) {
+    const indicator = document.getElementById("chat-loading");
+    if (!indicator) {
+      return;
+    }
+    const span =
+      indicator.querySelector('[data-testid="chat-loading-text"]') ||
+      indicator.querySelector("span");
+    if (!span) {
+      return;
+    }
+    const display = text || DEFAULT_LOADING_TEXT;
+    span.textContent = display;
+    indicator.setAttribute("aria-label", display);
+  }
+
+  function parseStatusTextFromHtml(html) {
+    const template = document.createElement("template");
+    template.innerHTML = html.trim();
+    const paragraph = template.content.querySelector("p");
+    if (!paragraph) {
+      return null;
+    }
+    const text = paragraph.textContent?.trim();
+    return text || null;
+  }
+
   function swapStatusHtml(html) {
+    const statusText = parseStatusTextFromHtml(html);
+    if (statusText) {
+      updateLoadingStatusText(statusText);
+    }
+
     const now = Date.now();
     const apply = () => {
       htmx.swap(document.body, html, { swapStyle: "none" });
@@ -193,6 +226,7 @@
     if (active) {
       form.classList.add("htmx-request");
       indicator?.classList.add("htmx-request", "chat-loading");
+      updateLoadingStatusText(DEFAULT_LOADING_TEXT);
       if (submitButton) {
         submitButton.disabled = true;
       }
@@ -203,6 +237,7 @@
     } else {
       form.classList.remove("htmx-request");
       indicator?.classList.remove("htmx-request", "chat-loading");
+      updateLoadingStatusText(DEFAULT_LOADING_TEXT);
       if (submitButton) {
         submitButton.disabled = false;
       }

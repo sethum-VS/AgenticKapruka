@@ -156,7 +156,12 @@ def test_cart_drawer_full_height_outside_blurred_header() -> None:
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
   </head>
   <body class="bg-commerce-cream">
-    <div class="contents" data-testid="cart-drawer" x-data="cartDrawer(0)" @keydown.escape.window="open && close()">
+    <div
+      class="contents"
+      data-testid="cart-drawer"
+      x-data="cartDrawer(0)"
+      @keydown.escape.window="open && close()"
+    >
       {panel_html}
       <header class="border-b bg-white/80 backdrop-blur-sm">
         <div class="flex justify-end p-3">{trigger_html}</div>

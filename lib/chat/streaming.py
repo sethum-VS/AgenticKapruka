@@ -30,6 +30,9 @@ _CART_ERROR_FALLBACK = "I couldn't add that — try naming the product."
 
 def _skip_early_search_status(state: AgentState) -> bool:
     """Skip generic search status when the turn routes straight to a reply."""
+    intent = state.get("intent")
+    if intent in ("tracking", "checkout"):
+        return True
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if not user_message.strip():
         return False

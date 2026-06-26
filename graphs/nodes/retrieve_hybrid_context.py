@@ -22,6 +22,7 @@ from lib.neo4j.hybrid_context import (
     build_graph_hybrid_context,
     enrich_anniversary_hints,
     enrich_birthday_cake_hints,
+    enrich_chocolate_focus_hints,
     enrich_flower_fruit_negative_hints,
     fetch_category_display_names,
     fetch_category_ids_for_occasions,
@@ -263,6 +264,11 @@ async def retrieve_hybrid_context(
         topic_pivot=topic_pivot,
     )
     hybrid_context = enrich_flower_fruit_negative_hints(user_message, hybrid_context)
+    hybrid_context = enrich_chocolate_focus_hints(
+        user_message,
+        hybrid_context,
+        session_product_focus=state.get("session_product_focus"),
+    )
     hybrid_context = enrich_birthday_cake_hints(
         user_message,
         hybrid_context,

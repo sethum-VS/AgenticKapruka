@@ -172,6 +172,10 @@ async def test_context_pivot_nevermind_cakes_clears_anniversary_and_searches_cak
         )
 
     assert turn2.get("intent_metadata", {}).get("topic_pivot") is True
+    assert turn2.get("session_budget_max") is None
+    assert turn2.get("session_budget_currency") is None
+    response_html = turn2.get("response_html") or ""
+    assert 'data-testid="budget-badge"' not in response_html
     assert turn2.get("session_product_focus") == "cake"
     assert turn2.get("session_search_query") is None
     hints = (turn2.get("hybrid_context") or {}).get("hints") or {}

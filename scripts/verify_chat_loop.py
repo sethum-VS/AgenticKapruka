@@ -22,6 +22,7 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   delivery_colombo    ~8–25s  delivery confirmation or clarifying date, no carousel
   budget_sort         ~8–20s  carousel first item within stated budget cap
   silk_disclaimer     ~8–20s  artificial floral note when silk products appear
+  fresh_flowers_silk  ~8–20s  fresh flowers request + silk picks → disclaimer
   farewell            ~2–5s   warm sign-off, not capabilities menu
   delivery_followup   ~8–25s  delivery check after cart add; no Field required errors
   cake_mom_colombo    ~8–25s  carousel OR zone clarify OR delivery copy; no API errors
@@ -185,6 +186,12 @@ SCENARIOS: tuple[TurnScenario, ...] = (
     TurnScenario(
         name="silk_disclaimer",
         message="chocolate and flowers wife birthday",
+        expect_carousel=True,
+        expect_artificial_disclaimer_if_silk=True,
+    ),
+    TurnScenario(
+        name="fresh_flowers_silk",
+        message="I need fresh flowers for an anniversary",
         expect_carousel=True,
         expect_artificial_disclaimer_if_silk=True,
     ),

@@ -22,6 +22,17 @@ def test_chat_helpers_js_registers_alpine_component() -> None:
     assert 'elt?.id === "chat-form"' in source
 
 
+def test_chat_helpers_js_wires_enter_key_submit() -> None:
+    """Enter in the chat textarea submits; Shift+Enter is left for new lines."""
+    source = CHAT_HELPERS_JS.read_text()
+
+    assert 'event.key !== "Enter"' in source
+    assert "event.shiftKey" in source
+    assert "event.preventDefault()" in source
+    assert 'form.classList.contains("htmx-request")' in source
+    assert "form.requestSubmit()" in source
+
+
 def test_chat_helpers_js_wires_suggestion_chip_click() -> None:
     """data-chat-suggestion chips fill the chat input and submit the form."""
     source = CHAT_HELPERS_JS.read_text()

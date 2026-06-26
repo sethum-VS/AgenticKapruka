@@ -314,6 +314,7 @@ async def test_analyze_intent_topic_pivot_clears_session_budget() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     assert result.get("session_budget_max") is None
+    assert result.get("session_budget_currency") is None
     assert result.get("last_visible_products") is None
     assert result.get("last_search_products") is None
 

@@ -185,7 +185,27 @@ def _turn_has_fresh_search(tool_trace: list[ToolInvocation] | None) -> bool:
     return any(invocation.get("name") == SEARCH_PRODUCTS_TOOL for invocation in (tool_trace or []))
 
 
+def _turn_search_has_products(tool_trace: list[ToolInvocation] | None) -> bool:
+    """True when the latest search_products invocation returned at least one product."""
+    if not tool_trace:
+        return False
+    for invocation in reversed(tool_trace):
+        if invocation.get("name") != SEARCH_PRODUCTS_TOOL:
+            continue
+        result = invocation.get("result")
+        if not isinstance(result, dict) or result.get("error"):
+            return False
+        raw_results = result.get("results")
+        if not isinstance(raw_results, list):
+            return False
+        return any(isinstance(item, dict) for item in raw_results)
+    return False
+
+
 def _session_budget_applies(state: AgentState, user_message: str) -> bool:
+    pivot_meta = state.get("intent_metadata") or {}
+    if isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"):
+        return False
     if extract_budget(user_message) is not None:
         return True
     if is_budget_refinement_message(user_message):
@@ -378,6 +398,7 @@ def carousel_consistency_guard(
     user_message: str = "",
     budget_max: float | None = None,
     currency: str = "LKR",
+    strict_budget: bool = False,
 ) -> str:
     """Replace contradictory empty-search copy when MCP search returned carousel products."""
     if not products or not reply_text.strip():
@@ -392,6 +413,11 @@ def carousel_consistency_guard(
         ]
         if not in_budget and products:
             budget_label = format_currency(budget_max, currency)
+            if strict_budget:
+                return (
+                    f"I couldn't find Kapruka options within your {budget_label} budget. "
+                    "Try a slightly higher budget or a broader gift type."
+                )
             return (
                 f"Here are some Kapruka options; a few exceed your {budget_label} budget — "
                 "I've marked those in the carousel."
@@ -966,14 +992,26 @@ def _generate_reply_sync(
     return _parse_reply_response(response)
 
 
-def _carousel_strict_budget(user_message: str, budget_max: float | None) -> bool:
+def _carousel_strict_budget(
+    user_message: str,
+    budget_max: float | None,
+    *,
+    state: AgentState | None = None,
+) -> bool:
     if budget_max is None or budget_max <= 0:
         return False
-    if is_budget_refinement_message(user_message):
-        return True
-    from lib.chat.intent_heuristics import is_budgeted_gift_ideas_message
+    from lib.chat.intent_heuristics import has_explicit_budget_constraint
 
-    return is_budgeted_gift_ideas_message(user_message)
+    pivot_meta = (state or {}).get("intent_metadata") or {}
+    topic_pivot = bool(
+        isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"),
+    )
+    session_budget = (state or {}).get("session_budget_max")
+    return has_explicit_budget_constraint(
+        user_message,
+        session_budget if isinstance(session_budget, (int, float)) else None,
+        topic_pivot=topic_pivot,
+    )
 
 
 def _prepend_situational_empathy(
@@ -1399,9 +1437,16 @@ async def generate_response(
 
     clarifying_question = state.get("agent_clarifying_question")
     exit_reason = state.get("agent_loop_exit_reason")
+    intent_metadata = state.get("intent_metadata") or {}
+    situational_with_products = (
+        isinstance(intent_metadata, dict)
+        and intent_metadata.get("is_situational")
+        and _turn_search_has_products(state.get("tool_trace"))
+    )
     show_clarifying = (
         isinstance(clarifying_question, str)
         and clarifying_question.strip()
+        and not situational_with_products
         and (
             exit_reason == "ask_user"
             or (
@@ -1720,7 +1765,7 @@ async def generate_response(
             visible_products = refined
 
     if visible_products is None:
-        strict_budget = _carousel_strict_budget(user_message, budget_max)
+        strict_budget = _carousel_strict_budget(user_message, budget_max, state=state)
         visible_products = extract_search_products(
             tool_results,
             budget_max=budget_max,
@@ -1772,7 +1817,7 @@ async def generate_response(
         tool_results,
         delivery_context_relevant=delivery_context_relevant,
     )
-    strict_budget = _carousel_strict_budget(user_message, budget_max)
+    strict_budget = _carousel_strict_budget(user_message, budget_max, state=state)
     client = genai_client
     model = select_model(state)
     _emit_synthesis_status()
@@ -1864,6 +1909,7 @@ async def generate_response(
         user_message=user_message,
         budget_max=budget_max,
         currency=currency,
+        strict_budget=strict_budget,
     )
     reply_text = _apply_artificial_floral_honesty(
         reply_text,

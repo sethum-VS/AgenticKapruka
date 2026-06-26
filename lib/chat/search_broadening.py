@@ -75,9 +75,15 @@ def broaden_search_args(args: dict[str, Any], step: BroadenStep) -> dict[str, An
     return None
 
 
-def first_applicable_broaden_step(args: dict[str, Any]) -> BroadenStep | None:
+def first_applicable_broaden_step(
+    args: dict[str, Any],
+    *,
+    preserve_max_price: bool = False,
+) -> BroadenStep | None:
     """Return the first ladder step that would change the given search args."""
     for step in BROADEN_LADDER:
+        if step == "drop_max_price" and preserve_max_price:
+            continue
         if broaden_search_args(args, step) is not None:
             return step
     return None
@@ -85,9 +91,11 @@ def first_applicable_broaden_step(args: dict[str, Any]) -> BroadenStep | None:
 
 def apply_first_broaden(
     args: dict[str, Any],
+    *,
+    preserve_max_price: bool = False,
 ) -> tuple[dict[str, Any] | None, BroadenStep | None]:
     """Apply the first applicable broaden step; at most one step per call."""
-    step = first_applicable_broaden_step(args)
+    step = first_applicable_broaden_step(args, preserve_max_price=preserve_max_price)
     if step is None:
         return None, None
     broadened = broaden_search_args(args, step)

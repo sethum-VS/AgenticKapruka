@@ -54,6 +54,11 @@ def test_broaden_strip_city_removes_in_kandy() -> None:
     assert broadened["q"] == "cake for mom"
 
 
+def test_broaden_drop_max_price_skipped_when_preserve_max_price() -> None:
+    args = {"q": "cake", "currency": "LKR", "max_price": 30.0, "sort": "price_asc"}
+    assert first_applicable_broaden_step(args, preserve_max_price=True) is None
+
+
 def test_broaden_drop_max_price() -> None:
     args = {"q": "cake", "currency": "LKR", "max_price": 30.0, "sort": "price_asc"}
     broadened = broaden_search_args(args, "drop_max_price")

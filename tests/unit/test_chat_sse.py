@@ -41,6 +41,36 @@ def test_chunk_text_splits_words() -> None:
 
 
 @pytest.mark.asyncio
+async def test_iter_chat_sse_events_skips_catalog_status_for_tracking_intent() -> None:
+    """Tracking turns must not emit misleading Searching our catalog status."""
+    mock_graph = MagicMock()
+
+    async def empty_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        if False:
+            yield ("updates", {})
+
+    mock_graph.astream = empty_astream
+
+    events: list[str] = []
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={"intent": "tracking", "messages": []},
+        config={"configurable": {"thread_id": "t-track"}},
+        user_html='<div id="user">track</div>',
+        stream_id="track1",
+    ):
+        events.append(event)
+
+    assert len(events) == 2
+    assert 'data: <div id="user">track</div>' in events[0]
+    assert not any("Searching our catalog" in event for event in events)
+
+
+@pytest.mark.asyncio
 async def test_iter_chat_sse_events_yields_thinking_bubble_on_stream_start() -> None:
     """User turn is followed by pending bubble and early Searching our catalog status SSE."""
     mock_graph = MagicMock()
