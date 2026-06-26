@@ -12,6 +12,7 @@ from app.templating import render_cart_partial
 from lib.chat.deps import client_ip_from_request, ensure_kapruka_service
 from lib.chat.session import SESSION_COOKIE_NAME, cookie_params, resolve_chat_thread_id
 from lib.kapruka.errors import KaprukaError, KaprukaNotFoundError
+from lib.kapruka.product_id import is_valid_product_id
 from lib.redis.cart import (
     CartItemNotFound,
     CartLimitExceeded,
@@ -67,6 +68,10 @@ async def cart_add(
 ) -> HTMLResponse:
     """Add or merge a product line; return refreshed cart partial for outerHTML swap."""
     thread_id, new_cookie = resolve_chat_thread_id(request)
+
+    if not is_valid_product_id(product_id):
+        raise HTTPException(status_code=422, detail="Invalid product ID")
+
     currency = await get_session_currency(redis_client, thread_id)
     service = await ensure_kapruka_service(request, redis_client)
 

@@ -16,16 +16,19 @@ from lib.chat.product_reference import (
 )
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.utils.text import normalize_for_product_match
 
 logger = logging.getLogger(__name__)
 
 _OVERLAP_THRESHOLD = 0.6
+_BORDERLINE_OVERLAP_THRESHOLD = 0.4
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.I)
 _STOP_WORDS = frozenset({"the", "a", "an", "to", "my", "please", "add", "put", "in", "into"})
 
 
 def _tokenize_for_overlap(text: str) -> set[str]:
-    tokens = {token.lower() for token in _TOKEN_RE.findall(text)}
+    normalized = normalize_for_product_match(text)
+    tokens = {token.lower() for token in _TOKEN_RE.findall(normalized)}
     return tokens - _STOP_WORDS
 
 
@@ -62,6 +65,12 @@ def match_products_by_phrase(
             scored.append((score, product))
 
     if not scored:
+        if threshold > _BORDERLINE_OVERLAP_THRESHOLD:
+            return match_products_by_phrase(
+                phrase,
+                products,
+                threshold=_BORDERLINE_OVERLAP_THRESHOLD,
+            )
         return None, [], None
 
     scored.sort(key=lambda item: item[0], reverse=True)
@@ -139,6 +148,12 @@ async def resolve_cart_product(
             return {"cart_action_result": payload}
 
     product, tied, clarify = match_products_by_phrase(phrase, last_search)
+    if product is None and not clarify and last_search:
+        product, tied, clarify = match_products_by_phrase(
+            phrase,
+            last_search,
+            threshold=_BORDERLINE_OVERLAP_THRESHOLD,
+        )
     if clarify:
         logger.info("resolve_cart_product: tie among %d candidates for %r", len(tied), phrase)
         return {

@@ -65,13 +65,14 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert "Birthday cake for mom in Colombo" in html
     assert 'data-chat-suggestion="Birthday cake for mom in Colombo"' in html
     assert 'type="button"' in html
-    assert "htmx.org" in html
+    assert "htmx.org" not in html
+    assert "/static/js/vendor/htmx.min.js" in html
     assert 'href="/static/css/app.css"' in html
     assert 'id="chat-form"' in html
     assert 'hx-post="/chat/stream"' in html
     assert 'hx-ext="sse"' in html
     assert 'sse-connect="/chat/stream"' in html
-    assert 'sse-swap="message,status,done"' in html
+    assert 'sse-swap="message,status,carousel,done"' in html
     assert 'id="chat-sse-listener"' in html
     assert 'hx-target="#chat-messages"' in html
     assert 'hx-swap="beforeend"' in html
@@ -84,8 +85,11 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'x-ref="messages"' in html
     assert 'x-ref="input"' in html
     assert "/static/js/chat-sse.js" in html
-    assert "/static/js/chat-helpers.js" in html
-    assert "/static/js/lazy-image.js" in html
+    assert 'defer src="/static/js/chat-helpers.js"' in html
+    assert html.index('defer src="/static/js/chat-helpers.js"') < html.index(
+        'defer src="/static/js/vendor/alpine.min.js"'
+    )
+    assert 'defer src="/static/js/lazy-image.js"' in html
     assert "/static/js/cart-drawer.js" in html
     assert 'data-testid="cart-drawer"' in html
     assert 'data-testid="cart-icon"' in html
@@ -279,10 +283,13 @@ async def test_chat_index_returns_200_html_with_empty_state(chat_index_env: Redi
     assert 'id="chat-form"' in html
     assert 'hx-post="/chat/stream"' in html
     assert 'sse-connect="/chat/stream"' in html
-    assert 'sse-swap="message,status,done"' in html
+    assert 'sse-swap="message,status,carousel,done"' in html
     assert 'x-data="chatHelpers()"' in html
     assert "/static/js/chat-sse.js" in html
-    assert "/static/js/chat-helpers.js" in html
-    assert "/static/js/lazy-image.js" in html
+    assert 'defer src="/static/js/chat-helpers.js"' in html
+    assert html.index('defer src="/static/js/chat-helpers.js"') < html.index(
+        'defer src="/static/js/vendor/alpine.min.js"'
+    )
+    assert 'defer src="/static/js/lazy-image.js"' in html
     assert 'data-testid="header-currency"' in html
     assert '<option value="LKR" selected>LKR</option>' in html

@@ -13,7 +13,7 @@ from lib.chat.query_preprocessor import extract_target_city
 _ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _SL_MOBILE_PHONE = re.compile(r"(?:\+94|0)7[0-9]{8}\b")
 _REVIEW_CONFIRM = re.compile(
-    r"\b(confirm|place\s+(?:my\s+)?order|looks\s+good|proceed|yes)\b",
+    r"\b(confirm|place\s+(?:my|the|an)?\s*order|looks\s+good|proceed|yes)\b",
     re.IGNORECASE,
 )
 

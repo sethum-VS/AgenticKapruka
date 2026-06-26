@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -28,6 +29,7 @@ from graphs.nodes.generate_response import (
     extract_search_products,
     generate_response,
     merge_tool_trace,
+    stock_consistency_guard,
     render_assistant_html,
 )
 from graphs.state import AgentState, ToolInvocation
@@ -47,6 +49,15 @@ from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 
 _CHECKOUT_REVIEW_HTML = '<section data-testid="checkout-review">Review summary</section>'
+
+
+def _combined_response_html(result: dict[str, object]) -> str:
+    """Merge split SSE response_html and carousel_html for assertions."""
+    parts = [str(result.get("response_html") or "")]
+    carousel = result.get("carousel_html")
+    if isinstance(carousel, str):
+        parts.append(carousel)
+    return "".join(parts)
 
 _SEARCH_TOOL_RESULTS = {
     SEARCH_PRODUCTS_TOOL: {
@@ -121,11 +132,11 @@ async def test_generate_response_html_contains_product_names_from_tool_results()
     result = await generate_response(state, genai_client=mock_client)
 
     assert "response_html" in result
-    html = result["response_html"]
+    html = _combined_response_html(result)
     assert "Chocolate Birthday Cake" in html
     assert "Vanilla Celebration Cake" in html
     assert 'aria-label="Assistant message"' in html
-    assert 'data-slot="product-carousel"' in html
+    assert 'data-slot="product-carousel"' in result["response_html"]
     assert 'data-testid="product-carousel"' in html
     assert 'data-product-id="cake00ka002034"' in html
 
@@ -182,7 +193,7 @@ async def test_generate_response_template_fallback_on_gemini_429() -> None:
     assert "thoughtful Kapruka picks" in result["assistant_message"]
     assert "Chocolate Birthday Cake" in result["assistant_message"]
     assert "Vanilla Celebration Cake" in result["assistant_message"]
-    assert 'data-testid="product-carousel"' in result["response_html"]
+    assert 'data-testid="product-carousel"' in _combined_response_html(result)
 
 
 @pytest.mark.asyncio
@@ -232,7 +243,31 @@ async def test_generate_response_general_welcome_skips_gemini(
     assert "flowers" in result["assistant_message"].lower()
     assert "order tracking" in result["assistant_message"].lower()
     assert "couldn't find products" not in result["assistant_message"].lower()
-    assert 'data-testid="product-carousel"' not in result["response_html"]
+    assert 'data-testid="product-carousel"' not in _combined_response_html(result)
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_support_policy_wilted_flowers_not_welcome() -> None:
+    """Return/refund/quality questions get support handoff, not the welcome menu."""
+    mock_client = MagicMock()
+    user_message = "What's your return policy if flowers arrive wilted?"
+    state: AgentState = {
+        "messages": [HumanMessage(content=user_message)],
+        "intent": "general",
+        "intent_metadata": cast(IntentMetadata, {"support_topic": "quality"}),
+        "tool_trace": [],
+        "session_id": "sess-support-faq",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    reply = result["assistant_message"]
+    welcome = build_general_welcome_message()
+    assert reply != welcome
+    assert "Welcome to Kapruka" not in reply
+    assert "Kapruka support" in reply
+    assert "+94-11-7551111" in reply
     mock_client.models.generate_content.assert_not_called()
 
 
@@ -533,7 +568,7 @@ async def test_generate_response_carousel_respects_session_budget_max() -> None:
     }
 
     result = await generate_response(state, genai_client=mock_client)
-    html = result["response_html"]
+    html = _combined_response_html(result)
     first_idx = html.index('data-testid="product-price"')
     first_price_fragment = html[first_idx : first_idx + 120]
     assert "3,500" in first_price_fragment or "3500" in first_price_fragment
@@ -700,7 +735,7 @@ async def test_generate_response_no_carousel_when_search_empty() -> None:
 
     result = await generate_response(state, genai_client=mock_client)
 
-    assert 'data-testid="product-carousel"' not in result["response_html"]
+    assert 'data-testid="product-carousel"' not in _combined_response_html(result)
     assert "couldn't find products" in result["assistant_message"].lower()
     mock_client.models.generate_content.assert_not_called()
 
@@ -750,6 +785,26 @@ def test_format_product_line_uses_format_currency() -> None:
     assert "Rs. 8,000" in line
     assert "8000.0" not in line
     assert "LKR 8000" not in line
+
+
+def test_format_product_line_missing_in_stock_does_not_claim_out_of_stock() -> None:
+    product = _product("cake00ka002078", "Pastel Love", amount=5200.0)
+    product.pop("in_stock")
+    product.pop("stock_level")
+    line = _format_product_line(product)
+    assert "out of stock" not in line.lower()
+    assert "stock not verified" in line.lower()
+
+
+def test_stock_consistency_guard_rewrites_unavailability_with_in_stock_carousel() -> None:
+    products = [
+        _product("cake00ka002078", "Pastel Love", amount=5200.0),
+    ]
+    reply = "Pastel Love is currently out of stock on Kapruka."
+    guarded = stock_consistency_guard(reply, products, user_message="Pastel Love cake")
+    assert "out of stock" not in guarded.lower()
+    assert "Pastel Love" in guarded
+    assert "thoughtful Kapruka picks" in guarded
 
 
 def test_build_discovery_template_reply_prepends_artificial_floral_note() -> None:
@@ -846,7 +901,7 @@ async def test_generate_response_caps_products_in_gemini_context() -> None:
     context = call_kwargs["contents"]
     assert "Cake 5" not in context
     assert "Cake 4" in context
-    assert 'data-product-id="cake007"' in result["response_html"]
+    assert 'data-product-id="cake007"' in _combined_response_html(result)
 
 
 def test_resolve_effective_tool_results_prefers_checkout_over_stale_trace() -> None:
@@ -959,7 +1014,7 @@ async def test_generate_response_merged_trace_carousel_union() -> None:
 
     result = await generate_response(state, genai_client=mock_client)
 
-    html = result["response_html"]
+    html = _combined_response_html(result)
     assert 'data-testid="product-carousel"' in html
     assert 'data-product-id="cake00ka002034"' in html
     assert 'data-product-id="cake00ka002099"' in html
@@ -991,7 +1046,7 @@ async def test_generate_response_clarifying_question_skips_gemini() -> None:
 
     assert result["assistant_message"] == "Which city should we deliver to?"
     assert "Which city should we deliver to?" in result["response_html"]
-    assert 'data-testid="product-carousel"' not in result["response_html"]
+    assert 'data-testid="product-carousel"' not in _combined_response_html(result)
     mock_client.models.generate_content.assert_not_called()
 
 
@@ -1033,7 +1088,7 @@ async def test_generate_response_ignores_stale_clarifying_question_on_finish() -
 
     result = await generate_response(state, genai_client=mock_client)
 
-    html = result["response_html"]
+    html = _combined_response_html(result)
     assert "The previous search for 'gifts'" not in result["assistant_message"]
     assert 'data-testid="product-carousel"' in html
     assert 'data-product-id="cake00ka002034"' in html
@@ -1068,7 +1123,7 @@ async def test_generate_response_empty_merged_search_fallback_via_tool_trace() -
 
     assert "couldn't find products" in result["assistant_message"].lower()
     assert "broader gift type" in result["assistant_message"].lower()
-    assert 'data-testid="product-carousel"' not in result["response_html"]
+    assert 'data-testid="product-carousel"' not in _combined_response_html(result)
     mock_client.models.generate_content.assert_not_called()
 
 
@@ -1225,7 +1280,7 @@ async def test_generate_response_tool_error_generic_mcp_skips_gemini() -> None:
 
     assert "could not search the kapruka catalog" in result["assistant_message"].lower()
     assert "Kapruka search timed out." in result["assistant_message"]
-    assert 'data-testid="product-carousel"' not in result["response_html"]
+    assert 'data-testid="product-carousel"' not in _combined_response_html(result)
     mock_client.models.generate_content.assert_not_called()
 
 
@@ -1389,7 +1444,7 @@ async def test_generate_response_roses_under_budget_guard_rewrites_llm_negation(
     assert "no fresh" not in result["assistant_message"].lower()
     assert "thoughtful Kapruka picks" in result["assistant_message"]
     assert "6 Red Rose Bouquet" in result["assistant_message"]
-    assert 'data-testid="product-carousel"' in result["response_html"]
+    assert 'data-testid="product-carousel"' in _combined_response_html(result)
 
 
 def test_build_verified_city_delivery_line_omits_checked_date() -> None:
@@ -1736,6 +1791,6 @@ async def test_generate_response_budget_turn_prefers_refined_chocolate_carousel(
 
     result = await generate_response(state, genai_client=mock_client)
 
-    assert "Heart Chocolate Box" in (result.get("response_html") or "")
+    assert "Heart Chocolate Box" in _combined_response_html(result)
     assert result.get("response_html") is not None
-    assert "Greeting Card" not in (result.get("response_html") or "")
+    assert "Greeting Card" not in _combined_response_html(result)

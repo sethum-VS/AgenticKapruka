@@ -79,8 +79,10 @@ async def execute_cart_action(
 
     currency = state.get("currency") or "LKR"
     name = str(product.get("name") or "Gift")
-    in_stock = product.get("in_stock")
+    snapshot_in_stock = product.get("in_stock")
+    in_stock = snapshot_in_stock
     price_amount, price_currency = _price_from_product(product)
+    stock_mismatch = False
 
     if kapruka_service is not None:
         try:
@@ -103,25 +105,24 @@ async def execute_cart_action(
                 },
             }
         except KaprukaValidationError as exc:
-            if exc.code == "product_out_of_stock":
+            if exc.code == "product_out_of_stock" and snapshot_in_stock is True:
+                stock_mismatch = True
+                in_stock = True
+                logger.warning(
+                    "execute_cart_action: live stock mismatch for %s — snapshot in_stock=True",
+                    product_id,
+                )
+            else:
                 return {
                     "cart_action_result": {
                         **action,
                         "status": "error",
-                        "message": "That product is out of stock.",
+                        "message": exc.message,
                         "error_code": exc.code,
                     },
                 }
-            return {
-                "cart_action_result": {
-                    **action,
-                    "status": "error",
-                    "message": exc.message,
-                    "error_code": exc.code,
-                },
-            }
 
-    if in_stock is False:
+    if in_stock is False and not stock_mismatch:
         return {
             "cart_action_result": {
                 **action,
@@ -184,13 +185,18 @@ async def execute_cart_action(
         merged,
     )
 
-    return {
-        "cart_action_result": {
-            **action,
-            "status": "added",
-            "product_name": name,
-            "quantity": stored.quantity,
-            "merged": merged,
-            "cart_items": [row.model_dump() for row in cart_rows],
-        },
+    result_payload: dict[str, Any] = {
+        **action,
+        "status": "added",
+        "product_name": name,
+        "quantity": stored.quantity,
+        "merged": merged,
+        "cart_items": [row.model_dump() for row in cart_rows],
     }
+    if stock_mismatch:
+        result_payload["stock_warning"] = (
+            "Live stock check disagreed with search results — added from catalog snapshot. "
+            "If checkout fails, refresh and try again."
+        )
+
+    return {"cart_action_result": result_payload}

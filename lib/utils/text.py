@@ -56,3 +56,15 @@ def normalize_catalog_text(value: str) -> str:
     text = decode_html_entities(repair_utf8_mojibake(value))
     text = _BACKTICK_WRAP.sub("", text)
     return re.sub(r"  +", " ", text)
+
+
+_APOSTROPHE_VARIANTS = re.compile(r"[''`´\u2019\u02bc]|â€™", re.I)
+_POSSESSIVE_S_RE = re.compile(r"\b(\w+)s\b", re.I)
+
+
+def normalize_for_product_match(text: str) -> str:
+    """Fold apostrophe/possessive variants for fuzzy catalog name matching."""
+    normalized = normalize_catalog_text(text).lower()
+    normalized = _APOSTROPHE_VARIANTS.sub("", normalized)
+    normalized = _POSSESSIVE_S_RE.sub(r"\1", normalized)
+    return re.sub(r"[^a-z0-9]+", " ", normalized).strip()

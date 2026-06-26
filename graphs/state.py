@@ -64,6 +64,7 @@ class AgentState(TypedDict):
     session_delivery_city_canonical: str | None
     session_delivery_date: str | None
     session_product_focus: str | None
+    session_flavor_hint: str | None
     session_search_query: str | None
     session_occasion: str | None
     session_recipient_hint: str | None
@@ -79,6 +80,7 @@ class AgentState(TypedDict):
     delivery_context_ready: bool | None
     checkout_state: CheckoutStep | None
     response_html: str | None
+    carousel_html: str | None
     assistant_message: str | None
     zep_memory_facts: list[str] | None
     last_search_products: list[dict[str, Any]] | None

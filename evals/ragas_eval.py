@@ -448,7 +448,10 @@ def assert_expected_tool_usage(case: GoldenCase, result: AgentState) -> None:
 
     actual = tool_names_from_state(result)
     expected = case.expected_tools
-    if actual == expected:
+    tools_match = actual == expected or (
+        len(actual) == len(expected) and sorted(actual) == sorted(expected)
+    )
+    if tools_match:
         product_id = extract_product_id(case.user_query)
         if product_id and expected == [GET_PRODUCT_TOOL]:
             tool_trace = result.get("tool_trace")

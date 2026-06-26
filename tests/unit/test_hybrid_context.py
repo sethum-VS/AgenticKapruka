@@ -277,7 +277,7 @@ def test_build_discovery_search_args_wife_birthday_chocolate_prefers_chocolate_g
         currency="LKR",
     )
 
-    assert args["q"] == "chocolate gift"
+    assert args["q"] == "chocolate birthday cake"
     assert args["max_price"] == 6000.0
 
 
@@ -295,6 +295,27 @@ def test_enrich_birthday_cake_hints_demotes_desserts_for_birthday_cake() -> None
     assert context["hints"]["occasion"] == "Birthday"
     assert "Chocolate" in context["hints"]["exclude_categories"]
     assert "Desserts" in context["hints"]["exclude_categories"]
+
+
+def test_enrich_birthday_cake_hints_skips_chocolate_exclusion_when_flavor_requested() -> None:
+    context = enrich_birthday_cake_hints(
+        "chocolate birthday cake for mom Colombo 8000",
+        {"hints": {"occasion": "Birthday"}},
+    )
+    exclude = context["hints"]["exclude_categories"]
+    assert "Chocolate" not in exclude
+    assert "Desserts" in exclude
+
+
+def test_build_discovery_search_args_chocolate_birthday_mom_colombo() -> None:
+    args = build_discovery_search_args(
+        "chocolate birthday cake for mom in Colombo budget 8000 LKR",
+        {"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+    assert "chocolate" in args["q"].lower()
+    assert args["max_price"] == 8000.0
+    assert args["sort"] == "price_asc"
 
 
 def test_enrich_birthday_cake_hints_skips_chocolate_flowers_combo() -> None:
@@ -484,6 +505,23 @@ def test_is_broad_cakes_query_matches_bare_cakes_only() -> None:
     assert is_broad_cakes_query("Nevermind. Cakes.")
     assert not is_broad_cakes_query("cake for mom")
     assert not is_broad_cakes_query("birthday cake for mom")
+
+
+def test_build_budget_refinement_search_args_flowers_budget_uses_roses_q() -> None:
+    from lib.neo4j.hybrid_context import build_budget_refinement_search_args
+
+    args = build_budget_refinement_search_args(
+        {
+            "session_product_focus": "flowers",
+            "session_budget_max": 5000.0,
+            "intent_metadata": {"budget_max": 5000.0},
+        },
+        "Keep it under 5000 rupees.",
+        currency="LKR",
+    )
+    assert args is not None
+    assert args["q"] == "roses"
+    assert args["max_price"] == 5000.0
 
 
 def test_build_budget_refinement_search_args_uses_session_query() -> None:

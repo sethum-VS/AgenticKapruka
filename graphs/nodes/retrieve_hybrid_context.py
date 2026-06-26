@@ -69,6 +69,16 @@ def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
         )
         return "generate_response"
 
+    intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
+    if intent_metadata.get("support_topic"):
+        trace_route_decision(
+            from_node="analyze_intent",
+            target="generate_response",
+            intent=state.get("intent"),
+            reason="support or policy FAQ",
+        )
+        return "generate_response"
+
     intent = state.get("intent")
     if intent == "checkout":
         logger.debug("route_after_analyze_intent: routing to checkout sub-graph")

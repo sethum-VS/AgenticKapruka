@@ -89,3 +89,13 @@ def test_review_confirmation_sets_advance_action() -> None:
 
     assert updated.get("action") == "advance"
     assert updated.get("target_step") == "review"
+
+
+def test_review_confirmation_matches_place_the_order() -> None:
+    state = initial_checkout_state(session_id=_SESSION_ID)
+    state["current_step"] = "review"
+
+    updated = apply_chat_message_to_checkout(state, "place the order")
+
+    assert updated.get("action") == "advance"
+    assert updated.get("target_step") == "review"

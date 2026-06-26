@@ -627,6 +627,20 @@ def test_enrich_get_product_resolves_from_carousel() -> None:
     assert enriched["product_id"] == "cake00ka002034"
 
 
+def test_enrich_get_product_resolves_possessive_name_from_carousel() -> None:
+    state: AgentState = {
+        "last_search_products": [
+            {"id": "cake00amma001", "name": "Ammas Delightful Creation"},
+        ],
+    }
+    enriched, error = enrich_get_product_args(
+        {"q": "Amma's Delightful Creation"},
+        state,
+    )
+    assert error is None
+    assert enriched["product_id"] == "cake00amma001"
+
+
 def test_enrich_get_product_unresolved_returns_error() -> None:
     state: AgentState = {"last_search_products": []}
     _enriched, error = enrich_get_product_args({"q": "mystery item"}, state)

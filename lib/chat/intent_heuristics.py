@@ -6,6 +6,7 @@ import re
 from typing import Literal
 
 from lib.chat.off_topic import is_off_topic_message
+from lib.chat.support_faq import is_support_question
 from lib.checkout.tracking import KA_LEGACY_RE, ORD_REF_RE, VIMP_RE
 from lib.neo4j.hybrid_context import extract_budget, extract_max_price
 
@@ -31,12 +32,20 @@ _TRACKING_GUARD_TOKENS: frozenset[str] = frozenset(
     ),
 )
 
+_PLACE_ORDER_RE = re.compile(
+    r"\bplace\s+(?:my|the|an)?\s*order\b",
+    re.I,
+)
+
 _CHECKOUT_TRIGGER_TOKENS: frozenset[str] = frozenset(
     (
         "checkout",
         "check out",
         "place my order",
+        "place the order",
+        "place an order",
         "place order",
+        "help me place",
         "my cart",
         "view cart",
         "pay now",
@@ -118,6 +127,27 @@ def is_tracking_guard(message: str) -> bool:
     return any(token in lowered for token in _TRACKING_GUARD_TOKENS)
 
 
+def is_order_intent_message(message: str) -> bool:
+    """Return True when the shopper wants to finalize or place an order."""
+    text = message.strip()
+    if not text:
+        return False
+    if _PLACE_ORDER_RE.search(text):
+        return True
+    lowered = text.lower()
+    return any(
+        token in lowered
+        for token in (
+            "place the order",
+            "place an order",
+            "place my order",
+            "help me place",
+            "complete my order",
+            "proceed to payment",
+        )
+    )
+
+
 def is_checkout_trigger(message: str) -> bool:
     """Return True for explicit checkout/cart-view triggers — not add-to-cart phrases."""
     lowered = message.strip().lower()
@@ -126,6 +156,8 @@ def is_checkout_trigger(message: str) -> bool:
     if is_cart_add_trigger(message):
         return False
     if is_proceed_checkout_message(message):
+        return True
+    if is_order_intent_message(message):
         return True
     return any(token in lowered for token in _CHECKOUT_TRIGGER_TOKENS)
 
@@ -231,6 +263,12 @@ def infer_intent_from_message(message: str) -> Intent:
     if not lowered:
         return "general"
 
+    if is_support_question(message):
+        return "general"
+
+    if is_order_intent_message(message):
+        return "checkout"
+
     if any(
         token in lowered
         for token in (
@@ -240,7 +278,6 @@ def infer_intent_from_message(message: str) -> Intent:
             "pay",
             "recipient",
             "sender",
-            "place my order",
         )
     ):
         return "checkout"

@@ -218,6 +218,70 @@ async def test_iter_chat_sse_events_yields_timeout_partial_on_wall_clock_exceed(
 
 
 @pytest.mark.asyncio
+async def test_iter_chat_sse_events_emits_carousel_event_when_split() -> None:
+    """Carousel markup streams on a dedicated SSE event after the text bubble."""
+    from graphs.nodes.generate_response import (
+        build_products_carousel_html,
+        render_assistant_html,
+        render_carousel_oob_html,
+    )
+
+    products_html = build_products_carousel_html(
+        {
+            "kapruka_search_products": {
+                "results": [
+                    {
+                        "id": "cake00ka002034",
+                        "name": "Chocolate Birthday Cake",
+                        "price": {"amount": 4500, "currency": "LKR"},
+                        "in_stock": True,
+                    }
+                ]
+            }
+        }
+    )
+    assert products_html is not None
+    slot_id = "carousel-slot-test"
+    assistant_html = render_assistant_html("Here are cakes.", carousel_slot_id=slot_id)
+    carousel_oob = render_carousel_oob_html(products_html, carousel_slot_id=slot_id)
+
+    mock_graph = MagicMock()
+
+    async def fake_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        yield (
+            "updates",
+            {
+                "generate_response": {
+                    "response_html": assistant_html,
+                    "carousel_html": carousel_oob,
+                    "assistant_message": "Here are cakes.",
+                },
+            },
+        )
+
+    mock_graph.astream = fake_astream
+
+    events: list[str] = []
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={},
+        config={"configurable": {"thread_id": "t-carousel"}},
+        user_html="<p>user</p>",
+        stream_id="carousel1",
+    ):
+        events.append(event)
+
+    carousel_events = [event for event in events if event.startswith("event: carousel\n")]
+    assert len(carousel_events) == 1
+    assert 'data-testid="product-carousel"' in carousel_events[0]
+    assert 'hx-swap-oob="outerHTML"' in carousel_events[0]
+
+
+@pytest.mark.asyncio
 async def test_iter_chat_sse_events_emits_error_event_on_graph_failure() -> None:
     """Unhandled graph errors yield a user-visible SSE error fragment."""
     mock_graph = MagicMock()

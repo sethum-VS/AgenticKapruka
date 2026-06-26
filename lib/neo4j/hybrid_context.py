@@ -663,6 +663,7 @@ def _focus_derived_search_q(
     session_product_focus: str | None,
     *,
     user_message: str = "",
+    max_price: float | None = None,
 ) -> str | None:
     """Map session product focus to a Kapruka search q when budget-refining."""
     if session_product_focus == "chocolate":
@@ -670,6 +671,11 @@ def _focus_derived_search_q(
     if session_product_focus == "cake":
         return "birthday cake" if is_birthday_cake_intent(user_message) else "cake"
     if session_product_focus == "flowers":
+        budgeted = max_price is not None or extract_budget(user_message) is not None
+        if budgeted:
+            if re.search(r"\bred\b", user_message, re.I):
+                return "red roses"
+            return "roses"
         return "fresh roses bouquet"
     if session_product_focus in ("gift", "combo"):
         return "gift hamper"
@@ -745,17 +751,6 @@ def build_budget_refinement_search_args(
         return None
 
     session_q = state.get("session_search_query")
-    q: str | None = None
-    if isinstance(session_q, str) and session_q.strip():
-        q = session_q.strip()
-    else:
-        q = _focus_derived_search_q(state.get("session_product_focus"), user_message=user_message)
-
-    if not q:
-        return None
-
-    q = _enrich_budget_search_q(q, state)
-
     budget_cap = extract_budget(user_message)
     intent_metadata = state.get("intent_metadata") or {}
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
@@ -763,6 +758,21 @@ def build_budget_refinement_search_args(
     if budget_cap is not None:
         max_price = budget_cap.amount
         currency = budget_cap.currency
+
+    q: str | None = None
+    if isinstance(session_q, str) and session_q.strip():
+        q = session_q.strip()
+    else:
+        q = _focus_derived_search_q(
+            state.get("session_product_focus"),
+            user_message=user_message,
+            max_price=float(max_price) if isinstance(max_price, (int, float)) else None,
+        )
+
+    if not q:
+        return None
+
+    q = _enrich_budget_search_q(q, state)
 
     if not isinstance(max_price, (int, float)) or max_price <= 0:
         return {"q": q, "currency": currency}
@@ -876,15 +886,20 @@ def _birthday_biased_product_keyword(
 ) -> str:
     """Map a budget/meta token to a Kapruka keyword, preferring birthday cakes."""
     normalized = token.lower().strip()
+    chocolate_flavor = bool(_CHOCOLATE_FLAVOR_RE.search(query))
+    cake_scoped = is_birthday_cake_intent(query) or _CAKE_TERM.search(query)
+    if chocolate_flavor and (birthday_occasion or cake_scoped):
+        return "chocolate birthday cake"
     if (
         normalized in {"chocolate", "chocolates"}
         and birthday_occasion
-        and not is_birthday_cake_intent(query)
-        and not _CAKE_TERM.search(query)
+        and not cake_scoped
     ):
         return "chocolate gift"
-    if birthday_occasion and normalized in {"cake", "cakes", "chocolate", "chocolates"}:
+    if birthday_occasion and normalized in {"cake", "cakes"}:
         return "birthday cake"
+    if birthday_occasion and normalized in {"chocolate", "chocolates"}:
+        return "chocolate birthday cake"
     return _product_search_keyword(token)
 
 
@@ -1061,9 +1076,14 @@ def enrich_birthday_cake_hints(
     if _MOM_BIRTHDAY_RE.search(query):
         hints["search_q_boost"] = "Happy Birthday Mom"
     existing = str(hints.get("exclude_categories") or "")
+    dessert_hints: tuple[str, ...]
+    if _CHOCOLATE_FLAVOR_RE.search(query):
+        dessert_hints = ("Desserts",)
+    else:
+        dessert_hints = DESSERT_NEGATIVE_CATEGORY_HINTS
     hints["exclude_categories"] = _merge_exclude_category_hints(
         existing,
-        DESSERT_NEGATIVE_CATEGORY_HINTS,
+        dessert_hints,
     )
     context["hints"] = hints
     return context
@@ -1175,6 +1195,17 @@ def build_discovery_search_args(
             args.setdefault("sort", "price_asc")
         if isinstance(budget_currency, str) and budget_currency.strip():
             args["currency"] = budget_currency.strip().upper()
+
+    effective_budget = args.get("max_price")
+    if (
+        isinstance(effective_budget, (int, float))
+        and effective_budget > 0
+        and re.search(r"\b(?:rose|roses)\b", query, re.I)
+    ):
+        if re.search(r"\bred\b", query, re.I):
+            args["q"] = "red roses"
+        else:
+            args["q"] = "roses"
 
     return args
 

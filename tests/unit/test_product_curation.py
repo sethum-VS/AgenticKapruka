@@ -13,6 +13,7 @@ from lib.chat.product_curation import (
     demote_non_chocolate_for_chocolate_focus,
     demote_non_floral_for_flower_intent,
     demote_off_focus_products,
+    ensure_flower_price_tier_diversity,
     demote_puja_products,
     filter_gift_noise_products,
     filter_puja_products,
@@ -326,6 +327,63 @@ def test_sort_and_filter_strict_budget_hides_over_cap() -> None:
     ]
     curated = sort_and_filter_by_budget(products, 5000.0, "LKR", strict_in_budget=True)
     assert [item["id"] for item in curated] == ["in"]
+
+
+def test_apply_birthday_cake_curation_boosts_chocolate_with_flavor_hint() -> None:
+    products = [
+        _product("vanilla", 3500.0, name="Vanilla Birthday Cake"),
+        _product("choc", 3800.0, name="Chocolate Birthday Cake"),
+    ]
+    curated = apply_birthday_cake_curation(
+        products,
+        query="chocolate birthday cake for mom",
+        hybrid_context={"hints": {"occasion": "Birthday"}},
+        session_product_focus="cake",
+        session_flavor_hint="chocolate",
+    )
+    assert curated[0]["id"] == "choc"
+
+
+def test_apply_gift_curation_demotes_vouchers_unless_requested() -> None:
+    products = [
+        _product("voucher", 4500.0, name="Kapruka Gift Voucher"),
+        _product("hamper", 4800.0, name="Birthday Gift Hamper"),
+    ]
+    curated = apply_gift_curation(
+        products,
+        session_product_focus="gift",
+        user_message="Gift ideas under Rs. 5,000",
+    )
+    assert curated[0]["id"] == "hamper"
+    assert curated[-1]["id"] == "voucher"
+
+
+def test_ensure_flower_price_tier_diversity_promotes_affordable_rose() -> None:
+    products = [
+        _product("premium", 4800.0, name="Premium Rose Bouquet"),
+        _product("deluxe", 4600.0, name="Deluxe Roses"),
+        _product("cheap", 3200.0, name="6 Red Rose Bouquet"),
+        _product("mid", 4200.0, name="Classic Roses"),
+        _product("high", 4900.0, name="Grand Roses"),
+    ]
+    curated = ensure_flower_price_tier_diversity(products, 5000.0)
+    top_ids = {item["id"] for item in curated[:3]}
+    assert "cheap" in top_ids
+
+
+def test_curate_carousel_products_roses_budget_skips_phrase_boost() -> None:
+    products = [
+        _product("cheap", 3200.0, name="6 Red Rose Bouquet"),
+        _product("premium", 4800.0, name="Premium Rose Bouquet"),
+    ]
+    curated = curate_carousel_products(
+        products,
+        query="fresh roses under 5000 LKR",
+        budget_max=5000.0,
+        currency="LKR",
+        strict_budget=True,
+    )
+    assert curated[0]["id"] == "cheap"
 
 
 def test_apply_gift_curation_promotes_hampers_over_convenience_candy() -> None:

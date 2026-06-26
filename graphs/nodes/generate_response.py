@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 from datetime import date
 from typing import Any, cast
 
@@ -52,6 +53,7 @@ from lib.chat.product_honesty import (
 from lib.chat.query_preprocessor import extract_target_city, is_delivery_context_relevant_turn
 from lib.chat.search_broadening import build_empty_search_reply
 from lib.chat.status_copy import PUTTING_TOGETHER_RECOMMENDATIONS
+from lib.chat.support_faq import build_support_faq_reply, is_support_question
 from lib.chat.system_prompts import (
     build_farewell_message,
     build_general_welcome_message,
@@ -123,6 +125,12 @@ _CAROUSEL_NEGATION_PATTERN = re.compile(
     r"none\s+within|"
     r"no\s+options\s+under|"
     r"no\s+products|nothing\s+matching|don'?t\s+have\s+any"
+    r")\b",
+    re.I,
+)
+_STOCK_NEGATION_PATTERN = re.compile(
+    r"\b(?:"
+    r"out\s+of\s+stock|not\s+available|unavailable|no\s+longer\s+available"
     r")\b",
     re.I,
 )
@@ -423,6 +431,25 @@ def carousel_consistency_guard(
                 "I've marked those in the carousel."
             )
     return _build_discovery_template_reply(products, user_message=user_message) or reply_text
+
+
+def stock_consistency_guard(
+    reply_text: str,
+    products: list[dict[str, Any]],
+    *,
+    user_message: str = "",
+) -> str:
+    """Rewrite stock-unavailability copy when carousel still shows in-stock products."""
+    if not products or not reply_text.strip():
+        return reply_text
+    if not _STOCK_NEGATION_PATTERN.search(reply_text):
+        return reply_text
+    in_stock_products = [
+        product for product in products if product.get("in_stock") is not False
+    ]
+    if not in_stock_products:
+        return reply_text
+    return _build_discovery_template_reply(in_stock_products, user_message=user_message) or reply_text
 
 
 def _last_check_delivery_invocation(
@@ -773,6 +800,7 @@ def _budget_curated_products(
     graph_context_available: bool,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    session_flavor_hint: str | None = None,
     session_recipient_hint: str | None = None,
     session_occasion: str | None = None,
     strict_budget: bool = False,
@@ -786,6 +814,7 @@ def _budget_curated_products(
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
+        session_flavor_hint=session_flavor_hint,
         session_recipient_hint=session_recipient_hint,
         session_occasion=session_occasion,
         strict_budget=strict_budget,
@@ -1176,12 +1205,15 @@ def _format_product_line(product: dict[str, Any]) -> str:
     amount = price.get("amount")
     currency = price.get("currency") or "LKR"
     stock_level = product.get("stock_level")
-    if isinstance(stock_level, str) and stock_level.strip():
-        stock_note = f"in stock ({stock_level.strip().lower()})"
-    elif product.get("in_stock"):
-        stock_note = "in stock"
-    else:
+    if product.get("in_stock") is False:
         stock_note = "out of stock"
+    elif product.get("in_stock") is True:
+        if isinstance(stock_level, str) and stock_level.strip():
+            stock_note = f"in stock ({stock_level.strip().lower()})"
+        else:
+            stock_note = "in stock"
+    else:
+        stock_note = "stock not verified"
     if amount is not None:
         return f"'{name}' for {format_currency(float(amount), currency)}, {stock_note}"
     return f"'{name}', {stock_note}"
@@ -1340,6 +1372,7 @@ def render_assistant_html(
     message: str,
     *,
     products_html: str | None = None,
+    carousel_slot_id: str | None = None,
     checkout_review_html: str | None = None,
     checkout_payment_html: str | None = None,
     tracking_status_html: str | None = None,
@@ -1352,12 +1385,54 @@ def render_assistant_html(
     return template.render(
         message=message,
         products_html=products_html,
+        carousel_slot_id=carousel_slot_id,
         checkout_review_html=checkout_review_html,
         checkout_payment_html=checkout_payment_html,
         tracking_status_html=tracking_status_html,
         delivery_status_html=delivery_status_html,
         rate_limit_banner_html=rate_limit_banner_html,
     )
+
+
+def render_carousel_oob_html(
+    products_html: str,
+    *,
+    carousel_slot_id: str,
+) -> str:
+    """Wrap carousel markup for OOB swap into the assistant message slot."""
+    return (
+        f'<div id="{carousel_slot_id}" class="assistant-products mt-4" '
+        f'data-slot="product-carousel" role="region" '
+        f'aria-label="Suggested products" hx-swap-oob="outerHTML">'
+        f"{products_html}</div>"
+    )
+
+
+def _assistant_response_fields(
+    message: str,
+    *,
+    products_html: str | None = None,
+    **render_kwargs: Any,
+) -> dict[str, Any]:
+    """Build response_html and optional carousel_html for SSE split delivery."""
+    if products_html:
+        slot_id = f"carousel-slot-{secrets.token_hex(4)}"
+        return {
+            "response_html": render_assistant_html(
+                message,
+                carousel_slot_id=slot_id,
+                **render_kwargs,
+            ),
+            "carousel_html": render_carousel_oob_html(
+                products_html,
+                carousel_slot_id=slot_id,
+            ),
+            "assistant_message": message,
+        }
+    return {
+        "response_html": render_assistant_html(message, **render_kwargs),
+        "assistant_message": message,
+    }
 
 
 def _extract_checkout_payload(tool_results: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1417,6 +1492,20 @@ async def generate_response(
             reply = build_impossible_product_redirect(impossible_request_subject(user_message))
         else:
             reply = build_off_topic_redirect_message(off_topic_topic(user_message))
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+
+    intent_metadata = state.get("intent_metadata") or {}
+    if isinstance(intent_metadata, dict) and intent_metadata.get("support_topic"):
+        reply = build_support_faq_reply(user_message)
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+    if is_support_question(user_message):
+        reply = build_support_faq_reply(user_message)
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
@@ -1537,14 +1626,11 @@ async def generate_response(
             allow_stale_fallback=allow_stale,
         )
         rate_limit_banner = _rate_limit_banner_html(agent_tool_error)
-        return {
-            "response_html": render_assistant_html(
-                error_reply,
-                products_html=products_html,
-                rate_limit_banner_html=rate_limit_banner,
-            ),
-            "assistant_message": error_reply,
-        }
+        return _assistant_response_fields(
+            error_reply,
+            products_html=products_html,
+            rate_limit_banner_html=rate_limit_banner,
+        )
 
     if state.get("intent") == "tracking":
         tracking_reply = _build_tracking_assistant_message(tool_results)
@@ -1735,14 +1821,11 @@ async def generate_response(
                 session_product_focus=session_product_focus,
                 last_search_products=state.get("last_search_products"),
             )
-            return {
-                "response_html": render_assistant_html(
-                    detail_reply,
-                    products_html=products_html,
-                    delivery_status_html=delivery_status_html,
-                ),
-                "assistant_message": detail_reply,
-            }
+            return _assistant_response_fields(
+                detail_reply,
+                products_html=products_html,
+                delivery_status_html=delivery_status_html,
+            )
 
     visible_products: list[dict[str, Any]] | None = None
     if (
@@ -1911,6 +1994,11 @@ async def generate_response(
         currency=currency,
         strict_budget=strict_budget,
     )
+    reply_text = stock_consistency_guard(
+        reply_text,
+        visible_products,
+        user_message=user_message,
+    )
     reply_text = _apply_artificial_floral_honesty(
         reply_text,
         visible_products,
@@ -1929,14 +2017,11 @@ async def generate_response(
         len(reply_text),
         bool(products_html),
     )
-    updates: dict[str, Any] = {
-        "response_html": render_assistant_html(
-            reply_text,
-            products_html=products_html,
-            delivery_status_html=delivery_status_html,
-        ),
-        "assistant_message": reply_text,
-    }
+    updates: dict[str, Any] = _assistant_response_fields(
+        reply_text,
+        products_html=products_html,
+        delivery_status_html=delivery_status_html,
+    )
     if visible_products:
         updates["last_visible_products"] = visible_products
     if topic_pivot:

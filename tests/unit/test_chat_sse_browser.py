@@ -489,6 +489,81 @@ def test_chat_sse_status_updates_loading_text_during_held_stream() -> None:
 
 
 @pytest.mark.browser
+def test_chat_sse_status_timer_cleared_on_fast_completion() -> None:
+    """Status-then-done under 800ms resets loading text; timer cannot re-stick status."""
+    import json
+
+    status_html = (
+        '<div id="assistant-stream-fast" class="flex justify-start" hx-swap-oob="outerHTML">'
+        '<div role="assistant" aria-label="Assistant message">'
+        '<p class="whitespace-pre-wrap">Searching our catalog…</p>'
+        "</div></div>"
+    )
+    status_chunk = "event: status\n" f"data: {status_html}\n\n"
+    completion_chunk = (
+        "event: message\n"
+        'data: <div id="assistant-final">Done</div>\n\n'
+        "event: done\n"
+        "data: \n\n"
+    )
+    stream_args = json.dumps(
+        {"statusChunk": status_chunk, "completionChunk": completion_chunk, "delayMs": 50}
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+        page.evaluate(
+            """(args) => {
+              const originalFetch = window.fetch.bind(window);
+              window.fetch = async (url, options) => {
+                const target = typeof url === 'string' ? url : url.url;
+                if (!target.includes('/chat/stream')) {
+                  return originalFetch(url, options);
+                }
+                const encoder = new TextEncoder();
+                const stream = new ReadableStream({
+                  async start(controller) {
+                    controller.enqueue(encoder.encode(args.statusChunk));
+                    await new Promise((resolve) => setTimeout(resolve, args.delayMs));
+                    controller.enqueue(encoder.encode(args.completionChunk));
+                    controller.close();
+                  },
+                });
+                return new Response(stream, {
+                  status: 200,
+                  headers: { 'Content-Type': 'text/event-stream' },
+                });
+              };
+            }""",
+            json.loads(stream_args),
+        )
+
+        page.fill("#chat-message", "birthday cake")
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
+              const form = document.getElementById('chat-form');
+              return span
+                && span.textContent === 'Sending…'
+                && form
+                && !form.classList.contains('htmx-request');
+            }""",
+            timeout=3000,
+        )
+        page.wait_for_timeout(900)
+        assert (
+            page.locator('[data-testid="chat-loading-text"]').inner_text() == "Sending…"
+        )
+
+        browser.close()
+
+
+@pytest.mark.browser
 def test_chat_suggestion_chip_fills_input_and_submits() -> None:
     """Clicking a welcome suggestion chip fills the input and starts the chat stream."""
     captured_bodies: list[str] = []

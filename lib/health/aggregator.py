@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Literal
 
@@ -9,7 +10,6 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from lib.kapruka.mcp_client import MCPHttpClient
-from lib.kapruka.tools.list_categories import list_categories
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import has_category_embeddings
 from lib.neo4j.vector_search import has_category_vector_index
@@ -99,11 +99,11 @@ async def _check_mcp(client: MCPHttpClient | None) -> ServiceHealth:
     if client is None:
         return ServiceHealth(status="down")
     try:
-        await list_categories(client, depth=1)
+        ok = await client.ping()
     except Exception:
         logger.exception("MCP health probe failed")
         return ServiceHealth(status="down")
-    return ServiceHealth(status="up")
+    return ServiceHealth(status="up" if ok else "down")
 
 
 async def aggregate_health(app: FastAPI) -> tuple[AggregatedHealthResponse, int]:
@@ -113,12 +113,26 @@ async def aggregate_health(app: FastAPI) -> tuple[AggregatedHealthResponse, int]
     zep_client: ZepClient | None = getattr(app.state, "zep", None)
     mcp_client: MCPHttpClient | None = getattr(app.state, "mcp_client", None)
 
+    (
+        redis_health,
+        neo4j_health,
+        neo4j_graphrag_health,
+        zep_health,
+        mcp_health,
+    ) = await asyncio.gather(
+        _check_redis(redis_client),
+        _check_neo4j(neo4j_client),
+        _check_neo4j_graphrag(neo4j_client),
+        _check_zep(zep_client),
+        _check_mcp(mcp_client),
+    )
+
     services = ServicesHealth(
-        redis=await _check_redis(redis_client),
-        neo4j=await _check_neo4j(neo4j_client),
-        neo4j_graphrag=await _check_neo4j_graphrag(neo4j_client),
-        zep=await _check_zep(zep_client),
-        mcp=await _check_mcp(mcp_client),
+        redis=redis_health,
+        neo4j=neo4j_health,
+        neo4j_graphrag=neo4j_graphrag_health,
+        zep=zep_health,
+        mcp=mcp_health,
     )
 
     all_up = all(

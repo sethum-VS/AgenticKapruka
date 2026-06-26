@@ -66,7 +66,11 @@ def build_shopping_graph(
         return await load_zep_memory(state, zep_client=zep_client)
 
     async def _analyze_intent(state: AgentState) -> dict[str, Any]:
-        return await analyze_intent(state, genai_client=genai_client)
+        return await analyze_intent(
+            state,
+            genai_client=genai_client,
+            redis_client=redis_client,
+        )
 
     async def _retrieve_hybrid_context(state: AgentState) -> dict[str, Any]:
         return await retrieve_hybrid_context(

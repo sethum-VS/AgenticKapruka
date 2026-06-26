@@ -106,6 +106,20 @@ class MCPHttpClient:
         self._owns_httpx_client = False
         logger.debug("MCP HTTP client closed")
 
+    async def ping(self) -> bool:
+        """Lightweight connectivity check — initialize MCP session without a tool call."""
+        httpx_client = await self._ensure_httpx_client()
+        async with (
+            streamable_http_client(self._url, http_client=httpx_client) as (
+                read_stream,
+                write_stream,
+                _get_session_id,
+            ),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            await session.initialize()
+        return True
+
     async def _ensure_httpx_client(self) -> httpx.AsyncClient:
         if self._httpx_client is not None:
             return self._httpx_client

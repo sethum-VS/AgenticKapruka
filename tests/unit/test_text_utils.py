@@ -6,6 +6,7 @@ from lib.kapruka.types import CategoryRef, Money, ProductResult
 from lib.utils.text import (
     decode_html_entities,
     normalize_catalog_text,
+    normalize_for_product_match,
     repair_utf8_mojibake,
 )
 
@@ -59,6 +60,15 @@ def test_product_result_decodes_html_entities_in_name() -> None:
         url="https://www.kapruka.com/example",
     )
     assert product.name == "Cadbury Milk Chocolate Chunks 135g – 30 Minis"
+
+
+def test_normalize_for_product_match_collapses_apostrophe_variants() -> None:
+    assert normalize_for_product_match("Amma's Delightful Creation") == (
+        normalize_for_product_match("Ammas Delightful Creation")
+    )
+    assert normalize_for_product_match("Lindt Lindor â€™ Assorted") == (
+        normalize_for_product_match("Lindt Lindor Assorted")
+    )
 
 
 def test_normalize_catalog_text_fixes_apostrophe_mojibake() -> None:

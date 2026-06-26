@@ -1,4 +1,4 @@
-"""Tests for chat session rotation and cart preservation."""
+"""Tests for chat session rotation and cart clearing."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pytest
 from starlette.requests import Request
 
 from lib.chat.session import SESSION_COOKIE_NAME, _sign_thread_id, rotate_chat_thread
-from lib.redis.cart import StoredCartItem, add_item, get_cart, migrate_cart
+from lib.redis.cart import StoredCartItem, add_item, clear_cart, get_cart
 from lib.redis.client import RedisClient
 
 
@@ -37,7 +37,9 @@ def test_rotate_chat_thread_returns_new_signed_cookie() -> None:
 
 
 @pytest.mark.asyncio
-async def test_migrate_cart_preserves_items_on_new_session(redis_client: RedisClient) -> None:
+async def test_clear_cart_on_new_session_leaves_prior_session_empty(
+    redis_client: RedisClient,
+) -> None:
     old_session = "sess-old"
     new_session = "sess-new"
     await add_item(
@@ -49,9 +51,8 @@ async def test_migrate_cart_preserves_items_on_new_session(redis_client: RedisCl
         price_currency="LKR",
         quantity=2,
     )
-    await migrate_cart(redis_client, old_session, new_session)
-    migrated = await get_cart(redis_client, new_session)
-    assert len(migrated) == 1
-    assert isinstance(migrated[0], StoredCartItem)
-    assert migrated[0].product_id == "cake001"
-    assert migrated[0].quantity == 2
+    await clear_cart(redis_client, old_session)
+    prior_items = await get_cart(redis_client, old_session)
+    new_items = await get_cart(redis_client, new_session)
+    assert prior_items == []
+    assert new_items == []

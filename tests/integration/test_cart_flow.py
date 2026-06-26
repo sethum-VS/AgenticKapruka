@@ -120,6 +120,21 @@ async def test_post_cart_add_returns_html_with_product_name(cart_app) -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_cart_add_rejects_invalid_product_id_without_mcp(cart_app) -> None:
+    transport = ASGITransport(app=cart_app)
+    mock_service = cart_app.state.kapruka_service
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/cart/add",
+            data={"product_id": "not-a-real-id"},
+            headers={"HX-Request": "true"},
+        )
+
+    assert response.status_code == 422
+    mock_service.get_product.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_cart_update_and_remove_return_refreshed_partial(cart_app) -> None:
     transport = ASGITransport(app=cart_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

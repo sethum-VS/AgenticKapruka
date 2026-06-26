@@ -40,6 +40,12 @@ _THREAD_ID = "thread-budget-refine-001"
 _SESSION_ID = "sess-budget-refine-001"
 _CLIENT_IP = "203.0.113.55"
 
+
+def _rendered_html(state: dict[str, Any]) -> str:
+    """Assistant bubble plus OOB carousel fragment (SSE split delivery)."""
+    return (state.get("response_html") or "") + (state.get("carousel_html") or "")
+
+
 _CHOCOLATE_PRODUCT = ProductResult(
     id="choc001",
     name="Heart Chocolate Gift Box",
@@ -179,7 +185,7 @@ async def test_clarify_chocolate_budget_multiturn_keeps_chocolate_carousel(
         )
 
     assert turn2.get("session_budget_max") == 6000.0
-    html = turn2.get("response_html") or ""
+    html = _rendered_html(turn2)
     assert "Heart Chocolate Gift Box" in html
     assert "Greeting Card" not in html
     assert turn2.get("last_visible_products")
@@ -268,7 +274,7 @@ async def test_budget_refinement_carousel_stable_after_delivery_turn(
             config,
         )
 
-    html = turn3.get("response_html") or ""
+    html = _rendered_html(turn3)
     assert "Heart Chocolate Gift Box" in html
     assert "Greeting Card" not in html
 
@@ -369,7 +375,7 @@ async def test_budget_refinement_filters_snack_noise_from_mock_mcp(
             config,
         )
 
-    html = turn2.get("response_html") or ""
+    html = _rendered_html(turn2)
     carousel_lower = html.lower()
     assert "curry" not in carousel_lower
     assert "snack" not in carousel_lower

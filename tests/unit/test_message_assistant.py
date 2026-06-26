@@ -59,6 +59,18 @@ def test_message_assistant_escapes_message_text() -> None:
     assert "&lt;script&gt;" in html
 
 
+def test_message_assistant_renders_carousel_slot_placeholder() -> None:
+    """SSE split delivery reserves an empty carousel slot for OOB swap."""
+    html = render_assistant_html(
+        "Here are some picks.",
+        carousel_slot_id="carousel-slot-abcd",
+    )
+
+    assert 'id="carousel-slot-abcd"' in html
+    assert 'data-slot="product-carousel"' in html
+    assert 'data-testid="product-carousel-stub"' not in html
+
+
 def test_message_assistant_products_html_is_not_escaped() -> None:
     """Pre-rendered carousel HTML is injected via safe filter for HTMX partial swap."""
     templates = _create_templates()

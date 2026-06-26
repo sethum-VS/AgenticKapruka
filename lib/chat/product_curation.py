@@ -31,6 +31,7 @@ _GIFT_DEMOTE_RE = re.compile(
     r"chocolate bar|toffee bar|candy bar|snack bar|for him|gentleman)\b",
     re.I,
 )
+_GIFT_VOUCHER_RE = re.compile(r"\b(?:gift\s+)?voucher\b", re.I)
 _LOW_TICKET_SNACK_RE = re.compile(r"\b(?:bar|snack|toffee|candy)\b", re.I)
 _FEMALE_RECIPIENTS = frozenset(
     {
@@ -224,6 +225,7 @@ def apply_birthday_cake_curation(
     hybrid_context: dict[str, Any] | None = None,
     graph_context_available: bool = False,
     session_product_focus: str | None = None,
+    session_flavor_hint: str | None = None,
 ) -> list[dict[str, Any]]:
     """Prefer birthday-category cakes and demote generic desserts for birthday turns."""
     from lib.neo4j.hybrid_context import is_birthday_cake_scoped_turn
@@ -247,7 +249,11 @@ def apply_birthday_cake_curation(
             neutral.append(product)
 
     if birthday:
-        ordered = birthday + neutral
+        ordered = _boost_chocolate_birthday_cakes(
+            birthday + neutral,
+            query,
+            session_flavor_hint=session_flavor_hint,
+        )
         if graph_context_available:
             return ordered + desserts
         return ordered
@@ -255,6 +261,29 @@ def apply_birthday_cake_curation(
     if graph_context_available:
         return neutral + desserts
     return neutral
+
+
+def _boost_chocolate_birthday_cakes(
+    products: list[dict[str, Any]],
+    query: str,
+    *,
+    session_flavor_hint: str | None = None,
+) -> list[dict[str, Any]]:
+    """Promote chocolate birthday cakes when flavor is explicit in the turn."""
+    chocolate_focus = session_flavor_hint == "chocolate" or bool(
+        _FOCUS_TOKEN_PATTERNS["chocolate"].search(query),
+    )
+    if not chocolate_focus or not products:
+        return list(products)
+    preferred = [
+        product
+        for product in products
+        if _FOCUS_TOKEN_PATTERNS["chocolate"].search(_product_text_blob(product))
+    ]
+    if not preferred:
+        return list(products)
+    demoted = [product for product in products if product not in preferred]
+    return preferred + demoted
 
 
 def demote_puja_products(
@@ -464,12 +493,15 @@ def apply_gift_curation(
     ):
         return list(products)
 
+    user_wants_voucher = bool(_GIFT_VOUCHER_RE.search(user_message))
     promoted: list[dict[str, Any]] = []
     neutral: list[dict[str, Any]] = []
     demoted: list[dict[str, Any]] = []
     for product in products:
         blob = _product_text_blob(product)
-        if _GIFT_DEMOTE_RE.search(blob) or _PRODUCE_DENYLIST.search(blob):
+        if not user_wants_voucher and _GIFT_VOUCHER_RE.search(blob):
+            demoted.append(product)
+        elif _GIFT_DEMOTE_RE.search(blob) or _PRODUCE_DENYLIST.search(blob):
             demoted.append(product)
         elif _GIFT_PROMOTE_RE.search(blob) or (
             session_product_focus != "chocolate"
@@ -737,6 +769,32 @@ def sort_and_filter_by_budget(
     return in_budget + near_budget + over_near
 
 
+def ensure_flower_price_tier_diversity(
+    products: list[dict[str, Any]],
+    budget_max: float,
+    *,
+    top_n: int = 5,
+    tier_ratio: float = 0.7,
+) -> list[dict[str, Any]]:
+    """Ensure at least one sub-tier rose option appears in the top carousel slots."""
+    if not products or budget_max <= 0:
+        return list(products)
+    threshold = budget_max * tier_ratio
+    affordable_index: int | None = None
+    for index, product in enumerate(products):
+        price = product_price_amount(product)
+        if price is not None and price < threshold:
+            affordable_index = index
+            break
+    if affordable_index is None or affordable_index < top_n:
+        return list(products)
+    reordered = list(products)
+    affordable = reordered.pop(affordable_index)
+    insert_at = min(top_n - 1, len(reordered))
+    reordered.insert(insert_at, affordable)
+    return reordered
+
+
 def curate_carousel_products(
     products: list[dict[str, Any]],
     *,
@@ -746,6 +804,7 @@ def curate_carousel_products(
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    session_flavor_hint: str | None = None,
     session_recipient_hint: str | None = None,
     session_occasion: str | None = None,
     strict_budget: bool = False,
@@ -759,6 +818,7 @@ def curate_carousel_products(
         hybrid_context=hybrid_context,
         graph_context_available=graph_context_available,
         session_product_focus=session_product_focus,
+        session_flavor_hint=session_flavor_hint,
     )
     scoped = apply_anniversary_curation(
         scoped,
@@ -790,7 +850,6 @@ def curate_carousel_products(
         query=query,
     )
     scoped = demote_off_focus_products(scoped, session_product_focus)
-    scoped = boost_carousel_relevance(scoped, query)
     scoped = apply_recipient_curation(scoped, session_recipient_hint)
     scoped = filter_gift_noise_products(scoped, strict=strict_budget)
 
@@ -801,6 +860,19 @@ def curate_carousel_products(
             currency,
             strict_in_budget=strict_budget,
         )
+
+    def _finalize_carousel(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        sorted_items = _budget_sort(items)
+        if budget_max is None:
+            sorted_items = boost_carousel_relevance(sorted_items, query)
+        if (
+            budget_max is not None
+            and budget_max > 0
+            and is_flower_fruit_intent(query)
+        ):
+            sorted_items = ensure_flower_price_tier_diversity(sorted_items, budget_max)
+        return sorted_items
+
     if is_birthday_cake_scoped_turn(
         query,
         hybrid_context,
@@ -812,20 +884,16 @@ def curate_carousel_products(
         other_items = [
             product for product in scoped if not product_is_birthday_cake_product(product)
         ]
-        return _budget_sort(
-            birthday_items,
-        ) + _budget_sort(other_items)
+        return _finalize_carousel(birthday_items) + _finalize_carousel(other_items)
     if is_flower_fruit_intent(query):
         if graph_context_available:
             preferred = [
                 product for product in scoped if not product_matches_puja_denylist(product)
             ]
             demoted = [product for product in scoped if product_matches_puja_denylist(product)]
-            return _budget_sort(
-                preferred,
-            ) + _budget_sort(demoted)
+            return _finalize_carousel(preferred) + _finalize_carousel(demoted)
 
         filtered = filter_puja_products(scoped, query)
-        return _budget_sort(filtered)
+        return _finalize_carousel(filtered)
 
-    return _budget_sort(scoped)
+    return _finalize_carousel(scoped)

@@ -25,7 +25,15 @@
         {{ rate_limit_banner_html | safe }}
       </div>
       {% endif %}
-      {% if products_html %}
+      {% if carousel_slot_id %}
+      <div
+        id="{{ carousel_slot_id }}"
+        class="assistant-products mt-4"
+        data-slot="product-carousel"
+        role="region"
+        aria-label="Suggested products"
+      ></div>
+      {% elif products_html %}
       <div
         class="assistant-products mt-4"
         data-slot="product-carousel"

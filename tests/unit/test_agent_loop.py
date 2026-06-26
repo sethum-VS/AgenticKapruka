@@ -114,7 +114,7 @@ def test_summarize_search_products_caps_at_five_and_strips_heavy_fields() -> Non
     assert "variants" not in planner_blob
 
     for product in summarized_results:
-        assert set(product.keys()) <= {"id", "name", "price", "in_stock"}
+        assert set(product.keys()) <= {"id", "name", "price", "in_stock", "stock_level"}
         assert "image_url" not in product
 
 

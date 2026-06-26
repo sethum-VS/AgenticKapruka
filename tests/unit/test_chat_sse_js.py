@@ -18,6 +18,8 @@ def test_chat_sse_js_wires_post_stream_bridge() -> None:
     assert 'eventName = "message"' in source
     assert "swapStatusHtml" in source
     assert 'event.eventName === "status"' in source
+    assert 'event.eventName === "carousel"' in source
+    assert "swapCarouselHtml" in source
     assert "htmx.swap" in source
     assert 'HX-Request": "true"' in source
     assert "htmx:afterSwap" in source
@@ -40,6 +42,9 @@ def test_chat_sse_js_clears_loading_on_success_and_error() -> None:
     assert "submitButton.disabled = false" in source
     assert "messageInput.readOnly = false" in source
     assert 'indicator?.classList.remove("htmx-request", "chat-loading")' in source
+    assert "clearTimeout(statusFlushTimer)" in source
+    assert "statusFlushTimer = null" in source
+    assert "statusShownAt = 0" in source
 
 
 def test_chat_sse_js_uses_abort_controller_timeout() -> None:

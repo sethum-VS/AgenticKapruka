@@ -201,7 +201,8 @@ async def test_shopping_graph_cakes_search_via_agent_loop(graph_deps: ShoppingGr
     assert isinstance(kapruka_service, AsyncMock)
     kapruka_service.search_products.assert_awaited_once_with(
         _CLIENT_IP,
-        q="cakes",
+        q="birthday cake",
+        category="Birthday",
         currency="LKR",
     )
 

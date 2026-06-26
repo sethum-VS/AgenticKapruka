@@ -44,7 +44,7 @@ from lib.chat.product_curation import (
 )
 from lib.chat.query_preprocessor import is_delivery_context_relevant_turn
 from lib.chat.search_broadening import apply_first_broaden
-from lib.chat.status_copy import SEARCHING_CATALOG
+from lib.chat.status_copy import SEARCHING_CATALOG, long_search_status_message
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
@@ -96,8 +96,8 @@ _DEFAULT_STATUS_MESSAGE = SEARCHING_CATALOG
 PLANNER_SEARCH_RESULT_LIMIT = 5
 PLANNER_CATEGORY_NODE_LIMIT = 10
 
-_SEARCH_PRODUCT_FIELDS = frozenset({"id", "name", "price", "in_stock"})
-_GET_PRODUCT_FIELDS = frozenset({"id", "name", "price", "in_stock"})
+_SEARCH_PRODUCT_FIELDS = frozenset({"id", "name", "price", "in_stock", "stock_level"})
+_GET_PRODUCT_FIELDS = frozenset({"id", "name", "price", "in_stock", "stock_level"})
 
 PLANNER_SYSTEM_INSTRUCTION = """You are the Kapruka gift shopping assistant catalog planner.
 
@@ -400,6 +400,37 @@ def _search_has_products(result: Any) -> bool:
     return bool(raw_results)
 
 
+def _search_product_count(result: Any) -> int:
+    if not isinstance(result, dict):
+        return 0
+    raw_results = result.get("results")
+    if not isinstance(raw_results, list):
+        return 0
+    return len(raw_results)
+
+
+_BUDGETED_GIFT_PHYSICAL_QUERIES: tuple[str, ...] = (
+    "gift hamper",
+    "chocolates gift",
+    "flowers",
+)
+
+
+def _budgeted_gift_physical_queries(user_message: str) -> tuple[str, ...]:
+    """Physical gift searches to run before voucher fallback on budgeted gift turns."""
+    lowered = user_message.lower()
+    queries: list[str] = []
+    if "hamper" in lowered:
+        queries.append("gift hamper")
+    if "chocolate" in lowered:
+        queries.append("chocolates gift")
+    if re.search(r"\b(?:flower|flowers|rose|roses)\b", lowered):
+        queries.append("flowers")
+    if queries:
+        return tuple(dict.fromkeys(queries))
+    return _BUDGETED_GIFT_PHYSICAL_QUERIES
+
+
 def _last_search_products_from_trace(
     tool_trace: list[ToolInvocation],
     *,
@@ -642,7 +673,18 @@ def _curate_search_trace_result(
     session_focus = state.get("session_product_focus")
     session_recipient = state.get("session_recipient_hint")
     session_occasion_val = state.get("session_occasion")
-    intent_metadata = state.get("intent_metadata") or {}
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    session_flavor_hint = state.get("session_flavor_hint")
+    if not isinstance(session_flavor_hint, str) or not session_flavor_hint.strip():
+        meta_flavor = intent_metadata.get("session_flavor_hint") if isinstance(
+            intent_metadata,
+            dict,
+        ) else None
+        session_flavor_hint = (
+            meta_flavor.strip()
+            if isinstance(meta_flavor, str) and meta_flavor.strip()
+            else None
+        )
     topic_pivot = bool(
         isinstance(intent_metadata, dict) and intent_metadata.get("topic_pivot"),
     )
@@ -653,6 +695,13 @@ def _curate_search_trace_result(
         else None,
         topic_pivot=topic_pivot,
     )
+    if (
+        not strict_budget
+        and is_flower_fruit_intent(user_message)
+        and isinstance(state.get("session_budget_max"), (int, float))
+        and state.get("session_budget_max", 0) > 0
+    ):
+        strict_budget = True
     curated = apply_anniversary_curation(
         apply_gift_curation(
             apply_birthday_cake_curation(
@@ -665,6 +714,7 @@ def _curate_search_trace_result(
                 hybrid_context=hybrid_context,
                 graph_context_available=graph_up,
                 session_product_focus=session_focus,
+                session_flavor_hint=session_flavor_hint,
             ),
             session_product_focus=session_focus if isinstance(session_focus, str) else None,
             user_message=user_message,
@@ -709,6 +759,15 @@ def _curate_search_trace_result(
             str(currency),
             strict_in_budget=strict_budget,
         )
+    if (
+        strict_budget
+        and is_flower_fruit_intent(user_message)
+        and isinstance(budget_max, (int, float))
+        and budget_max > 0
+    ):
+        from lib.chat.product_curation import ensure_flower_price_tier_diversity
+
+        curated = ensure_flower_price_tier_diversity(curated, float(budget_max))
     if curated == products:
         return result
     updated = dict(result)
@@ -1197,35 +1256,19 @@ async def agent_loop(
                 "max_price": budget_max,
                 "sort": "price_asc",
             }
-            voucher_args = _inject_tool_currency(
-                tool_name,
-                {**base_args, "q": "gift voucher"},
-                state,
-                currency,
-            )
-            _emit_status(_status_message_for_tool(tool_name))
-            voucher_result = await _invoke_tool_with_rate_limit_retry(
-                tool_name,
-                voucher_args,
-                kapruka_service=kapruka_service,
-                client_ip=rate_limit_key,
-                currency=currency,
-            )
-            voucher_result = _curate_search_trace_result(voucher_result, state=state)
-            tool_trace.append(
-                {"name": tool_name, "args": voucher_args, "result": voucher_result},
-            )
-            tool_call_count += 1
-            physical_args = _inject_tool_currency(
-                tool_name,
-                {
-                    **base_args,
-                    "q": _dual_gift_physical_query(user_message),
-                },
-                state,
-                currency,
-            )
-            if not _is_duplicate_invocation(tool_trace, tool_name, physical_args):
+            merged_result: dict[str, Any] = {"results": []}
+            physical_queries = _budgeted_gift_physical_queries(user_message)
+            for physical_q in physical_queries:
+                if _search_product_count(merged_result) >= 3:
+                    break
+                physical_args = _inject_tool_currency(
+                    tool_name,
+                    {**base_args, "q": physical_q},
+                    state,
+                    currency,
+                )
+                if _is_duplicate_invocation(tool_trace, tool_name, physical_args):
+                    continue
                 _emit_status(_status_message_for_tool(tool_name))
                 physical_result = await _invoke_tool_with_rate_limit_retry(
                     tool_name,
@@ -1239,9 +1282,41 @@ async def agent_loop(
                     {"name": tool_name, "args": physical_args, "result": physical_result},
                 )
                 tool_call_count += 1
-                voucher_result = _merge_search_results(voucher_result, physical_result)
-            session_search_query_update = "gift voucher"
-            if _search_has_products(voucher_result):
+                merged_result = _merge_search_results(merged_result, physical_result)
+
+            if _search_product_count(merged_result) < 3:
+                voucher_args = _inject_tool_currency(
+                    tool_name,
+                    {**base_args, "q": "gift voucher"},
+                    state,
+                    currency,
+                )
+                if not _is_duplicate_invocation(tool_trace, tool_name, voucher_args):
+                    _emit_status(_status_message_for_tool(tool_name))
+                    voucher_result = await _invoke_tool_with_rate_limit_retry(
+                        tool_name,
+                        voucher_args,
+                        kapruka_service=kapruka_service,
+                        client_ip=rate_limit_key,
+                        currency=currency,
+                    )
+                    voucher_result = _curate_search_trace_result(voucher_result, state=state)
+                    tool_trace.append(
+                        {"name": tool_name, "args": voucher_args, "result": voucher_result},
+                    )
+                    tool_call_count += 1
+                    merged_result = _merge_search_results(merged_result, voucher_result)
+
+            session_search_query_update = physical_queries[0]
+            if _search_has_products(merged_result):
+                tool_trace.append(
+                    {
+                        "name": tool_name,
+                        "args": {**base_args, "q": physical_queries[0]},
+                        "result": merged_result,
+                    },
+                )
+                tool_call_count += 1
                 exit_reason = "finish"
                 agent_loop_done = True
                 break
@@ -1378,7 +1453,14 @@ async def agent_loop(
                 break
 
         if iteration > 0 or not budget_refinement_search_applied:
-            _emit_status(_DEFAULT_STATUS_MESSAGE)
+            intent_metadata = state.get("intent_metadata") or {}
+            has_budget = bool(
+                state.get("session_budget_max")
+                or intent_metadata.get("budget_max")
+            )
+            _emit_status(
+                long_search_status_message(iteration=iteration, has_budget=has_budget),
+            )
 
         step = await asyncio.to_thread(
             _plan_next_step_sync,
@@ -1664,7 +1746,7 @@ async def agent_loop(
                             physical_result.get("error"),
                         )
                     else:
-                        result = _merge_search_results(result, physical_result)
+                        result = _merge_search_results(physical_result, result)
         tool_trace.append(
             {
                 "name": tool_name,

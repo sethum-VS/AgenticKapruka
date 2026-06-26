@@ -24,10 +24,6 @@ async def test_health_returns_aggregated_json(monkeypatch: pytest.MonkeyPatch) -
     from unittest.mock import AsyncMock, MagicMock
 
     monkeypatch.setattr(
-        "lib.health.aggregator.list_categories",
-        AsyncMock(return_value=MagicMock()),
-    )
-    monkeypatch.setattr(
         "lib.health.aggregator.has_category_embeddings",
         AsyncMock(return_value=True),
     )
@@ -44,6 +40,7 @@ async def test_health_returns_aggregated_json(monkeypatch: pytest.MonkeyPatch) -
     application.state.zep = MagicMock()
     application.state.zep.health_check = AsyncMock(return_value=True)
     application.state.mcp_client = MagicMock()
+    application.state.mcp_client.ping = AsyncMock(return_value=True)
 
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -70,4 +67,15 @@ async def test_static_css_returns_200_with_text_css() -> None:
         response = await client.get("/static/css/app.css")
     assert response.status_code == 200
     assert "text/css" in response.headers["content-type"]
+    assert response.text
+
+
+@pytest.mark.asyncio
+async def test_static_vendor_js_returns_200() -> None:
+    application = create_app()
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/static/js/vendor/htmx.min.js")
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
     assert response.text

@@ -10,9 +10,9 @@ from lib.neo4j.hybrid_context import strip_location_from_search_query
 BroadenStep = Literal["gift_voucher_fallback", "simplify_q", "strip_city", "drop_max_price"]
 
 BROADEN_LADDER: tuple[BroadenStep, ...] = (
-    "gift_voucher_fallback",
     "simplify_q",
     "strip_city",
+    "gift_voucher_fallback",
     "drop_max_price",
 )
 
@@ -22,6 +22,7 @@ _SIMPLIFY_Q_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bbirthday\s+cake\b", re.I), "cake"),
     (re.compile(r"\banniversary\s+cake\b", re.I), "cake"),
     (re.compile(r"\bwedding\s+cake\b", re.I), "cake"),
+    (re.compile(r"\bbirthday\s+gift\b", re.I), "gift"),
 )
 
 
@@ -41,7 +42,13 @@ def broaden_search_args(args: dict[str, Any], step: BroadenStep) -> dict[str, An
     if step == "gift_voucher_fallback":
         if not _GIFT_IN_Q.search(q):
             return None
-        if q.lower().strip() == "voucher":
+        if q.lower().strip() in {"voucher", "gift voucher"}:
+            return None
+        if re.search(
+            r"\b(?:hamper|chocolate|flower|flowers|cake|roses?|bouquet|combo)\b",
+            q,
+            re.I,
+        ):
             return None
         return {**args, "q": "voucher"}
 

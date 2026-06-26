@@ -2,11 +2,7 @@
 
 {% block title %}{{ title | default("Chat — AgenticKapruka") }}{% endblock %}
 
-{% block head_extra %}
-<script src="/static/js/chat-helpers.js"></script>
-<script src="/static/js/lazy-image.js"></script>
-<script src="/static/js/payment-countdown.js"></script>
-{% endblock %}
+{% block head_extra %}{% endblock %}
 
 {% block body %}
 {% include "components/sidebar_nav.html" %}
@@ -68,7 +64,7 @@
       >
         <div
           id="chat-sse-listener"
-          sse-swap="message,status,done"
+          sse-swap="message,status,carousel,done"
           hx-target="#chat-messages"
           hx-swap="beforeend"
           hidden
@@ -135,31 +131,27 @@
 </main>
 {% endblock %}
 
+{% block pre_alpine_scripts %}
+<script defer src="/static/js/chat-helpers.js"></script>
+{% endblock %}
+
 {% block scripts %}
+<script defer src="/static/js/lazy-image.js"></script>
+<script defer src="/static/js/payment-countdown.js"></script>
 <script>
-  (function () {
-    const form = document.getElementById("chat-form");
-    if (!form) {
+  document.addEventListener("DOMContentLoaded", function () {
+    const textarea = document.getElementById("chat-message");
+    if (!textarea) {
       return;
     }
-    form.dataset.chatStreamPath = form.getAttribute("sse-connect") || "/chat/stream";
-    form.removeAttribute("hx-post");
-    form.removeAttribute("hx-trigger");
-    form.removeAttribute("sse-connect");
-    form.removeAttribute("hx-ext");
-    form.dataset.chatSseReady = "true";
-
-    const textarea = document.getElementById("chat-message");
-    if (textarea) {
-      textarea.addEventListener("input", function () {
-        this.style.height = "auto";
-        this.style.height = `${this.scrollHeight}px`;
-        if (this.value === "") {
-          this.style.height = "44px";
-        }
-      });
-    }
-  })();
+    textarea.addEventListener("input", function () {
+      this.style.height = "auto";
+      this.style.height = `${this.scrollHeight}px`;
+      if (this.value === "") {
+        this.style.height = "44px";
+      }
+    });
+  });
 </script>
-<script src="/static/js/chat-sse.js"></script>
+<script defer src="/static/js/chat-sse.js"></script>
 {% endblock %}

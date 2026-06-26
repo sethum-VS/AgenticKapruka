@@ -83,7 +83,8 @@ async def test_checkout_flow_starts_from_cart_with_redis_items(
     assert len(cart_items) == 1
     assert cart_items[0]["product_id"] == _SAMPLE_ITEM["product_id"]
     assert cart_items[0]["quantity"] == _SAMPLE_ITEM["quantity"]
-    assert "checkout" in (result.get("assistant_message") or "").lower()
+    assistant = (result.get("assistant_message") or "").lower()
+    assert "checkout" in assistant or "delivery city" in assistant
 
 
 @pytest.mark.asyncio

@@ -169,6 +169,9 @@ async def iter_chat_sse_events(
 
                     cleanup = f'<div id="{pending_id}" hx-swap-oob="delete"></div>'
                     yield format_sse_event(cleanup + response_html)
+                    carousel_html = node_update.get("carousel_html")
+                    if isinstance(carousel_html, str) and carousel_html.strip():
+                        yield format_sse_event(carousel_html, event="carousel")
                     trace_turn_complete(
                         thread_id=thread_id,
                         assistant_message=assistant_message,

@@ -21,6 +21,7 @@ from lib.chat.intent_heuristics import (
     classify_routing_guard,
     is_budgeted_gift_ideas_message,
     is_cart_add_trigger,
+    is_order_intent_message,
     is_topic_pivot_message,
     is_vague_gift_intent,
 )
@@ -32,7 +33,10 @@ from lib.chat.off_topic import (
     off_topic_topic,
 )
 from lib.chat.query_preprocessor import QueryPreprocessor
+from lib.chat.support_faq import classify_support_topic, is_support_question
 from lib.neo4j.hybrid_context import extract_budget
+from lib.redis.cart import get_cart
+from lib.redis.client import RedisClient
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +139,24 @@ def _derive_product_focus(user_message: str) -> str | None:
         return "chocolate"
     if _GIFT_FOCUS.search(stripped):
         return "gift"
+    return None
+
+
+def _derive_flavor_hint(user_message: str) -> str | None:
+    """Capture flavor modifiers (e.g. chocolate) even when cake wins product focus."""
+    if _CHOCOLATE_FOCUS.search(user_message.strip()):
+        return "chocolate"
+    return None
+
+
+def _resolve_session_flavor_hint(state: AgentState, user_message: str) -> str | None:
+    derived = _derive_flavor_hint(user_message)
+    if derived is not None:
+        return derived
+    prior_meta = state.get("intent_metadata") or {}
+    prior = prior_meta.get("session_flavor_hint")
+    if isinstance(prior, str) and prior.strip():
+        return prior.strip()
     return None
 
 
@@ -260,6 +282,7 @@ def _with_session_fields(
     session_product_focus: str | None,
     session_occasion: str | None,
     session_recipient_hint: str | None,
+    session_flavor_hint: str | None,
     delivery_date: str | None,
     session_delivery_date: str | None,
 ) -> dict[str, Any]:
@@ -273,6 +296,8 @@ def _with_session_fields(
         payload["session_occasion"] = session_occasion
     if session_recipient_hint is not None:
         payload["session_recipient_hint"] = session_recipient_hint
+    if session_flavor_hint is not None:
+        payload["session_flavor_hint"] = session_flavor_hint
     if delivery_date is not None:
         payload["delivery_date"] = delivery_date
     if session_delivery_date is not None:
@@ -357,10 +382,26 @@ def _off_topic_metadata(
     )
 
 
+async def _session_cart_has_items(
+    state: AgentState,
+    redis_client: RedisClient | None,
+) -> bool:
+    """True when the session Redis cart has at least one line item."""
+    session_id = state.get("session_id") or ""
+    if redis_client is not None and session_id:
+        rows = await get_cart(redis_client, session_id)
+        if rows:
+            return True
+    action = state.get("cart_action_result") or {}
+    cart_items = action.get("cart_items")
+    return isinstance(cart_items, list) and bool(cart_items)
+
+
 async def analyze_intent(
     state: AgentState,
     *,
     genai_client: object | None = None,
+    redis_client: RedisClient | None = None,
 ) -> dict[str, Any]:
     """LangGraph node: guard-only routing plus query preprocessing (no LLM)."""
     _ = genai_client
@@ -386,6 +427,7 @@ async def analyze_intent(
         )
     )
     session_product_focus = _resolve_session_product_focus(state, user_message)
+    session_flavor_hint = _resolve_session_flavor_hint(state, user_message)
     session_occasion = _resolve_session_occasion(state, user_message)
     session_recipient_hint = _resolve_session_recipient_hint(state, user_message)
     intent_metadata = _flag_budget_confirmation_on_context_change(
@@ -416,6 +458,11 @@ async def analyze_intent(
             IntentMetadata,
             {**intent_metadata, "budgeted_gift_discovery": True},
         )
+    if session_flavor_hint is not None:
+        intent_metadata = cast(
+            IntentMetadata,
+            {**intent_metadata, "session_flavor_hint": session_flavor_hint},
+        )
 
     def _with_budget(payload: dict[str, Any]) -> dict[str, Any]:
         result = _with_session_fields(
@@ -425,6 +472,7 @@ async def analyze_intent(
             session_product_focus=session_product_focus,
             session_occasion=session_occasion,
             session_recipient_hint=session_recipient_hint,
+            session_flavor_hint=session_flavor_hint,
             delivery_date=delivery_date,
             session_delivery_date=session_delivery_date,
         )
@@ -471,6 +519,22 @@ async def analyze_intent(
             },
         )
 
+    if is_support_question(user_message):
+        logger.info(
+            "analyze_intent: support/policy question (%s)",
+            classify_support_topic(user_message),
+        )
+        intent_metadata = cast(
+            IntentMetadata,
+            {
+                **intent_metadata,
+                "support_topic": classify_support_topic(user_message),
+                "requires_delivery_validation": False,
+                "target_city": None,
+            },
+        )
+        return _with_budget({"intent": "general", "intent_metadata": intent_metadata})
+
     if user_message.strip() == PROCEED_CHECKOUT_MESSAGE:
         logger.info("analyze_intent: proceed-to-checkout trigger from cart drawer")
         return _with_budget({"intent": "checkout", "intent_metadata": intent_metadata})
@@ -479,6 +543,13 @@ async def analyze_intent(
     if guard_intent is not None:
         logger.info("analyze_intent: guard routed message as %s", guard_intent)
         return _with_budget({"intent": guard_intent, "intent_metadata": intent_metadata})
+
+    if is_order_intent_message(user_message) and await _session_cart_has_items(
+        state,
+        redis_client,
+    ):
+        logger.info("analyze_intent: order intent with non-empty cart -> checkout")
+        return _with_budget({"intent": "checkout", "intent_metadata": intent_metadata})
 
     if state.get("session_awaiting_gift_preferences"):
         logger.debug("analyze_intent: gift preferences follow-up — proceeding to search")

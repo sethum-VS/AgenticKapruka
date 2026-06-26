@@ -22,6 +22,8 @@ class IntentMetadata(TypedDict, total=False):
     topic_pivot: bool
     budgeted_gift_discovery: bool
     budget_confirmation_pending: bool
+    session_flavor_hint: str | None
     graph_degraded: bool
     delivery_date_ambiguous: bool
     delivery_date_clarification: str | None
+    support_topic: str | None

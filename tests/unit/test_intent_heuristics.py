@@ -9,6 +9,7 @@ from lib.chat.intent_heuristics import (
     extract_cart_product_phrase,
     is_cart_add_trigger,
     is_checkout_trigger,
+    is_order_intent_message,
     is_proceed_checkout_message,
     is_topic_pivot_message,
     is_tracking_guard,
@@ -37,6 +38,15 @@ def test_checkout_trigger_excludes_add_to_cart_substring() -> None:
     assert not is_checkout_trigger("Add Blush Roses to my cart")
     assert is_checkout_trigger("checkout my cart")
     assert is_checkout_trigger("view cart")
+    assert is_checkout_trigger("place the order")
+    assert is_checkout_trigger("Help me place the order for delivery tomorrow")
+
+
+def test_is_order_intent_message_matches_place_order_variants() -> None:
+    assert is_order_intent_message("place the order")
+    assert is_order_intent_message("Please place an order")
+    assert is_order_intent_message("Yes, place my order")
+    assert not is_order_intent_message("birthday cake for mom")
 
 
 def test_classify_routing_guard_priority_cart_before_checkout() -> None:
@@ -75,6 +85,13 @@ def test_tracking_guard_matches_order_number_and_keywords() -> None:
 
 def test_tracking_guard_matches_ord_ref() -> None:
     assert is_tracking_guard("track ORD-20260520-7823")
+
+
+def test_infer_general_from_support_return_policy() -> None:
+    assert (
+        infer_intent_from_message("What's your return policy if flowers arrive wilted?")
+        == "general"
+    )
 
 
 def test_proceed_checkout_message_is_exact_match() -> None:

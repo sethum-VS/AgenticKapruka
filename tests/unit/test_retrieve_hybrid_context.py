@@ -173,6 +173,18 @@ def test_route_after_analyze_intent_defaults_to_retrieve_when_intent_missing() -
     assert route_after_analyze_intent(state) == "retrieve_hybrid_context"
 
 
+def test_route_after_analyze_intent_support_topic_skips_hybrid_context() -> None:
+    state: AgentState = {
+        "messages": [
+            HumanMessage(content="What's your return policy if flowers arrive wilted?"),
+        ],
+        "intent": "general",
+        "intent_metadata": {"support_topic": "quality"},
+        "session_id": "sess-route-support",
+    }
+    assert route_after_analyze_intent(state) == "generate_response"
+
+
 @pytest.mark.parametrize("intent", ["discovery", "general"])
 def test_route_after_analyze_intent_product_id_skips_hybrid_context(intent: Intent) -> None:
     """Product ID in message bypasses retrieve_hybrid_context (and future agent_loop)."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -137,6 +137,32 @@ async def test_analyze_intent_checkout_trigger_skips_gemini() -> None:
 
 
 @pytest.mark.asyncio
+async def test_analyze_intent_place_order_with_cart_routes_checkout() -> None:
+    mock_client = MagicMock()
+    mock_redis = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="place the order")],
+        "session_id": "sess-intent-place-order",
+    }
+
+    with patch(
+        "graphs.nodes.analyze_intent.get_cart",
+        new_callable=AsyncMock,
+    ) as mock_get_cart:
+        mock_get_cart.return_value = [
+            MagicMock(product_id="cake001", quantity=1),
+        ]
+        result = await analyze_intent(
+            state,
+            genai_client=mock_client,
+            redis_client=mock_redis,
+        )
+
+    assert result["intent"] == "checkout"
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_analyze_intent_delivery_question_routes_to_shopping_path() -> None:
     """Discovery delivery questions must not hit checkout guard — defer to agent_loop."""
     mock_client = MagicMock()
@@ -197,6 +223,21 @@ async def test_analyze_intent_persists_session_product_focus() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     assert result["session_product_focus"] == "cake"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_persists_session_flavor_hint_for_chocolate_cake() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="chocolate birthday cake for mom")],
+        "session_id": "sess-intent-flavor",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["session_product_focus"] == "cake"
+    assert result["session_flavor_hint"] == "chocolate"
+    assert result["intent_metadata"].get("session_flavor_hint") == "chocolate"
 
 
 @pytest.mark.asyncio
@@ -299,6 +340,22 @@ async def test_analyze_intent_weather_routes_general_off_topic() -> None:
     assert result["intent"] == "general"
     assert result["intent_metadata"]["is_off_topic"] is True
     assert result["intent_metadata"]["target_city"] is None
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_support_policy_routes_general_with_topic() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [
+            HumanMessage(content="What's your return policy if flowers arrive wilted?"),
+        ],
+        "session_id": "sess-support-policy",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent"] == "general"
+    assert result["intent_metadata"]["support_topic"] == "quality"
 
 
 @pytest.mark.asyncio

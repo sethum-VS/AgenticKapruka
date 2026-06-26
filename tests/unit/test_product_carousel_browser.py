@@ -38,7 +38,8 @@ def _load_products() -> list[dict[str, object]]:
 
 def _many_products() -> list[dict[str, object]]:
     """Repeat fixtures so the grid has enough cards for lazy-load testing."""
-    return _load_products() * 4
+    # First two carousel slots render eager images; need 14+ cards for 12+ lazy slots.
+    return _load_products() * 5
 
 
 def _carousel_harness_html(carousel_html: str) -> str:

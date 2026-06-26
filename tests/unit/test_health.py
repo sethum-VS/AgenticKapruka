@@ -50,6 +50,7 @@ def all_healthy_clients() -> dict[str, Any]:
     zep.health_check = AsyncMock(return_value=True)
 
     mcp = MagicMock(spec=MCPHttpClient)
+    mcp.ping = AsyncMock(return_value=True)
 
     return {
         "redis": redis,
@@ -65,10 +66,6 @@ async def test_aggregate_health_healthy_when_all_services_up(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """All probes up yields healthy status and HTTP 200."""
-    monkeypatch.setattr(
-        "lib.health.aggregator.list_categories",
-        AsyncMock(return_value=MagicMock()),
-    )
     _patch_graphrag_healthy(monkeypatch)
 
     app = MagicMock()
@@ -89,10 +86,6 @@ async def test_aggregate_health_degraded_when_redis_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Any failed probe yields degraded status and HTTP 503."""
-    monkeypatch.setattr(
-        "lib.health.aggregator.list_categories",
-        AsyncMock(return_value=MagicMock()),
-    )
     _patch_graphrag_healthy(monkeypatch)
     all_healthy_clients["redis"].ping = AsyncMock(return_value=False)
 
@@ -110,16 +103,15 @@ async def test_aggregate_health_degraded_when_redis_down(
 
 
 @pytest.mark.asyncio
-async def test_aggregate_health_degraded_when_mcp_list_categories_fails(
+async def test_aggregate_health_degraded_when_mcp_ping_fails(
     all_healthy_clients: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MCP lightweight list_categories failure marks mcp down."""
-    monkeypatch.setattr(
-        "lib.health.aggregator.list_categories",
-        AsyncMock(side_effect=RuntimeError("mcp unavailable")),
-    )
+    """MCP lightweight ping failure marks mcp down."""
     _patch_graphrag_healthy(monkeypatch)
+    all_healthy_clients["mcp_client"].ping = AsyncMock(
+        side_effect=RuntimeError("mcp unavailable"),
+    )
 
     app = MagicMock()
     app.state = MagicMock()
@@ -139,10 +131,6 @@ async def test_health_endpoint_returns_schema_with_mocked_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """GET /health returns AggregatedHealthResponse JSON with mocked app.state."""
-    monkeypatch.setattr(
-        "lib.health.aggregator.list_categories",
-        AsyncMock(return_value=MagicMock()),
-    )
     _patch_graphrag_healthy(monkeypatch)
 
     application = create_app()
@@ -166,10 +154,6 @@ async def test_health_endpoint_returns_503_when_degraded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """GET /health uses 503 when any critical dependency is down."""
-    monkeypatch.setattr(
-        "lib.health.aggregator.list_categories",
-        AsyncMock(return_value=MagicMock()),
-    )
     _patch_graphrag_healthy(monkeypatch)
     all_healthy_clients["zep"].health_check = AsyncMock(return_value=False)
 
@@ -192,10 +176,6 @@ async def test_aggregate_health_degraded_when_graphrag_index_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Neo4j connectivity up but missing vector index marks neo4j_graphrag down."""
-    monkeypatch.setattr(
-        "lib.health.aggregator.list_categories",
-        AsyncMock(return_value=MagicMock()),
-    )
     monkeypatch.setattr(
         "lib.health.aggregator.has_category_embeddings",
         AsyncMock(return_value=True),
@@ -223,16 +203,12 @@ async def test_aggregate_health_degraded_when_neo4j_client_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Missing Neo4j client marks both neo4j and neo4j_graphrag down."""
-    monkeypatch.setattr(
-        "lib.health.aggregator.list_categories",
-        AsyncMock(return_value=MagicMock()),
-    )
-
     redis = MagicMock(spec=RedisClient)
     redis.ping = AsyncMock(return_value=True)
     zep = MagicMock(spec=ZepClient)
     zep.health_check = AsyncMock(return_value=True)
     mcp = MagicMock(spec=MCPHttpClient)
+    mcp.ping = AsyncMock(return_value=True)
 
     app = MagicMock()
     app.state = MagicMock()

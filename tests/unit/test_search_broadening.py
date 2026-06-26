@@ -29,9 +29,9 @@ def test_broaden_gift_voucher_fallback_noop_when_already_voucher() -> None:
     assert broaden_search_args(args, "gift_voucher_fallback") is None
 
 
-def test_first_applicable_broaden_step_gift_query_prefers_voucher_fallback() -> None:
-    args = {"q": "gift ideas", "currency": "LKR", "max_price": 5000.0}
-    assert first_applicable_broaden_step(args) == "gift_voucher_fallback"
+def test_first_applicable_broaden_step_simplify_before_voucher_fallback() -> None:
+    args = {"q": "birthday cake for mom in Kandy", "currency": "LKR", "max_price": 5000.0}
+    assert first_applicable_broaden_step(args) == "simplify_q"
 
 
 def test_broaden_simplify_q_skips_birthday_category_filter() -> None:
@@ -106,9 +106,9 @@ def test_apply_first_broaden_returns_one_step() -> None:
 
 def test_broaden_ladder_order_constant() -> None:
     assert BROADEN_LADDER == (
-        "gift_voucher_fallback",
         "simplify_q",
         "strip_city",
+        "gift_voucher_fallback",
         "drop_max_price",
     )
 

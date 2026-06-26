@@ -11,7 +11,7 @@ from langchain_core.runnables import RunnableConfig
 from starlette.responses import Response, StreamingResponse
 
 from app.dependencies import get_redis
-from app.templating import get_templates
+from app.templating import get_templates, render_cart_partial_oob
 from lib.chat.deps import (
     build_shopping_graph_deps,
     client_ip_from_request,
@@ -33,7 +33,7 @@ from lib.chat.session import (
 from lib.chat.sse import format_sse_event
 from lib.chat.streaming import iter_chat_sse_events
 from lib.debug.trace import is_debug_trace_enabled, trace_error, trace_turn_start
-from lib.redis.cart import migrate_cart
+from lib.redis.cart import clear_cart
 from lib.redis.client import RedisClient
 from lib.redis.session import get_session_currency
 from lib.zep.session import get_or_create_session
@@ -175,10 +175,15 @@ async def chat_stream(
 
 @router.post("/new")
 async def chat_new(request: Request, redis_client: RedisDep) -> Response:
-    """Rotate chat thread and clear conversation context; cart items are preserved."""
+    """Rotate chat thread and clear conversation context; cart is cleared."""
     prior_thread_id, new_thread_id, signed_cookie = rotate_chat_thread(request)
     if prior_thread_id:
-        await migrate_cart(redis_client, prior_thread_id, new_thread_id)
-    response = Response(content=_chat_new_empty_state_html(), media_type="text/html")
+        await clear_cart(redis_client, prior_thread_id)
+    currency = await get_session_currency(redis_client, new_thread_id)
+    content = _chat_new_empty_state_html() + render_cart_partial_oob(
+        items=[],
+        currency=currency,
+    )
+    response = Response(content=content, media_type="text/html")
     response.set_cookie(SESSION_COOKIE_NAME, signed_cookie, **cookie_params())
     return response

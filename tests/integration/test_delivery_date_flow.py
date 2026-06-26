@@ -18,7 +18,7 @@ from lib.kapruka.types import CheckDeliveryOutput
 from lib.redis.client import RedisClient
 
 COLOMBO = ZoneInfo("Asia/Colombo")
-_COLOMBO_TODAY = datetime(2026, 6, 8, 14, 0, tzinfo=COLOMBO)
+_COLOMBO_TODAY = datetime(2026, 6, 26, 14, 0, tzinfo=COLOMBO)
 
 
 @pytest.fixture
@@ -37,8 +37,8 @@ def delivery_date_app(monkeypatch: pytest.MonkeyPatch, redis_client: RedisClient
     mock_service = AsyncMock(spec=KaprukaService)
     mock_service.check_delivery.return_value = CheckDeliveryOutput(
         city="Colombo 03",
-        now="2026-06-08T14:00:00+05:30",
-        checked_date="2026-06-10",
+        now="2026-06-26T14:00:00+05:30",
+        checked_date="2026-06-28",
         available=True,
         rate=350.0,
         currency="LKR",
@@ -51,19 +51,19 @@ def delivery_date_app(monkeypatch: pytest.MonkeyPatch, redis_client: RedisClient
 @pytest.mark.asyncio
 async def test_past_date_rejected_with_error_partial(delivery_date_app) -> None:
     """POST with a past date returns user-friendly error partial without MCP call."""
-    with patch("app.routes.checkout.colombo_today_iso", return_value="2026-06-08"):
+    with patch("app.routes.checkout.colombo_today_iso", return_value="2026-06-26"):
         transport = ASGITransport(app=delivery_date_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
                 "/checkout/check-delivery",
-                data={"city": "Colombo 03", "delivery_date": "2026-06-07"},
+                data={"city": "Colombo 03", "delivery_date": "2026-06-25"},
             )
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert 'data-testid="delivery-date-error"' in response.text
     assert "Date in the past" in response.text
-    assert "2026-06-08" in response.text
+    assert "2026-06-26" in response.text
     assert "Asia/Colombo" in response.text
 
     mock_service = delivery_date_app.state.kapruka_service
@@ -73,20 +73,20 @@ async def test_past_date_rejected_with_error_partial(delivery_date_app) -> None:
 @pytest.mark.asyncio
 async def test_valid_date_calls_check_delivery_and_returns_status(delivery_date_app) -> None:
     """POST with today-or-future date validates via Kapruka and returns status HTML."""
-    with patch("app.routes.checkout.colombo_today_iso", return_value="2026-06-08"):
+    with patch("app.routes.checkout.colombo_today_iso", return_value="2026-06-26"):
         transport = ASGITransport(app=delivery_date_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
                 "/checkout/check-delivery",
-                data={"city": "Colombo 03", "delivery_date": "2026-06-10"},
+                data={"city": "Colombo 03", "delivery_date": "2026-06-28"},
             )
 
     assert response.status_code == 200
     assert 'data-testid="delivery-date-available"' in response.text
-    assert "2026-06-10" in response.text
+    assert "28 June 2026" in response.text
 
     mock_service = delivery_date_app.state.kapruka_service
     mock_service.check_delivery.assert_awaited_once()
     call_kwargs = mock_service.check_delivery.await_args.kwargs
     assert call_kwargs["city"] == "Colombo 03"
-    assert call_kwargs["delivery_date"] == "2026-06-10"
+    assert call_kwargs["delivery_date"] == "2026-06-28"

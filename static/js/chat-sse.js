@@ -189,6 +189,18 @@
     return text || null;
   }
 
+  function swapCarouselHtml(html) {
+    htmx.swap(document.body, html, { swapStyle: "none" });
+    const messagesRoot = document.getElementById("chat-messages");
+    if (messagesRoot && containsProductCarousel(html)) {
+      pruneStaleCarousels(messagesRoot);
+      removePendingAssistantBubbles();
+    }
+    document.body.dispatchEvent(
+      new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
+    );
+  }
+
   function swapStatusHtml(html) {
     const statusText = parseStatusTextFromHtml(html);
     if (statusText) {
@@ -235,6 +247,11 @@
         messageInput.value = "";
       }
     } else {
+      if (statusFlushTimer) {
+        clearTimeout(statusFlushTimer);
+        statusFlushTimer = null;
+      }
+      statusShownAt = 0;
       form.classList.remove("htmx-request");
       indicator?.classList.remove("htmx-request", "chat-loading");
       updateLoadingStatusText(DEFAULT_LOADING_TEXT);
@@ -331,6 +348,8 @@
           });
           if (event.eventName === "status") {
             swapStatusHtml(event.data);
+          } else if (event.eventName === "carousel") {
+            swapCarouselHtml(event.data);
           } else {
             swapListenerHtml(listener, event.data);
           }
@@ -349,6 +368,8 @@
           }
           if (event.eventName === "status") {
             swapStatusHtml(event.data);
+          } else if (event.eventName === "carousel") {
+            swapCarouselHtml(event.data);
           } else {
             swapListenerHtml(listener, event.data);
           }

@@ -349,7 +349,7 @@ async def test_cakes_after_ask_user_renders_carousel_not_stale_clarifying(
     assert first.get("agent_clarifying_question")
 
     second = await graph.ainvoke(append_message_state("cakes"), config)
-    html = second.get("response_html") or ""
+    html = (second.get("response_html") or "") + (second.get("carousel_html") or "")
     assert 'data-testid="product-carousel"' in html
     assert 'data-product-id="cake00ka002034"' in html
     assert "previous search for 'gifts'" not in (second.get("assistant_message") or "").lower()
