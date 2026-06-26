@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
+from lib.chat.delivery_dates import normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
 from lib.chat.off_topic import is_off_topic_message
 from lib.neo4j.hybrid_context import extract_budget, extract_max_price
@@ -95,6 +96,11 @@ _IN_OR_FOR_CITY = re.compile(
     re.I,
 )
 
+_BARE_DELIVERY_CITY = re.compile(
+    r"^(Colombo(?:\s+\d{2})?|Kandy|Galle|Negombo|Jaffna|Matara)(?:\s+please)?[.!]?$",
+    re.I,
+)
+
 
 def classify_query_mode(text: str) -> QueryMode:
     """Classify input as utility (transactional) or situational (emotional)."""
@@ -170,6 +176,10 @@ def _normalize_city(raw: str) -> str:
 
 def extract_target_city(text: str) -> str | None:
     """Extract a delivery destination city from delivery verbs or in/to/for city phrases."""
+    stripped = text.strip().rstrip(".!")
+    bare_match = _BARE_DELIVERY_CITY.match(stripped)
+    if bare_match:
+        return _normalize_city(bare_match.group(1))
     if _has_delivery_intent(text):
         for pattern in (_DELIVER_TO_CITY, _CITY_DELIVERY):
             match = pattern.search(text)
@@ -217,10 +227,15 @@ class QueryPreprocessor:
         vernacular = detect_vernacular(stripped)
         off_topic = is_off_topic_message(stripped)
         target_city = None if off_topic else extract_target_city(stripped)
+        has_delivery_date = normalize_delivery_date({}, stripped) is not None
         requires_delivery = (
             not off_topic
             and target_city is not None
-            and (_has_delivery_intent(stripped) or _has_perishable_gift_intent(stripped))
+            and (
+                _has_delivery_intent(stripped)
+                or _has_perishable_gift_intent(stripped)
+                or has_delivery_date
+            )
         )
         budget_cap = extract_budget(stripped)
         return {

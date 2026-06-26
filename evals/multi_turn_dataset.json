@@ -171,6 +171,20 @@
         "expected_tools_any_turn": ["kapruka_search_products", "kapruka_check_delivery"]
       },
       "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-galle-roses-2turn",
+      "persona": "expat_sender",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Fresh roses to Galle tomorrow"},
+        {"role": "user", "content": "Girlfriend's birthday, romantic red roses"}
+      ],
+      "constraints": {
+        "preserved_terms": ["rose", "Galle"],
+        "expected_tools_any_turn": ["kapruka_search_products", "kapruka_check_delivery"]
+      },
+      "final_expect_product_ui": true
     }
   ]
 }

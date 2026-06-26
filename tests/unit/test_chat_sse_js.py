@@ -45,6 +45,19 @@ def test_chat_sse_js_clears_loading_on_success_and_error() -> None:
     assert "clearTimeout(statusFlushTimer)" in source
     assert "statusFlushTimer = null" in source
     assert "statusShownAt = 0" in source
+    assert "hideLoadingIndicator" in source
+    assert "showLoadingIndicator" in source
+    assert "indicator.hidden = true" in source
+    assert 'indicator.setAttribute("aria-hidden", "true")' in source
+    assert '!form.classList.contains("htmx-request")' in source
+
+
+def test_chat_sse_js_hides_loading_indicator_on_deactivate() -> None:
+    """Deactivate clears loading text and hides the indicator instead of resetting Sending…."""
+    source = CHAT_SSE_JS.read_text()
+
+    assert "span.textContent = \"\"" in source
+    assert "indicator.hidden = false" in source
 
 
 def test_chat_sse_js_uses_abort_controller_timeout() -> None:

@@ -57,6 +57,8 @@ def test_extract_target_city_for_deliver_to_kandy() -> None:
 def test_extract_target_city_colombo_zone_without_delivery_verb() -> None:
     assert extract_target_city("Birthday cake for my mom in Colombo 05") == "Colombo 05"
     assert extract_target_city("Birthday cake for my mom in Colombo") == "Colombo"
+    assert extract_target_city("Colombo 03") == "Colombo 03"
+    assert extract_target_city("Colombo 03 please") == "Colombo 03"
 
 
 def test_query_preprocessor_extracts_colombo_zone_on_first_turn() -> None:
@@ -97,6 +99,12 @@ def test_query_preprocessor_situational_breakup() -> None:
 def test_query_preprocessor_perishable_gift_with_city_requires_delivery() -> None:
     metadata = _preprocessor.process("Birthday cake for my mom in Colombo")
     assert metadata["target_city"] == "Colombo"
+    assert metadata["requires_delivery_validation"] is True
+
+
+def test_query_preprocessor_roses_galle_tomorrow_requires_delivery() -> None:
+    metadata = _preprocessor.process("Fresh roses to Galle tomorrow")
+    assert metadata["target_city"] == "Galle"
     assert metadata["requires_delivery_validation"] is True
 
 

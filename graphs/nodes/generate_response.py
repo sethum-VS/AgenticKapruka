@@ -35,6 +35,7 @@ from lib.chat.off_topic import impossible_request_subject, off_topic_topic
 from lib.chat.product_curation import (
     carousel_focus_guard,
     curate_carousel_products,
+    enrich_carousel_product_descriptions,
     filter_cake_accessories,
     has_graph_hybrid_context,
     is_cake_accessory,
@@ -55,6 +56,7 @@ from lib.chat.search_broadening import build_empty_search_reply
 from lib.chat.status_copy import PUTTING_TOGETHER_RECOMMENDATIONS
 from lib.chat.support_faq import build_support_faq_reply, is_support_question
 from lib.chat.system_prompts import (
+    build_context_aware_clarifier,
     build_farewell_message,
     build_general_welcome_message,
     build_impossible_product_redirect,
@@ -917,10 +919,11 @@ def _session_context_prompt_lines(
     session_search_query: str | None,
     session_occasion: str | None,
     session_recipient_hint: str | None,
+    session_flavor_hint: str | None = None,
+    session_budget_max: float | None = None,
+    session_delivery_date: str | None = None,
     user_message: str,
 ) -> str:
-    if not is_budget_refinement_message(user_message):
-        return ""
     lines: list[str] = []
     if isinstance(session_search_query, str) and session_search_query.strip():
         lines.append(f"Session topic: {session_search_query.strip()}")
@@ -928,9 +931,17 @@ def _session_context_prompt_lines(
         lines.append(f"Occasion: {session_occasion.strip()}")
     if isinstance(session_recipient_hint, str) and session_recipient_hint.strip():
         lines.append(f"Recipient: {session_recipient_hint.strip()}")
+    if isinstance(session_flavor_hint, str) and session_flavor_hint.strip():
+        lines.append(f"Flavor/style: {session_flavor_hint.strip()}")
+    if isinstance(session_budget_max, (int, float)) and session_budget_max > 0:
+        lines.append(f"Budget cap: Rs {session_budget_max:,.0f}")
+    if isinstance(session_delivery_date, str) and session_delivery_date.strip():
+        lines.append(f"Delivery date: {session_delivery_date.strip()}")
     if not lines:
         return ""
-    return "\n".join(lines) + "\n\n"
+    if is_budget_refinement_message(user_message) or len(lines) >= 2:
+        return "\n".join(lines) + "\n\n"
+    return ""
 
 
 def _build_user_prompt(
@@ -942,6 +953,8 @@ def _build_user_prompt(
     session_search_query: str | None = None,
     session_occasion: str | None = None,
     session_recipient_hint: str | None = None,
+    session_flavor_hint: str | None = None,
+    session_delivery_date: str | None = None,
 ) -> str:
     """Combine user turn and MCP payload for response synthesis."""
     context = _format_tool_results_context(tool_results)
@@ -950,6 +963,9 @@ def _build_user_prompt(
         session_search_query=session_search_query,
         session_occasion=session_occasion,
         session_recipient_hint=session_recipient_hint,
+        session_flavor_hint=session_flavor_hint,
+        session_budget_max=budget_max,
+        session_delivery_date=session_delivery_date,
         user_message=user_message,
     )
     return (
@@ -996,6 +1012,12 @@ def _generate_reply_sync(
     system_instruction: str | None = None,
     intent: str | None = None,
     delivery_context_relevant: bool = True,
+    session_occasion: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_flavor_hint: str | None = None,
+    session_budget_max: float | None = None,
+    session_delivery_date: str | None = None,
+    session_delivery_city: str | None = None,
 ) -> str:
     """Blocking Gemini call; run via asyncio.to_thread from generate_response."""
     instruction = system_instruction or build_response_system_instruction(
@@ -1003,6 +1025,12 @@ def _generate_reply_sync(
         zep_memory_facts=zep_memory_facts,
         intent=intent,
         delivery_context_relevant=delivery_context_relevant,
+        session_occasion=session_occasion,
+        session_recipient_hint=session_recipient_hint,
+        session_flavor_hint=session_flavor_hint,
+        session_budget_max=session_budget_max,
+        session_delivery_date=session_delivery_date,
+        session_delivery_city=session_delivery_city,
     )
     if system_instruction is not None and zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
@@ -1096,6 +1124,7 @@ def extract_search_products(
     session_search_query: str | None = None,
     session_recipient_hint: str | None = None,
     session_occasion: str | None = None,
+    session_delivery_city: str | None = None,
     strict_budget: bool = False,
     last_search_products: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
@@ -1124,6 +1153,15 @@ def extract_search_products(
         session_occasion=session_occasion,
         strict_budget=strict_budget,
     )
+
+    def _with_card_descriptions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return enrich_carousel_product_descriptions(
+            items,
+            session_occasion=session_occasion,
+            session_recipient_hint=session_recipient_hint,
+            session_delivery_city=session_delivery_city,
+        )
+
     if (
         session_product_focus
         and products
@@ -1143,8 +1181,8 @@ def extract_search_products(
             hybrid_context=hybrid_context,
         )
         if refined:
-            return refined
-    return products
+            return _with_card_descriptions(refined)
+    return _with_card_descriptions(products)
 
 
 def _build_cart_assistant_message(action: dict[str, Any]) -> str | None:
@@ -1532,7 +1570,8 @@ async def generate_response(
         and intent_metadata.get("is_situational")
         and _turn_search_has_products(state.get("tool_trace"))
     )
-    show_clarifying = (
+    pending_clarifier: str | None = None
+    if (
         isinstance(clarifying_question, str)
         and clarifying_question.strip()
         and not situational_with_products
@@ -1543,9 +1582,12 @@ async def generate_response(
                 and not _turn_has_fresh_search(state.get("tool_trace"))
             )
         )
-    )
-    if show_clarifying:
-        question = clarifying_question.strip()
+    ):
+        pending_clarifier = clarifying_question.strip()
+
+    has_carousel_products = _turn_search_has_products(state.get("tool_trace"))
+    if pending_clarifier and not has_carousel_products:
+        question = pending_clarifier
         tool_trace = state.get("tool_trace")
         delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
         question, delivery_status_html = _apply_perishable_delivery_honesty(
@@ -1860,6 +1902,7 @@ async def generate_response(
             session_search_query=state.get("session_search_query"),
             session_recipient_hint=state.get("session_recipient_hint"),
             session_occasion=state.get("session_occasion"),
+            session_delivery_city=state.get("session_delivery_city_canonical"),
             strict_budget=strict_budget,
             last_search_products=last_search_products or None,
         )
@@ -1923,6 +1966,8 @@ async def generate_response(
         session_search_query=state.get("session_search_query"),
         session_occasion=state.get("session_occasion"),
         session_recipient_hint=state.get("session_recipient_hint"),
+        session_flavor_hint=state.get("session_flavor_hint"),
+        session_delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
     )
 
     zep_memory_facts = state.get("zep_memory_facts")
@@ -1934,6 +1979,9 @@ async def generate_response(
         )
     intent_metadata = state.get("intent_metadata")
     intent = state.get("intent")
+    session_delivery_city = state.get("session_delivery_city_canonical") or state.get(
+        "delivery_city_canonical",
+    )
     try:
         reply_text = await asyncio.to_thread(
             _generate_reply_sync,
@@ -1944,6 +1992,14 @@ async def generate_response(
             intent_metadata=intent_metadata,
             intent=intent,
             delivery_context_relevant=delivery_context_relevant,
+            session_occasion=state.get("session_occasion"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            session_flavor_hint=state.get("session_flavor_hint"),
+            session_budget_max=budget_max,
+            session_delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
+            session_delivery_city=session_delivery_city
+            if isinstance(session_delivery_city, str)
+            else None,
         )
     except Exception as exc:
         if not is_resource_exhausted(exc):
@@ -1975,6 +2031,14 @@ async def generate_response(
         currency=currency,
     )
     reply_text = _prepend_situational_empathy(reply_text, intent_metadata)
+    clarifying = state.get("agent_clarifying_question")
+    if (
+        isinstance(clarifying, str)
+        and clarifying.strip()
+        and (visible_products or products_html)
+        and clarifying.strip().lower() not in reply_text.lower()
+    ):
+        reply_text = f"{clarifying.strip()}\n\n{reply_text.strip()}"
     tool_trace = state.get("tool_trace")
     reply_text = delivery_claim_guard(
         reply_text,
@@ -2011,6 +2075,21 @@ async def generate_response(
         session_product_focus=session_product_focus,
         delivery_context_relevant=delivery_context_relevant,
     )
+
+    if pending_clarifier and has_carousel_products:
+        context_clarifier = build_context_aware_clarifier(
+            pending_clarifier,
+            session_occasion=state.get("session_occasion"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            session_flavor_hint=state.get("session_flavor_hint"),
+            session_budget_max=budget_max,
+            session_delivery_date=state.get("session_delivery_date")
+            or state.get("delivery_date"),
+            session_delivery_city=state.get("session_delivery_city_canonical")
+            or state.get("delivery_city_canonical"),
+        )
+        if context_clarifier.lower() not in reply_text.lower():
+            reply_text = f"{reply_text.rstrip()}\n\n{context_clarifier}"
 
     logger.info(
         "generate_response: rendered assistant reply (%d chars, carousel=%s)",

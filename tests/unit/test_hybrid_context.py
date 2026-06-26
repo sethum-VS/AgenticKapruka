@@ -618,3 +618,26 @@ def test_merge_planner_search_args_topic_pivot_bare_cakes() -> None:
     )
     assert merged["q"] == "cake"
     assert "category" not in merged
+
+
+def test_strip_location_from_search_query_for_galle() -> None:
+    from lib.neo4j.hybrid_context import strip_location_from_search_query
+
+    assert strip_location_from_search_query("Fresh roses for Galle tomorrow") == (
+        "Fresh roses tomorrow"
+    )
+    assert strip_location_from_search_query("red roses to Galle") == "red roses"
+
+
+def test_merge_planner_search_args_roses_galle_strips_city() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "roses for Galle", "currency": "LKR"},
+        user_message="Fresh roses for Galle tomorrow",
+        hybrid_context={},
+        currency="LKR",
+        intent_metadata={"target_city": "Galle"},
+    )
+    assert "Galle" not in merged["q"]
+    assert "roses" in merged["q"].lower()

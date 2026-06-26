@@ -42,7 +42,7 @@ from lib.chat.product_curation import (
     is_cake_accessory,
     is_flower_fruit_intent,
 )
-from lib.chat.query_preprocessor import is_delivery_context_relevant_turn
+from lib.chat.query_preprocessor import _has_perishable_gift_intent, is_delivery_context_relevant_turn
 from lib.chat.search_broadening import apply_first_broaden
 from lib.chat.status_copy import SEARCHING_CATALOG, long_search_status_message
 from lib.debug.trace import trace_agent_iteration
@@ -64,6 +64,7 @@ from lib.neo4j.hybrid_context import (
     is_birthday_cake_intent,
     is_broad_cakes_query,
     merge_planner_search_args,
+    strip_location_from_search_query,
 )
 from lib.utils.timezone import colombo_today_iso
 from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_turn
@@ -400,6 +401,16 @@ def _search_has_products(result: Any) -> bool:
     return bool(raw_results)
 
 
+def _persist_session_search_query(
+    raw_q: str,
+    *,
+    intent_metadata: dict[str, Any] | None = None,
+) -> str:
+    """Strip delivery cities before persisting session search topic."""
+    stripped = strip_location_from_search_query(raw_q, intent_metadata)
+    return stripped.strip() or raw_q.strip()
+
+
 def _search_product_count(result: Any) -> int:
     if not isinstance(result, dict):
         return 0
@@ -410,9 +421,9 @@ def _search_product_count(result: Any) -> int:
 
 
 _BUDGETED_GIFT_PHYSICAL_QUERIES: tuple[str, ...] = (
+    "chocolates gift box",
     "gift hamper",
-    "chocolates gift",
-    "flowers",
+    "combo pack",
 )
 
 
@@ -423,9 +434,9 @@ def _budgeted_gift_physical_queries(user_message: str) -> tuple[str, ...]:
     if "hamper" in lowered:
         queries.append("gift hamper")
     if "chocolate" in lowered:
-        queries.append("chocolates gift")
+        queries.append("chocolates gift box")
     if re.search(r"\b(?:flower|flowers|rose|roses)\b", lowered):
-        queries.append("flowers")
+        queries.append("fresh roses bouquet")
     if queries:
         return tuple(dict.fromkeys(queries))
     return _BUDGETED_GIFT_PHYSICAL_QUERIES
@@ -864,7 +875,17 @@ def _delivery_check_pending(
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     if intent_metadata.get("requires_delivery_validation") or intent_metadata.get("target_city"):
         return True
-    return bool(state.get("session_delivery_city_confirmed"))
+    if bool(state.get("session_delivery_city_confirmed")):
+        return True
+    session_focus = state.get("session_product_focus")
+    if isinstance(session_focus, str) and session_focus.strip().lower() in {
+        "flowers",
+        "cake",
+        "gift",
+        "chocolate",
+    }:
+        return True
+    return _has_perishable_gift_intent(user_message) or is_flower_fruit_intent(user_message)
 
 
 def _should_force_finish_after_search(
@@ -1082,7 +1103,19 @@ def _build_planner_user_prompt(state: AgentState) -> str:
     session_focus = state.get("session_product_focus")
     if isinstance(session_focus, str) and session_focus.strip():
         prompt += f"\n\nSession shopping focus: {session_focus.strip()}"
+    session_recipient = state.get("session_recipient_hint")
+    if isinstance(session_recipient, str) and session_recipient.strip():
+        prompt += f"\n\nSession recipient: {session_recipient.strip()}"
+    session_flavor = state.get("session_flavor_hint")
+    if isinstance(session_flavor, str) and session_flavor.strip():
+        prompt += f"\n\nSession flavor/style hint: {session_flavor.strip()}"
+    session_search_q = state.get("session_search_query")
+    if isinstance(session_search_q, str) and session_search_q.strip():
+        prompt += f"\n\nSession search topic: {session_search_q.strip()}"
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    target_city = intent_metadata.get("target_city")
+    if isinstance(target_city, str) and target_city.strip():
+        prompt += f"\n\nTarget delivery city: {target_city.strip()}"
     budget_max = intent_metadata.get("budget_max")
     hybrid_context = state.get("hybrid_context") or {}
     session_occasion = state.get("session_occasion")
@@ -1228,8 +1261,6 @@ async def agent_loop(
     iteration_limit = MAX_ITERATIONS
 
     for iteration in range(MAX_ITERATIONS):
-        if iteration >= iteration_limit:
-            break
         if force_finish:
             logger.debug(
                 "agent_loop: %s forcing finish at iteration %s",
@@ -1238,6 +1269,8 @@ async def agent_loop(
             )
             exit_reason = force_finish_reason or "duplicate_guard"
             agent_loop_done = True
+            break
+        if iteration >= iteration_limit:
             break
 
         if (
@@ -1254,7 +1287,7 @@ async def agent_loop(
             base_args: dict[str, Any] = {
                 "currency": currency,
                 "max_price": budget_max,
-                "sort": "price_asc",
+                "sort": "relevance",
             }
             merged_result: dict[str, Any] = {"results": []}
             physical_queries = _budgeted_gift_physical_queries(user_message)
@@ -1358,12 +1391,19 @@ async def agent_loop(
             )
             result = _curate_search_trace_result(result, state=state)
             search_q_arg = enriched_args.get("q")
+            intent_meta = state.get("intent_metadata")
             if isinstance(search_q_arg, str) and search_q_arg.strip():
-                session_search_query_update = search_q_arg.strip()
+                session_search_query_update = _persist_session_search_query(
+                    search_q_arg,
+                    intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+                )
             else:
                 search_q = _search_query_from_result(result)
                 if search_q:
-                    session_search_query_update = search_q
+                    session_search_query_update = _persist_session_search_query(
+                        search_q,
+                        intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+                    )
             if _search_has_products(result):
                 raw_results = result.get("results")
                 products = [
@@ -1385,7 +1425,7 @@ async def agent_loop(
                     ):
                         result["results"] = demoted
                     else:
-                        result["results"] = []
+                        result["results"] = demoted or products
             tool_trace.append(
                 {"name": tool_name, "args": enriched_args, "result": result},
             )
@@ -1650,12 +1690,20 @@ async def agent_loop(
         if tool_name == SEARCH_PRODUCTS_TOOL:
             result = _curate_search_trace_result(result, state=state)
             search_q_arg = enriched_args.get("q")
+            intent_meta = state.get("intent_metadata")
+            meta_dict = intent_meta if isinstance(intent_meta, dict) else None
             if isinstance(search_q_arg, str) and search_q_arg.strip():
-                session_search_query_update = search_q_arg.strip()
+                session_search_query_update = _persist_session_search_query(
+                    search_q_arg,
+                    intent_metadata=meta_dict,
+                )
             else:
                 search_q = _search_query_from_result(result)
                 if search_q:
-                    session_search_query_update = search_q
+                    session_search_query_update = _persist_session_search_query(
+                        search_q,
+                        intent_metadata=meta_dict,
+                    )
             if _search_has_products(result):
                 raw_results = result.get("results")
                 products = [
@@ -1702,7 +1750,10 @@ async def agent_loop(
                             result = retry_result
                             retry_q = _search_query_from_result(retry_result)
                             if retry_q:
-                                session_search_query_update = retry_q
+                                session_search_query_update = _persist_session_search_query(
+                                    retry_q,
+                                    intent_metadata=meta_dict,
+                                )
             if _should_run_dual_gift_search(
                 state,
                 enriched_args,
@@ -1791,6 +1842,9 @@ async def agent_loop(
                         (state.get("intent_metadata") or {}).get("topic_pivot"),
                     ),
                 ),
+                intent_metadata=state.get("intent_metadata")
+                if isinstance(state.get("intent_metadata"), dict)
+                else None,
             )
             if broadened_args is not None and not _is_duplicate_invocation(
                 tool_trace,
@@ -1855,7 +1909,10 @@ async def agent_loop(
             force_finish = True
             force_finish_reason = "finish"
 
-    if not agent_loop_done:
+    if not agent_loop_done and force_finish:
+        exit_reason = force_finish_reason or "duplicate_guard"
+        agent_loop_done = True
+    elif not agent_loop_done:
         logger.debug("agent_loop: reached max iterations (%s); finishing", MAX_ITERATIONS)
         exit_reason = "max_iterations"
         agent_loop_done = True
@@ -1890,7 +1947,18 @@ async def agent_loop(
 
     last_search_products = _last_search_products_from_trace(tool_trace, state=state)
     if last_search_products:
-        updates["last_search_products"] = last_search_products
+        prior = state.get("last_search_products") or []
+        session_focus = state.get("session_product_focus")
+        if (
+            is_budget_refinement_message(user_message)
+            and prior
+            and isinstance(session_focus, str)
+            and session_focus.strip()
+            and not carousel_focus_guard(last_search_products, session_focus)
+        ):
+            updates["last_search_products"] = prior
+        else:
+            updates["last_search_products"] = last_search_products
     elif state.get("last_search_products"):
         updates["last_search_products"] = state["last_search_products"]
 

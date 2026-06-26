@@ -26,6 +26,17 @@ def test_is_ordinal_phrase() -> None:
     assert not is_ordinal_phrase("chocolate gift")
 
 
+def test_resolve_ordinal_with_trailing_descriptor() -> None:
+    result = resolve_product_reference(
+        "the first flower bouquet",
+        last_visible_products=[_BLUSH, _RED],
+        last_search_products=[_BLUSH, _RED],
+    )
+    assert result is not None
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "a"
+
+
 def test_resolve_deictic_single_product() -> None:
     result = resolve_product_reference(
         "that",

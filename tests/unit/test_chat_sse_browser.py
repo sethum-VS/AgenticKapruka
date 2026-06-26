@@ -189,10 +189,15 @@ def test_chat_sse_done_event_clears_sending_indicator() -> None:
             """() => {
               const form = document.getElementById('chat-form');
               const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
               return form
                 && !form.classList.contains('htmx-request')
                 && indicator
-                && !indicator.classList.contains('htmx-request');
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
+                && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === '';
             }""",
             timeout=1000,
         )
@@ -273,12 +278,17 @@ def test_chat_sse_clears_sending_indicator_after_stream() -> None:
             """() => {
               const form = document.getElementById('chat-form');
               const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
               const input = document.getElementById('chat-message');
               const button = document.querySelector('#chat-form button[type="submit"]');
               return form
                 && !form.classList.contains('htmx-request')
                 && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
                 && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === ''
                 && input
                 && !input.readOnly
                 && button
@@ -319,13 +329,18 @@ def test_chat_sse_clears_sending_and_pending_bubble_on_error() -> None:
             """() => {
               const form = document.getElementById('chat-form');
               const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
               const input = document.getElementById('chat-message');
               const button = document.querySelector('#chat-form button[type="submit"]');
               const pending = document.getElementById('assistant-stream-deadbeef');
               return form
                 && !form.classList.contains('htmx-request')
                 && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
                 && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === ''
                 && input
                 && !input.readOnly
                 && button
@@ -371,6 +386,7 @@ def test_chat_sse_clears_input_immediately_while_sending() -> None:
                 && input.value === ''
                 && input.readOnly
                 && indicator
+                && !indicator.hidden
                 && indicator.classList.contains('htmx-request')
                 && form
                 && form.classList.contains('htmx-request');
@@ -388,12 +404,17 @@ def test_chat_sse_clears_input_immediately_while_sending() -> None:
             """() => {
               const form = document.getElementById('chat-form');
               const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
               const input = document.getElementById('chat-message');
               const button = document.querySelector('#chat-form button[type="submit"]');
               return form
                 && !form.classList.contains('htmx-request')
                 && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
                 && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === ''
                 && input
                 && !input.readOnly
                 && button
@@ -476,9 +497,13 @@ def test_chat_sse_status_updates_loading_text_during_held_stream() -> None:
         page.wait_for_function(
             """() => {
               const span = document.querySelector('[data-testid="chat-loading-text"]');
+              const indicator = document.getElementById('chat-loading');
               const form = document.getElementById('chat-form');
               return span
-                && span.textContent === 'Sending…'
+                && span.textContent === ''
+                && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
                 && form
                 && !form.classList.contains('htmx-request');
             }""",
@@ -547,18 +572,21 @@ def test_chat_sse_status_timer_cleared_on_fast_completion() -> None:
         page.wait_for_function(
             """() => {
               const span = document.querySelector('[data-testid="chat-loading-text"]');
+              const indicator = document.getElementById('chat-loading');
               const form = document.getElementById('chat-form');
               return span
-                && span.textContent === 'Sending…'
+                && span.textContent === ''
+                && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
                 && form
                 && !form.classList.contains('htmx-request');
             }""",
             timeout=3000,
         )
         page.wait_for_timeout(900)
-        assert (
-            page.locator('[data-testid="chat-loading-text"]').inner_text() == "Sending…"
-        )
+        assert page.locator("#chat-loading").evaluate("el => el.hidden") is True
+        assert page.locator('[data-testid="chat-loading-text"]').inner_text() == ""
 
         browser.close()
 
@@ -693,10 +721,15 @@ def test_chat_sse_done_clears_sending_without_response_html() -> None:
             """() => {
               const form = document.getElementById('chat-form');
               const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
               return form
                 && !form.classList.contains('htmx-request')
                 && indicator
-                && !indicator.classList.contains('htmx-request');
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
+                && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === '';
             }""",
             timeout=1000,
         )

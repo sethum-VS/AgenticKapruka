@@ -24,15 +24,7 @@ RouteAfterResolveDeliveryContext = Literal["agent_loop", "call_mcp_tools", "gene
 
 
 def route_after_resolve_delivery_context(state: AgentState) -> RouteAfterResolveDeliveryContext:
-    """Route to clarify, product-ID MCP fast-path, or the agent loop."""
-    clarifying = state.get("agent_clarifying_question")
-    if isinstance(clarifying, str) and clarifying.strip():
-        return "generate_response"
-
-    status = state.get("delivery_city_status")
-    if status in ("ambiguous", "not_found", "missing"):
-        return "generate_response"
-
+    """Route to product-ID MCP fast-path or the agent loop (clarify+search)."""
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if contains_product_id(user_message):
         return "call_mcp_tools"
@@ -78,6 +70,27 @@ def _needs_city_resolution(state: AgentState, user_message: str) -> bool:
     )
 
 
+def _city_ready_for_delivery_preflight(
+    state: AgentState,
+    *,
+    city_confirmed: bool = False,
+) -> bool:
+    """True when canonical city is known enough for kapruka_check_delivery preflight."""
+    if city_confirmed or state.get("session_delivery_city_confirmed"):
+        return True
+    status = state.get("delivery_city_status")
+    if status == "resolved":
+        return True
+    canonical = state.get("session_delivery_city_canonical") or state.get(
+        "delivery_city_canonical",
+    )
+    return (
+        isinstance(canonical, str)
+        and bool(canonical.strip())
+        and status not in ("ambiguous", None)
+    )
+
+
 def _should_run_delivery_preflight(
     state: AgentState,
     user_message: str,
@@ -89,7 +102,7 @@ def _should_run_delivery_preflight(
     """City-only kapruka_check_delivery before the agent loop asks for a date."""
     if delivery_date is not None:
         return False
-    if not city_confirmed and not state.get("session_delivery_city_confirmed"):
+    if not _city_ready_for_delivery_preflight(state, city_confirmed=city_confirmed):
         return False
     if intent_metadata.get("requires_delivery_validation"):
         return True
@@ -112,7 +125,7 @@ def _should_run_dated_delivery_preflight(
     """Dated kapruka_check_delivery when canonical city and delivery date are both known."""
     if delivery_date is None:
         return False
-    if not city_confirmed and not state.get("session_delivery_city_confirmed"):
+    if not _city_ready_for_delivery_preflight(state, city_confirmed=city_confirmed):
         return False
     if intent_metadata.get("requires_delivery_validation"):
         return True

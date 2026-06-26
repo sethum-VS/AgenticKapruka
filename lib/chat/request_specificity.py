@@ -199,6 +199,31 @@ def _score_occasion_dimension(
     return 0.0
 
 
+def _score_delivery_dimension(
+    message: str,
+    *,
+    intent_metadata: IntentMetadata,
+    session_delivery_date: str | None = None,
+) -> float:
+    """Soft signal: city and/or date known from message or session."""
+    from lib.chat.delivery_dates import normalize_delivery_date
+    from lib.chat.query_preprocessor import extract_target_city
+
+    stripped = message.strip()
+    has_city = bool(intent_metadata.get("target_city")) or extract_target_city(stripped) is not None
+    has_date = (
+        normalize_delivery_date({}, stripped) is not None
+        or bool(
+            isinstance(session_delivery_date, str) and session_delivery_date.strip(),
+        )
+    )
+    if has_city and has_date:
+        return 1.0
+    if has_city or has_date:
+        return 0.5
+    return 0.0
+
+
 def _score_budget_dimension(
     message: str,
     *,
@@ -228,8 +253,15 @@ def _weighted_score(dimension_scores: dict[str, float]) -> float:
     ) * 100.0
 
 
-def _resolve_band(score: float, dimension_scores: dict[str, float]) -> SpecificityBand:
-    if dimension_scores.get("budget", 0.0) >= 1.0:
+def _resolve_band(
+    score: float,
+    dimension_scores: dict[str, float],
+    *,
+    message: str = "",
+) -> SpecificityBand:
+    budget = dimension_scores.get("budget", 0.0)
+    product = dimension_scores.get("product", 0.0)
+    if budget >= 1.0 and (product >= 0.5 or is_budgeted_gift_ideas_message(message)):
         return "proceed"
     if score >= PROCEED_THRESHOLD:
         return "proceed"
@@ -323,7 +355,21 @@ def score_request_specificity(
         ),
     }
     score = _weighted_score(dimension_scores)
-    band = _resolve_band(score, dimension_scores)
+    if meta.get("target_city") and (
+        meta.get("session_delivery_date")
+        or meta.get("delivery_date")
+    ):
+        score = min(100.0, score + 5.0)
+    band = _resolve_band(score, dimension_scores, message=stripped)
+    if (
+        dimension_scores.get("product", 0.0) >= 1.0
+        and dimension_scores.get("occasion", 0.0) >= 0.5
+        and (
+            dimension_scores.get("budget", 0.0) >= 0.5
+            or bool(meta.get("session_delivery_date") or meta.get("delivery_date"))
+        )
+    ):
+        band = "proceed"
     if (
         dimension_scores.get("product", 0.0) >= 0.5
         and dimension_scores.get("occasion", 0.0) >= 0.5
@@ -333,6 +379,13 @@ def score_request_specificity(
         dimension_scores.get("product", 0.0) >= 1.0
         and dimension_scores.get("occasion", 0.0) < 0.5
         and dimension_scores.get("budget", 0.0) < 1.0
+    ):
+        band = "clarify"
+    if (
+        dimension_scores.get("budget", 0.0) >= 1.0
+        and dimension_scores.get("product", 0.0) < 0.5
+        and dimension_scores.get("occasion", 0.0) < 0.5
+        and not is_budgeted_gift_ideas_message(stripped)
     ):
         band = "clarify"
     missing = _pick_missing_dimension(dimension_scores)

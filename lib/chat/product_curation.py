@@ -33,6 +33,15 @@ _GIFT_DEMOTE_RE = re.compile(
 )
 _GIFT_VOUCHER_RE = re.compile(r"\b(?:gift\s+)?voucher\b", re.I)
 _LOW_TICKET_SNACK_RE = re.compile(r"\b(?:bar|snack|toffee|candy)\b", re.I)
+_CATALOG_TYPO_NORMALIZATION: dict[str, str] = {
+    "greetting": "greeting",
+    "greettings": "greetings",
+}
+_LOOSE_GROCERY_RE = re.compile(
+    r"\b(?:single|loose|fresh)\s+(?:apple|banana|orange|mango|grape|fruit)\b|"
+    r"\b(?:candy|toffee|lollipop|mint)\s+(?:pack|bag)?\b",
+    re.I,
+)
 _FEMALE_RECIPIENTS = frozenset(
     {
         "wife",
@@ -145,10 +154,17 @@ def product_price_amount(product: dict[str, Any]) -> float | None:
     return None
 
 
+def _normalize_catalog_typos(text: str) -> str:
+    normalized = text
+    for typo, replacement in _CATALOG_TYPO_NORMALIZATION.items():
+        normalized = re.sub(rf"\b{re.escape(typo)}\b", replacement, normalized, flags=re.I)
+    return normalized
+
+
 def _product_text_blob(product: dict[str, Any]) -> str:
     parts = [
-        str(product.get("name") or ""),
-        str(product.get("summary") or ""),
+        _normalize_catalog_typos(str(product.get("name") or "")),
+        _normalize_catalog_typos(str(product.get("summary") or "")),
     ]
     category = product.get("category")
     if isinstance(category, dict):
@@ -392,6 +408,10 @@ def _gift_curation_active(
     user_message: str,
     hybrid_context: dict[str, Any] | None = None,
 ) -> bool:
+    from lib.chat.intent_heuristics import is_budgeted_gift_ideas_message
+
+    if is_budgeted_gift_ideas_message(user_message):
+        return True
     if session_product_focus == "gift":
         return True
     if session_product_focus == "chocolate":
@@ -401,6 +421,29 @@ def _gift_curation_active(
     hints = (hybrid_context or {}).get("hints") or {}
     occasion = hints.get("occasion")
     return isinstance(occasion, str) and "birthday" in occasion.lower()
+
+
+def demote_loose_grocery_items(
+    products: list[dict[str, Any]],
+    *,
+    user_message: str,
+) -> list[dict[str, Any]]:
+    """Deprioritize single fruit/candy SKUs on budgeted gift-ideas turns."""
+    from lib.chat.intent_heuristics import is_budgeted_gift_ideas_message
+
+    if not products or not is_budgeted_gift_ideas_message(user_message):
+        return list(products)
+    preferred: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        blob = _product_text_blob(product)
+        if _LOOSE_GROCERY_RE.search(blob) or (
+            _LOW_TICKET_SNACK_RE.search(blob) and not _GIFT_PROMOTE_RE.search(blob)
+        ):
+            demoted.append(product)
+        else:
+            preferred.append(product)
+    return preferred + demoted
 
 
 def demote_non_chocolate_for_chocolate_focus(
@@ -510,7 +553,8 @@ def apply_gift_curation(
             promoted.append(product)
         else:
             neutral.append(product)
-    return promoted + neutral + demoted
+    curated = promoted + neutral + demoted
+    return demote_loose_grocery_items(curated, user_message=user_message)
 
 
 def filter_gift_noise_products(
@@ -897,3 +941,72 @@ def curate_carousel_products(
         return _finalize_carousel(filtered)
 
     return _finalize_carousel(scoped)
+
+
+def _build_card_description_fallback(
+    product: dict[str, Any],
+    *,
+    session_occasion: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_delivery_city: str | None = None,
+) -> str:
+    """One-line carousel copy when MCP description is empty."""
+    name = str(product.get("name") or "").strip()
+    context_bits: list[str] = []
+    if isinstance(session_occasion, str) and session_occasion.strip():
+        context_bits.append(f"for {session_occasion.strip()}")
+    if isinstance(session_recipient_hint, str) and session_recipient_hint.strip():
+        context_bits.append(f"for your {session_recipient_hint.strip()}")
+    if isinstance(session_delivery_city, str) and session_delivery_city.strip():
+        context_bits.append(f"to {session_delivery_city.strip()}")
+
+    if context_bits:
+        return f"A thoughtful Kapruka pick {' '.join(context_bits)}."
+
+    if name and _BIRTHDAY_PRODUCT_RE.search(name):
+        return "A celebration cake from Kapruka's curated bakery selection."
+    if name and _FOCUS_TOKEN_PATTERNS["flowers"].search(name):
+        return "Fresh floral arrangement from Kapruka."
+    if name and _FOCUS_TOKEN_PATTERNS["gift"].search(name):
+        return "A curated Kapruka gift box or hamper."
+
+    return "A thoughtful Kapruka gift for your occasion."
+
+
+def enrich_product_card_description(
+    product: dict[str, Any],
+    *,
+    session_occasion: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_delivery_city: str | None = None,
+) -> dict[str, Any]:
+    """Attach card_description_fallback when the catalog omits a description."""
+    if str(product.get("description") or "").strip():
+        return product
+    enriched = dict(product)
+    enriched["card_description_fallback"] = _build_card_description_fallback(
+        product,
+        session_occasion=session_occasion,
+        session_recipient_hint=session_recipient_hint,
+        session_delivery_city=session_delivery_city,
+    )
+    return enriched
+
+
+def enrich_carousel_product_descriptions(
+    products: list[dict[str, Any]],
+    *,
+    session_occasion: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_delivery_city: str | None = None,
+) -> list[dict[str, Any]]:
+    """Apply occasion-aware card fallbacks across a carousel product list."""
+    return [
+        enrich_product_card_description(
+            product,
+            session_occasion=session_occasion,
+            session_recipient_hint=session_recipient_hint,
+            session_delivery_city=session_delivery_city,
+        )
+        for product in products
+    ]

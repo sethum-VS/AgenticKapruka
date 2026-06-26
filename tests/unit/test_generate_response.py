@@ -1024,9 +1024,14 @@ async def test_generate_response_merged_trace_carousel_union() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_response_clarifying_question_skips_gemini() -> None:
-    """ask_user exit renders clarifying question without catalog synthesis."""
+async def test_generate_response_clarifying_question_with_carousel() -> None:
+    """ask_user with fresh search renders clarifier alongside carousel (clarify+search)."""
     mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(message="Here are flower options while we confirm delivery.")
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+
     state: AgentState = {
         "messages": [HumanMessage(content="send flowers to my aunt")],
         "intent": "discovery",
@@ -1044,10 +1049,10 @@ async def test_generate_response_clarifying_question_skips_gemini() -> None:
 
     result = await generate_response(state, genai_client=mock_client)
 
-    assert result["assistant_message"] == "Which city should we deliver to?"
+    assert "Which city should we deliver to?" in result["assistant_message"]
     assert "Which city should we deliver to?" in result["response_html"]
-    assert 'data-testid="product-carousel"' not in _combined_response_html(result)
-    mock_client.models.generate_content.assert_not_called()
+    assert 'data-testid="product-carousel"' in _combined_response_html(result)
+    mock_client.models.generate_content.assert_called_once()
 
 
 @pytest.mark.asyncio

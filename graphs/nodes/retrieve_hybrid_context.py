@@ -59,16 +59,6 @@ EmbedTextsFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
     """Conditional edge after analyze_intent: checkout sub-graph or HybridRAG skip."""
-    clarifying = state.get("agent_clarifying_question")
-    if isinstance(clarifying, str) and clarifying.strip():
-        trace_route_decision(
-            from_node="analyze_intent",
-            target="generate_response",
-            intent=state.get("intent"),
-            reason="clarifying question from intent preprocessing",
-        )
-        return "generate_response"
-
     intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
     if intent_metadata.get("support_topic"):
         trace_route_decision(

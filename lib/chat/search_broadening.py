@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
+from lib.chat.intent_metadata import IntentMetadata
 from lib.neo4j.hybrid_context import strip_location_from_search_query
 
 BroadenStep = Literal["gift_voucher_fallback", "simplify_q", "strip_city", "drop_max_price"]
@@ -30,7 +31,12 @@ def _normalize_q(q: str) -> str:
     return re.sub(r"\s{2,}", " ", q).strip(" ,.-")
 
 
-def broaden_search_args(args: dict[str, Any], step: BroadenStep) -> dict[str, Any] | None:
+def broaden_search_args(
+    args: dict[str, Any],
+    step: BroadenStep,
+    *,
+    intent_metadata: IntentMetadata | None = None,
+) -> dict[str, Any] | None:
     """Apply one ladder step to kapruka_search_products args.
 
     Returns a new args dict when the step changes the query, or None when it does not apply.
@@ -67,7 +73,7 @@ def broaden_search_args(args: dict[str, Any], step: BroadenStep) -> dict[str, An
         return {**args, "q": new_q}
 
     if step == "strip_city":
-        new_q = strip_location_from_search_query(q)
+        new_q = strip_location_from_search_query(q, intent_metadata)
         if not new_q or new_q == q:
             return None
         return {**args, "q": new_q}
@@ -86,12 +92,13 @@ def first_applicable_broaden_step(
     args: dict[str, Any],
     *,
     preserve_max_price: bool = False,
+    intent_metadata: IntentMetadata | None = None,
 ) -> BroadenStep | None:
     """Return the first ladder step that would change the given search args."""
     for step in BROADEN_LADDER:
         if step == "drop_max_price" and preserve_max_price:
             continue
-        if broaden_search_args(args, step) is not None:
+        if broaden_search_args(args, step, intent_metadata=intent_metadata) is not None:
             return step
     return None
 
@@ -100,12 +107,17 @@ def apply_first_broaden(
     args: dict[str, Any],
     *,
     preserve_max_price: bool = False,
+    intent_metadata: IntentMetadata | None = None,
 ) -> tuple[dict[str, Any] | None, BroadenStep | None]:
     """Apply the first applicable broaden step; at most one step per call."""
-    step = first_applicable_broaden_step(args, preserve_max_price=preserve_max_price)
+    step = first_applicable_broaden_step(
+        args,
+        preserve_max_price=preserve_max_price,
+        intent_metadata=intent_metadata,
+    )
     if step is None:
         return None, None
-    broadened = broaden_search_args(args, step)
+    broadened = broaden_search_args(args, step, intent_metadata=intent_metadata)
     return broadened, step
 
 

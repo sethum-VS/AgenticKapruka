@@ -527,11 +527,11 @@ _DELIVERY_CITY_NAMES = (
 )
 _CITY_PATTERN = "|".join(_DELIVERY_CITY_NAMES)
 _STRIP_IN_CITY_RE = re.compile(
-    rf"\b(?:in|to|near|around|within)\s+({_CITY_PATTERN})\b",
+    rf"\b(?:in|to|for|near|around|within)\s+({_CITY_PATTERN})\b",
     re.IGNORECASE,
 )
 _STRIP_TRAILING_CITY_RE = re.compile(
-    rf"\b(?:in|to)\s+({_CITY_PATTERN})\s*$",
+    rf"\b(?:in|to|for)\s+({_CITY_PATTERN})\s*$",
     re.IGNORECASE,
 )
 
@@ -1225,6 +1225,36 @@ def _birthday_planner_q_needs_override(planner_q: str, user_message: str) -> boo
     return False
 
 
+def enrich_message_with_session_slots(
+    user_message: str,
+    state: dict[str, Any] | None,
+) -> str:
+    """Merge accumulated session shopping slots into discovery search context."""
+    if not state:
+        return user_message
+    lowered = user_message.lower()
+    extras: list[str] = []
+    focus = state.get("session_product_focus")
+    if isinstance(focus, str) and focus.strip() and focus.strip().lower() not in {"gift"}:
+        token = focus.strip()
+        if token.lower() not in lowered:
+            extras.append(token)
+    for key in (
+        "session_flavor_hint",
+        "session_recipient_hint",
+        "session_occasion",
+        "session_search_query",
+    ):
+        val = state.get(key)
+        if isinstance(val, str) and val.strip():
+            token = val.strip()
+            if token.lower() not in lowered:
+                extras.append(token)
+    if not extras:
+        return user_message
+    return f"{user_message.strip()} {' '.join(extras)}".strip()
+
+
 def merge_planner_search_args(
     planner_args: dict[str, Any],
     *,
@@ -1259,27 +1289,37 @@ def merge_planner_search_args(
         merged.setdefault("category", "Birthday")
         return merged
 
-    if not is_birthday_cake_scoped_turn(
-        user_message,
-        hybrid_context,
-        topic_pivot=topic_pivot,
-    ):
-        return merged
-
+    discovery_message = enrich_message_with_session_slots(user_message, state)
     canonical = build_discovery_search_args(
-        user_message,
+        discovery_message,
         hybrid_context,
         currency=currency,
         intent_metadata=intent_metadata,
     )
-    planner_q = str(planner_args.get("q") or "")
-    q_overridden = _birthday_planner_q_needs_override(planner_q, user_message)
-    if q_overridden and "q" in canonical:
+    planner_q = str(planner_args.get("q") or "").strip()
+    if planner_q:
+        merged["q"] = strip_location_from_search_query(planner_q, intent_metadata)
+    elif canonical.get("q"):
         merged["q"] = canonical["q"]
-    if q_overridden or is_birthday_cake_intent(planner_q):
-        for key in ("category", "max_price", "sort", "currency"):
-            if key in canonical:
-                merged[key] = canonical[key]
+
+    birthday_scoped = is_birthday_cake_scoped_turn(
+        discovery_message,
+        hybrid_context,
+        topic_pivot=topic_pivot,
+    )
+    if birthday_scoped and _birthday_planner_q_needs_override(planner_q, discovery_message):
+        if "q" in canonical:
+            merged["q"] = canonical["q"]
+
+    target_city = intent_metadata.get("target_city") if intent_metadata else None
+    merged_q = str(merged.get("q") or "")
+    if target_city and merged_q and target_city.lower() in merged_q.lower():
+        if canonical.get("q"):
+            merged["q"] = canonical["q"]
+
+    for key in ("category", "max_price", "sort", "currency"):
+        if key in canonical:
+            merged[key] = canonical[key]
     return merged
 
 

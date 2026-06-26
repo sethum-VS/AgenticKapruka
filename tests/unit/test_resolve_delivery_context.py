@@ -19,13 +19,13 @@ from lib.kapruka.service import KaprukaService
 _CLIENT_IP = "203.0.113.42"
 
 
-def test_route_after_resolve_clarify_when_question_set() -> None:
+def test_route_after_resolve_clarify_routes_to_agent_loop() -> None:
     state: AgentState = {
         "messages": [],
         "session_id": "sess-resolve-route",
         "agent_clarifying_question": "Which Colombo zone?",
     }
-    assert route_after_resolve_delivery_context(state) == "generate_response"
+    assert route_after_resolve_delivery_context(state) == "agent_loop"
 
 
 def test_route_after_resolve_product_id_fast_path() -> None:

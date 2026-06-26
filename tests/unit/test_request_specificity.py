@@ -124,6 +124,45 @@ def test_empty_message_clarifies() -> None:
     assert result.clarifying_question == "What are you looking for today?"
 
 
+def test_budget_only_without_product_signal_clarifies() -> None:
+    result = score_request_specificity(
+        "under Rs 5000",
+        session_product_focus=None,
+        session_occasion=None,
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata={"budget_max": 5000.0},
+    )
+    assert result.band in ("clarify", "ambiguous")
+    assert result.missing_dimension in ("product", "occasion")
+    assert result.clarifying_question
+
+
+def test_rich_cake_colombo_proceeds_with_zone_clarify() -> None:
+    result = score_request_specificity(
+        "Mom's 65th birthday this Sunday in Colombo — chocolate cakes under Rs 8,000",
+        session_product_focus=None,
+        session_occasion=None,
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata={"target_city": "Colombo", "session_delivery_date": "2026-06-28"},
+    )
+    assert result.band == "proceed"
+
+
+def test_roses_galle_clarifies_occasion() -> None:
+    result = score_request_specificity(
+        "Fresh roses to Galle tomorrow",
+        session_product_focus=None,
+        session_occasion=None,
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata={"target_city": "Galle"},
+    )
+    assert result.band == "clarify"
+    assert result.missing_dimension == "occasion"
+
+
 def test_situational_clarify_prefix() -> None:
     result = score_request_specificity(
         "any gift ideas?",

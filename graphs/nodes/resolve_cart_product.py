@@ -10,6 +10,7 @@ from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.chat.intent_heuristics import extract_cart_product_phrase
 from lib.chat.product_reference import (
+    _normalize_ordinal_phrase,
     is_deictic_phrase,
     is_ordinal_phrase,
     resolve_product_reference,
@@ -178,7 +179,7 @@ async def resolve_cart_product(
             },
         }
 
-    if is_deictic_phrase(phrase) or is_ordinal_phrase(phrase):
+    if is_deictic_phrase(phrase) or is_ordinal_phrase(_normalize_ordinal_phrase(phrase)):
         return {
             "cart_action_result": {
                 "status": "clarify",

@@ -35,6 +35,11 @@ _DEICTIC_RE = re.compile(
     r"^(?:that|this|it|this one|that one)$",
     re.I,
 )
+_ORDINAL_LEADING_RE = re.compile(
+    r"^(?P<ordinal>(?:the\s+)?(?:first|second|third|fourth|fifth)(?:\s+one)?|"
+    r"(?:the\s+)?\d+(?:st|nd|rd|th)(?:\s+one)?)(?:\s+.+)?$",
+    re.I,
+)
 
 
 class ProductReferenceResult(TypedDict, total=False):
@@ -47,6 +52,17 @@ class ProductReferenceResult(TypedDict, total=False):
 def is_deictic_phrase(phrase: str) -> bool:
     """True for pronouns like that, this, it."""
     return bool(_DEICTIC_RE.match(phrase.strip()))
+
+
+def _normalize_ordinal_phrase(phrase: str) -> str:
+    """Strip trailing descriptors from ordinals like 'the first flower bouquet'."""
+    stripped = phrase.strip()
+    if is_ordinal_phrase(stripped):
+        return stripped
+    match = _ORDINAL_LEADING_RE.match(stripped)
+    if match:
+        return match.group("ordinal").strip()
+    return stripped
 
 
 def is_ordinal_phrase(phrase: str) -> bool:
@@ -115,8 +131,9 @@ def resolve_product_reference(
         session_product_focus=session_product_focus,
     )
 
-    if is_ordinal_phrase(stripped):
-        index = _ordinal_index(stripped)
+    ordinal_phrase = _normalize_ordinal_phrase(stripped)
+    if is_ordinal_phrase(ordinal_phrase):
+        index = _ordinal_index(ordinal_phrase)
         if index is None:
             return None
         if not products:

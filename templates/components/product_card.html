@@ -96,7 +96,7 @@
       </a>
     </h3>
     <p class="mb-3 line-clamp-2 flex-1 text-body-sm font-body-sm text-on-surface-variant">
-      {% if product.description %}{{ product.description }}{% else %}Available on Kapruka with island-wide delivery.{% endif %}
+      {% if product.description %}{{ product.description }}{% elif product.card_description_fallback %}{{ product.card_description_fallback }}{% else %}A thoughtful Kapruka gift for your occasion.{% endif %}
     </p>
     <div class="mt-auto flex items-center justify-between">
       <span class="text-label-md font-label-md font-bold text-primary" data-testid="product-price">

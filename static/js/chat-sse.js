@@ -162,20 +162,49 @@
   let statusShownAt = 0;
   let statusFlushTimer = null;
 
+  function loadingIndicatorSpan(indicator) {
+    return (
+      indicator.querySelector('[data-testid="chat-loading-text"]') ||
+      indicator.querySelector("span")
+    );
+  }
+
   function updateLoadingStatusText(text) {
     const indicator = document.getElementById("chat-loading");
     if (!indicator) {
       return;
     }
-    const span =
-      indicator.querySelector('[data-testid="chat-loading-text"]') ||
-      indicator.querySelector("span");
+    const span = loadingIndicatorSpan(indicator);
     if (!span) {
       return;
     }
     const display = text || DEFAULT_LOADING_TEXT;
     span.textContent = display;
     indicator.setAttribute("aria-label", display);
+  }
+
+  function showLoadingIndicator(text) {
+    const indicator = document.getElementById("chat-loading");
+    if (!indicator) {
+      return;
+    }
+    indicator.hidden = false;
+    indicator.setAttribute("aria-hidden", "false");
+    updateLoadingStatusText(text || DEFAULT_LOADING_TEXT);
+  }
+
+  function hideLoadingIndicator() {
+    const indicator = document.getElementById("chat-loading");
+    if (!indicator) {
+      return;
+    }
+    const span = loadingIndicatorSpan(indicator);
+    if (span) {
+      span.textContent = "";
+    }
+    indicator.removeAttribute("aria-label");
+    indicator.hidden = true;
+    indicator.setAttribute("aria-hidden", "true");
   }
 
   function parseStatusTextFromHtml(html) {
@@ -223,6 +252,10 @@
       }
       statusFlushTimer = setTimeout(() => {
         statusFlushTimer = null;
+        const form = findChatForm();
+        if (!form || !form.classList.contains("htmx-request")) {
+          return;
+        }
         apply();
       }, STATUS_MIN_VISIBLE_MS - elapsed);
       return;
@@ -238,7 +271,7 @@
     if (active) {
       form.classList.add("htmx-request");
       indicator?.classList.add("htmx-request", "chat-loading");
-      updateLoadingStatusText(DEFAULT_LOADING_TEXT);
+      showLoadingIndicator(DEFAULT_LOADING_TEXT);
       if (submitButton) {
         submitButton.disabled = true;
       }
@@ -254,7 +287,7 @@
       statusShownAt = 0;
       form.classList.remove("htmx-request");
       indicator?.classList.remove("htmx-request", "chat-loading");
-      updateLoadingStatusText(DEFAULT_LOADING_TEXT);
+      hideLoadingIndicator();
       if (submitButton) {
         submitButton.disabled = false;
       }
