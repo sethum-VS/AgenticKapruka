@@ -2,4 +2,5 @@
 
 SENDING = "Sending…"
 SEARCHING_KAPRUKA = "Searching Kapruka…"
+SEARCHING_CATALOG = "Searching our catalog…"
 PUTTING_TOGETHER_RECOMMENDATIONS = "Putting together recommendations…"

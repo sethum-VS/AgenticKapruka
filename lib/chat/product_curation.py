@@ -53,8 +53,12 @@ _MALE_RECIPIENTS = frozenset(
         "grandfather",
     },
 )
-_FOR_HIM_RE = re.compile(r"\b(?:for him|men'?s?|gentleman)\b", re.I)
-_FOR_HER_RE = re.compile(r"\b(?:for her|women'?s?|ladies)\b", re.I)
+_FOR_HIM_RE = re.compile(
+    r"\b(?:for him|for dad|father'?s?|men'?s?|gentleman|boyfriend)\b", re.I
+)
+_FOR_HER_RE = re.compile(
+    r"\b(?:for her|for mom|mother'?s?|women'?s?|ladies|girlfriend)\b", re.I
+)
 _NON_FLORAL_FLOWER_DENYLIST = re.compile(
     r"\b(?:air freshener|freshener|fragrance|deodorizer|room spray|scented)\b",
     re.I,
@@ -455,7 +459,7 @@ def apply_recipient_curation(
     products: list[dict[str, Any]],
     session_recipient_hint: str | None,
 ) -> list[dict[str, Any]]:
-    """Demote gender-mismatched gift sets for the stated recipient."""
+    """Drop gender-mismatched gift sets; fall back to demote-only if fewer than 3 would remain."""
     if not products or not session_recipient_hint:
         return list(products)
     recipient = session_recipient_hint.strip().lower()
@@ -466,13 +470,15 @@ def apply_recipient_curation(
     else:
         return list(products)
     preferred: list[dict[str, Any]] = []
-    demoted: list[dict[str, Any]] = []
+    mismatched: list[dict[str, Any]] = []
     for product in products:
         if mismatch.search(_product_text_blob(product)):
-            demoted.append(product)
+            mismatched.append(product)
         else:
             preferred.append(product)
-    return preferred + demoted
+    if len(preferred) >= 3:
+        return preferred
+    return preferred + mismatched
 
 
 def refine_last_search_by_budget(
@@ -532,9 +538,19 @@ def refine_last_search_by_budget(
 def is_anniversary_occasion_intent(
     query: str,
     hybrid_context: dict[str, Any] | None = None,
+    session_occasion: str | None = None,
 ) -> bool:
-    """True when the turn targets anniversary gifts."""
-    return bool(query.strip() and _ANNIVERSARY_OCCASION_RE.search(query))
+    """True when the turn targets anniversary gifts (query, session, or graph hint)."""
+    if query.strip() and _ANNIVERSARY_OCCASION_RE.search(query):
+        return True
+    if isinstance(session_occasion, str) and "anniversary" in session_occasion.lower():
+        return True
+    if hybrid_context:
+        hints = hybrid_context.get("hints") or {}
+        occasion_hint = str(hints.get("occasion") or "").lower()
+        if "anniversary" in occasion_hint:
+            return True
+    return False
 
 
 def apply_anniversary_curation(
@@ -542,23 +558,27 @@ def apply_anniversary_curation(
     *,
     query: str,
     hybrid_context: dict[str, Any] | None = None,
+    session_occasion: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Promote flowers/cakes/hampers and demote greeting cards for anniversary turns."""
-    if not is_anniversary_occasion_intent(query, hybrid_context):
+    """Drop greeting cards/watch boxes for anniversary turns; promote flowers/hampers."""
+    if not is_anniversary_occasion_intent(query, hybrid_context, session_occasion=session_occasion):
         return list(products)
 
     promoted: list[dict[str, Any]] = []
     neutral: list[dict[str, Any]] = []
-    demoted: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
     for product in products:
         blob = _product_text_blob(product)
         if _ANNIVERSARY_DEMOTE_RE.search(blob):
-            demoted.append(product)
+            dropped.append(product)
         elif _ANNIVERSARY_PROMOTE_RE.search(blob):
             promoted.append(product)
         else:
             neutral.append(product)
-    return promoted + neutral + demoted
+    kept = promoted + neutral
+    if len(kept) >= 3:
+        return kept
+    return kept + dropped
 
 
 def sort_and_filter_by_budget(
@@ -624,6 +644,7 @@ def curate_carousel_products(
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
     session_recipient_hint: str | None = None,
+    session_occasion: str | None = None,
     strict_budget: bool = False,
 ) -> list[dict[str, Any]]:
     """Apply birthday/puja relevance curation then budget-aware carousel ordering."""
@@ -640,6 +661,7 @@ def curate_carousel_products(
         scoped,
         query=query,
         hybrid_context=hybrid_context,
+        session_occasion=session_occasion,
     )
     scoped = apply_gift_curation(
         scoped,

@@ -728,9 +728,12 @@ def _discovery_curation_query(
     user_message: str,
     session_search_query: str | None = None,
 ) -> str:
-    if is_budget_refinement_message(user_message):
-        if isinstance(session_search_query, str) and session_search_query.strip():
-            return session_search_query.strip()
+    if (
+        is_budget_refinement_message(user_message)
+        and isinstance(session_search_query, str)
+        and session_search_query.strip()
+    ):
+        return session_search_query.strip()
     query = _search_query_from_payload(search_payload)
     return user_message.strip() or (query or "")
 
@@ -745,6 +748,7 @@ def _budget_curated_products(
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
     session_recipient_hint: str | None = None,
+    session_occasion: str | None = None,
     strict_budget: bool = False,
 ) -> list[dict[str, Any]]:
     """Apply birthday/puja relevance and budget-aware carousel ordering."""
@@ -757,6 +761,7 @@ def _budget_curated_products(
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
         session_recipient_hint=session_recipient_hint,
+        session_occasion=session_occasion,
         strict_budget=strict_budget,
     )
 
@@ -1023,6 +1028,7 @@ def extract_search_products(
     session_product_focus: str | None = None,
     session_search_query: str | None = None,
     session_recipient_hint: str | None = None,
+    session_occasion: str | None = None,
     strict_budget: bool = False,
     last_search_products: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
@@ -1048,6 +1054,7 @@ def extract_search_products(
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
         session_recipient_hint=session_recipient_hint,
+        session_occasion=session_occasion,
         strict_budget=strict_budget,
     )
     if (
@@ -1724,6 +1731,7 @@ async def generate_response(
             session_product_focus=session_product_focus,
             session_search_query=state.get("session_search_query"),
             session_recipient_hint=state.get("session_recipient_hint"),
+            session_occasion=state.get("session_occasion"),
             strict_budget=strict_budget,
             last_search_products=last_search_products or None,
         )
@@ -1827,6 +1835,11 @@ async def generate_response(
         reply_text = template or "I could not generate a response. Please try again."
 
     reply_text = normalize_catalog_text(reply_text)
+    # Prepend Sunday-ambiguity clarification before other post-processing
+    if isinstance(intent_metadata, dict) and intent_metadata.get("delivery_date_ambiguous"):
+        clarification = intent_metadata.get("delivery_date_clarification") or ""
+        if clarification and clarification.lower() not in reply_text.lower():
+            reply_text = f"{clarification}\n\n{reply_text.strip()}"
     reply_text = _prepend_budget_confirmation(
         reply_text,
         intent_metadata,
@@ -1883,8 +1896,12 @@ async def generate_response(
     if topic_pivot:
         updates["last_visible_products"] = visible_products or None
         updates["last_search_products"] = visible_products or None
-    if isinstance(intent_metadata, dict) and intent_metadata.get("budget_confirmation_pending"):
+    if isinstance(intent_metadata, dict) and (
+        intent_metadata.get("budget_confirmation_pending")
+        or intent_metadata.get("delivery_date_ambiguous")
+    ):
         cleared = dict(intent_metadata)
         cleared["budget_confirmation_pending"] = False
+        cleared["delivery_date_ambiguous"] = False
         updates["intent_metadata"] = cast(IntentMetadata, cleared)
     return updates

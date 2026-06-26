@@ -358,3 +358,35 @@ async def test_analyze_intent_occasion_change_sets_budget_confirmation_pending()
     assert result.get("session_occasion") == "anniversary"
     assert result.get("session_budget_max") == 6000.0
     assert result["intent_metadata"].get("budget_confirmation_pending") is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_category_change_sets_budget_confirmation_pending() -> None:
+    """Chocolate → flowers category change with active budget triggers confirmation."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Show me some flower bouquets")],
+        "session_id": "sess-category-change",
+        "session_product_focus": "chocolate",
+        "session_budget_max": 5000.0,
+        "session_budget_currency": "LKR",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent_metadata"].get("budget_confirmation_pending") is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_category_change_no_confirmation_when_no_budget() -> None:
+    """Category change without an active budget does not set confirmation pending."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Show me some flower bouquets")],
+        "session_id": "sess-no-budget-change",
+        "session_product_focus": "chocolate",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert not result["intent_metadata"].get("budget_confirmation_pending")

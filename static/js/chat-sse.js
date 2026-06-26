@@ -157,7 +157,7 @@
     );
   }
 
-  const STATUS_MIN_VISIBLE_MS = 300;
+  const STATUS_MIN_VISIBLE_MS = 800;
   let statusShownAt = 0;
   let statusFlushTimer = null;
 

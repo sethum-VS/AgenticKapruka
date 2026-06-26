@@ -7,6 +7,10 @@ import re
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
 from lib.zep.memory import format_memory_facts_block
 
+_NO_BACKTICK_PRODUCT_NAME_RULE = (
+    "- Never wrap product names in backticks — quote them plainly.\n"
+)
+
 _UTILITY_EMPTY_TOOL_RESULTS_RULE = (
     "- If tool_results are empty or contain no useful data, "
     "say so briefly and suggest a clearer search.\n"
@@ -39,6 +43,7 @@ Rules:
 """
     + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
     + _UTILITY_EMPTY_TOOL_RESULTS_RULE
+    + _NO_BACKTICK_PRODUCT_NAME_RULE
     + "- Keep the reply under 180 words.\n"
 )
 
@@ -62,6 +67,7 @@ Rules:
 """
     + _ARTIFICIAL_FLORAL_DISCLOSURE_RULE
     + _CONCIERGE_EMPTY_TOOL_RESULTS_RULE
+    + _NO_BACKTICK_PRODUCT_NAME_RULE
     + "- Keep the reply conversational and under 200 words.\n"
 )
 

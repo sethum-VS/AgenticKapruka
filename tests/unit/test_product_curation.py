@@ -10,8 +10,8 @@ from lib.chat.product_curation import (
     apply_recipient_curation,
     carousel_focus_guard,
     curate_carousel_products,
-    demote_off_focus_products,
     demote_non_floral_for_flower_intent,
+    demote_off_focus_products,
     demote_puja_products,
     filter_gift_noise_products,
     filter_puja_products,
@@ -392,3 +392,102 @@ def test_curate_carousel_products_strict_budget_excludes_noise() -> None:
     assert not any("curry" in name.lower() for name in names)
     assert not any("snack" in name.lower() or "kitkat" in name.lower() for name in names)
     assert any("cake" in name.lower() or "bento" in name.lower() for name in names)
+
+
+# ── Phase 1c: Drop filter tests ──────────────────────────────────────────────
+
+
+def test_apply_recipient_curation_drops_for_him_on_wife_when_enough_remain() -> None:
+    """Wife flow: 'for dad' / 'father's gift' items are dropped when ≥3 items remain."""
+    products = [
+        _product("dad1", 4500.0, name="Gift for Dad Blue Heart"),
+        _product("dad2", 3200.0, name="Father's Day Special Combo"),
+        _product("her1", 5200.0, name="Chocolate Truffles Gift Box"),
+        _product("her2", 4000.0, name="Rose Bouquet Premium"),
+        _product("her3", 3500.0, name="Ladies Spa Gift Set"),
+    ]
+    curated = apply_recipient_curation(products, "wife")
+    ids = [item["id"] for item in curated]
+    assert "dad1" not in ids, "for dad should be dropped from wife flow"
+    assert "dad2" not in ids, "father's should be dropped from wife flow"
+    assert len(curated) >= 3
+
+
+def test_apply_recipient_curation_falls_back_to_demote_when_few_remain() -> None:
+    """Fall back to demote-only when dropping would leave fewer than 3 items."""
+    products = [
+        _product("dad1", 4500.0, name="Gift for Dad Combo"),
+        _product("her1", 5200.0, name="Chocolate Gift Box"),
+        _product("her2", 4000.0, name="Rose Bouquet"),
+    ]
+    curated = apply_recipient_curation(products, "wife")
+    ids = [item["id"] for item in curated]
+    # 2 preferred items — fallback: demoted item appended at end
+    assert ids[-1] == "dad1", "mismatched item falls to end on demote fallback"
+    assert len(curated) == 3
+
+
+def test_apply_recipient_curation_drops_for_her_on_dad_flow() -> None:
+    """Dad flow: 'for her' / 'ladies' items are dropped when ≥3 items remain."""
+    products = [
+        _product("her1", 4500.0, name="Ladies Perfume For Her"),
+        _product("him1", 3200.0, name="Men's Grooming Kit"),
+        _product("him2", 5000.0, name="Craft Beer Gift Set"),
+        _product("him3", 4200.0, name="Gent's Watch Box"),
+    ]
+    curated = apply_recipient_curation(products, "dad")
+    ids = [item["id"] for item in curated]
+    assert "her1" not in ids, "for her should be dropped from dad flow"
+
+
+def test_apply_anniversary_curation_drops_watch_box_when_enough_remain() -> None:
+    """Anniversary: watch box / greeting card dropped when ≥3 items remain."""
+    products = [
+        _product("card1", 350.0, name="Greeting Card With Envelope"),
+        _product("box1", 2800.0, name="Wooden Watch Storage Box"),
+        _product("flower1", 4500.0, name="Red Roses Anniversary Bouquet"),
+        _product("cake1", 3200.0, name="Anniversary Cake Heart"),
+        _product("hamper1", 6500.0, name="Anniversary Gift Hamper"),
+    ]
+    curated = apply_anniversary_curation(
+        products,
+        query="anniversary gift for wife",
+        hybrid_context=None,
+    )
+    ids = [item["id"] for item in curated]
+    assert "card1" not in ids, "greeting card should be dropped"
+    assert "box1" not in ids, "watch storage box should be dropped"
+    assert len(curated) >= 3
+
+
+def test_apply_anniversary_curation_session_occasion_triggers_without_word() -> None:
+    """session_occasion='anniversary' activates curation even when word absent from query."""
+    products = [
+        _product("card1", 350.0, name="Greeting Card Premium"),
+        _product("flower1", 4500.0, name="Red Roses Bouquet"),
+        _product("cake1", 3200.0, name="Chocolate Celebration Cake"),
+        _product("hamper1", 6500.0, name="Luxury Gift Hamper"),
+    ]
+    curated = apply_anniversary_curation(
+        products,
+        query="gift ideas for my wife",
+        session_occasion="anniversary",
+    )
+    ids = [item["id"] for item in curated]
+    assert "card1" not in ids, "greeting card should be dropped on session_occasion=anniversary"
+    assert "flower1" in ids
+
+
+def test_apply_anniversary_curation_fallback_demote_when_few_remain() -> None:
+    """Fall back to demote when dropping would leave fewer than 3 items."""
+    products = [
+        _product("card1", 350.0, name="Greeting Card Birthday"),
+        _product("flower1", 4500.0, name="Rose Bouquet"),
+        _product("hamper1", 6500.0, name="Anniversary Hamper"),
+    ]
+    curated = apply_anniversary_curation(
+        products,
+        query="anniversary flowers",
+    )
+    assert len(curated) == 3, "all items present on fallback"
+    assert curated[-1]["id"] == "card1", "greeting card demoted to end"

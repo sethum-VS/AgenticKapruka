@@ -163,3 +163,57 @@ def delivery_date_clarifying_question() -> str:
         f"When would you like delivery? Please share a date on or after {today_iso} "
         "(for example YYYY-MM-DD or next Saturday)."
     )
+
+
+_AMBIGUOUS_DAYS_AHEAD_MIN = 3
+_AMBIGUOUS_DAYS_AHEAD_MAX = 4
+
+
+def is_ambiguous_weekday_phrase(text: str, today: date | None = None) -> bool:
+    """True when a weekday phrase is ambiguous — day is 3–4 days away (this/next/bare).
+
+    Example: on Thursday, 'next Sunday' / 'this Sunday' / bare 'Sunday' are all
+    ambiguous because the day is 3 days away; people differ on whether 'next Sunday'
+    means this coming Sunday or the one after. 'This Saturday' (2 days away) is clear.
+    """
+    if today is None:
+        today = colombo_today()
+    text_lower = text.strip().lower()
+    for name, weekday in _WEEKDAY_NAMES.items():
+        has_this = bool(re.search(rf"\bthis\s+{name}\b", text_lower))
+        has_next = bool(re.search(rf"\bnext\s+{name}\b", text_lower))
+        has_bare = bool(re.search(rf"\b{name}\b", text_lower)) and not has_this and not has_next
+        if not (has_this or has_next or has_bare):
+            continue
+        days_ahead = (weekday - today.weekday()) % 7
+        if _AMBIGUOUS_DAYS_AHEAD_MIN <= days_ahead <= _AMBIGUOUS_DAYS_AHEAD_MAX:
+            return True
+    return False
+
+
+def ambiguous_weekday_clarifying_question(text: str, today: date | None = None) -> str | None:
+    """Return a customer-facing clarifying question for an ambiguous weekday phrase.
+
+    Returns None when no ambiguity is detected.
+    """
+    if today is None:
+        today = colombo_today()
+    text_lower = text.strip().lower()
+    for name, weekday in _WEEKDAY_NAMES.items():
+        has_this = bool(re.search(rf"\bthis\s+{name}\b", text_lower))
+        has_next = bool(re.search(rf"\bnext\s+{name}\b", text_lower))
+        has_bare = bool(re.search(rf"\b{name}\b", text_lower)) and not has_this and not has_next
+        if not (has_this or has_next or has_bare):
+            continue
+        days_ahead = (weekday - today.weekday()) % 7
+        if _AMBIGUOUS_DAYS_AHEAD_MIN <= days_ahead <= _AMBIGUOUS_DAYS_AHEAD_MAX:
+            this_occurrence = today + timedelta(days=days_ahead)
+            following_occurrence = this_occurrence + timedelta(days=7)
+            day_name = name.capitalize()
+            this_str = f"{this_occurrence.day} {this_occurrence.strftime('%B')}"
+            next_str = f"{following_occurrence.day} {following_occurrence.strftime('%B')}"
+            return (
+                f"Did you mean this {day_name} ({this_str}) or "
+                f"the following {day_name} ({next_str})?"
+            )
+    return None

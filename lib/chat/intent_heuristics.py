@@ -149,7 +149,7 @@ _PRODUCT_CATEGORY_TOKENS = re.compile(
     re.I,
 )
 _TOPIC_PIVOT_PREFIX = re.compile(
-    r"^(?:never\s*mind|nevermind|instead|actually)\b",
+    r"^(?:never\s*mind|nevermind|instead|actually|what\s+about)\b",
     re.I,
 )
 _BARE_CATEGORY_REPLY = re.compile(

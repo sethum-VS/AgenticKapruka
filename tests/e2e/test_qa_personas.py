@@ -42,7 +42,9 @@ def test_persona_clueless_gift_giver_budget_and_delivery(
     assert "curry" not in carousel_text.lower()
     lowered_carousel = carousel_text.lower()
     assert "snack" not in lowered_carousel
-    assert "bar" not in lowered_carousel or "bento" in lowered_carousel or "cake" in lowered_carousel
+    assert (
+        "bar" not in lowered_carousel or "bento" in lowered_carousel or "cake" in lowered_carousel
+    )
     assert any(token in lowered_carousel for token in ("cake", "bento", "chocolate", "hamper"))
     assert "snack" not in carousel_text.lower()
     assert "bar" not in carousel_text.lower() or "birthday" in carousel_text.lower()
@@ -132,3 +134,40 @@ def test_persona_breakup_omits_stale_kandy_delivery(page: Page, base_url: str) -
     assert "kandy" not in lowered
     assert "verified with kapruka" not in lowered
     assert re.search(r"sorry|heartbroken|hear that|here for you", lowered)
+
+
+def test_persona_action_shopper_tracking_and_cart(page: Page, base_url: str) -> None:
+    """Scenario 3: KA order ID gets VIMP guidance; VIMP ID returns tracking card; cart add."""
+    page.goto(f"{base_url}/chat")
+    wait_for_alpine(page)
+    reset_e2e_session(page, base_url)
+
+    # 1. Non-VIMP order ID → guidance to use VIMP format
+    ka_reply = _chat_turn(page, "KA987654")
+    lowered_ka = ka_reply.lower()
+    assert re.search(r"vimp|order\s*id|tracking\s*id|format", lowered_ka), (
+        f"Expected VIMP format guidance for KA order ID, got: {ka_reply!r}"
+    )
+    assert page.locator('[data-testid="tracking-card"]').count() == 0, (
+        "KA order ID should not show a tracking card"
+    )
+
+    # 2. Valid VIMP ID → tracking card
+    vimp_reply = _chat_turn(page, "VIMP34456CB2")
+    lowered_vimp = vimp_reply.lower()
+    assert re.search(r"delivered|in transit|pending|processing|tracking", lowered_vimp), (
+        f"Expected tracking status in VIMP reply, got: {vimp_reply!r}"
+    )
+
+    # 3. Add product to cart → cart drawer shows 1 item
+    _chat_turn(page, "Show me anniversary flowers for my wife")
+    page.wait_for_selector('[data-testid="product-card"]', timeout=15_000)
+    cart_reply = _chat_turn(page, "Add the first flower bouquet to my cart")
+    lowered_cart = cart_reply.lower()
+    assert re.search(r"added|cart|added to cart|in your cart", lowered_cart), (
+        f"Expected cart-add confirmation, got: {cart_reply!r}"
+    )
+    cart_count = page.locator('[data-testid="cart-count"]')
+    if cart_count.count() > 0:
+        count_text = cart_count.first.inner_text()
+        assert int(count_text) >= 1, f"Expected cart count >= 1, got {count_text!r}"

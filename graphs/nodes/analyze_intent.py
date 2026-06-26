@@ -10,7 +10,11 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel
 
 from graphs.state import AgentState, CurrencyCode, Intent
-from lib.chat.delivery_dates import normalize_delivery_date
+from lib.chat.delivery_dates import (
+    ambiguous_weekday_clarifying_question,
+    is_ambiguous_weekday_phrase,
+    normalize_delivery_date,
+)
 from lib.chat.intent_heuristics import (
     GIFT_PREFERENCES_QUESTION,
     PROCEED_CHECKOUT_MESSAGE,
@@ -177,24 +181,39 @@ def _resolve_session_recipient_hint(state: AgentState, user_message: str) -> str
     return None
 
 
-def _flag_budget_confirmation_on_occasion_change(
+def _flag_budget_confirmation_on_context_change(
     state: AgentState,
     user_message: str,
     session_budget_max: float | None,
     intent_metadata: IntentMetadata,
 ) -> IntentMetadata:
-    """Ask once when occasion changes but a session budget cap remains active."""
+    """Ask once when occasion or product category changes but a session budget remains active."""
     if not isinstance(session_budget_max, (int, float)) or session_budget_max <= 0:
         return intent_metadata
     if is_topic_pivot_message(user_message):
         return intent_metadata
-    derived = _derive_session_occasion(user_message)
-    prior = state.get("session_occasion")
+    # Check explicit budget in message — no need to confirm if budget is restated
+    if extract_budget(user_message) is not None:
+        return intent_metadata
+    derived_occasion = _derive_session_occasion(user_message)
+    prior_occasion = state.get("session_occasion")
     if (
-        derived is not None
-        and isinstance(prior, str)
-        and prior.strip()
-        and derived != prior.strip().lower()
+        derived_occasion is not None
+        and isinstance(prior_occasion, str)
+        and prior_occasion.strip()
+        and derived_occasion != prior_occasion.strip().lower()
+    ):
+        return cast(
+            IntentMetadata,
+            {**intent_metadata, "budget_confirmation_pending": True},
+        )
+    derived_focus = _derive_product_focus(user_message)
+    prior_focus = state.get("session_product_focus")
+    if (
+        derived_focus is not None
+        and isinstance(prior_focus, str)
+        and prior_focus.strip()
+        and derived_focus != prior_focus.strip().lower()
     ):
         return cast(
             IntentMetadata,
@@ -302,7 +321,6 @@ def _clear_context_on_pivot(
                 "last_search_products": None,
             },
         )
-    from lib.chat.delivery_dates import normalize_delivery_date
     from lib.chat.query_preprocessor import extract_target_city
 
     city_missing = extract_target_city(user_message) is None
@@ -370,13 +388,28 @@ async def analyze_intent(
     session_product_focus = _resolve_session_product_focus(state, user_message)
     session_occasion = _resolve_session_occasion(state, user_message)
     session_recipient_hint = _resolve_session_recipient_hint(state, user_message)
-    intent_metadata = _flag_budget_confirmation_on_occasion_change(
+    intent_metadata = _flag_budget_confirmation_on_context_change(
         state,
         user_message,
         session_budget_max,
         intent_metadata,
     )
     delivery_date, session_delivery_date = _resolve_delivery_dates(state, user_message)
+
+    # Detect ambiguous this/next/bare weekday and ask before committing a date.
+    # Remove any auto-resolved date so the session isn't poisoned with a guess.
+    if is_ambiguous_weekday_phrase(user_message):
+        clarification = ambiguous_weekday_clarifying_question(user_message)
+        intent_metadata = cast(
+            IntentMetadata,
+            {
+                **intent_metadata,
+                "delivery_date_ambiguous": True,
+                "delivery_date_clarification": clarification,
+            },
+        )
+        delivery_date = None
+        session_delivery_date = state.get("session_delivery_date")
 
     if is_budgeted_gift_ideas_message(user_message):
         intent_metadata = cast(

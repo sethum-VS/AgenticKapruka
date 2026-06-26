@@ -10,6 +10,7 @@ from lib.chat.intent_heuristics import (
     is_cart_add_trigger,
     is_checkout_trigger,
     is_proceed_checkout_message,
+    is_topic_pivot_message,
     is_tracking_guard,
 )
 
@@ -79,3 +80,16 @@ def test_tracking_guard_matches_ord_ref() -> None:
 def test_proceed_checkout_message_is_exact_match() -> None:
     assert is_proceed_checkout_message("Proceed to checkout")
     assert not is_proceed_checkout_message("proceed to checkout")
+
+
+def test_what_about_recognized_as_pivot() -> None:
+    """'What about cakes?' should be recognized as a topic pivot."""
+    assert is_topic_pivot_message("What about cakes?") is True
+
+
+def test_what_about_flowers_is_pivot() -> None:
+    assert is_topic_pivot_message("What about flowers instead?") is True
+
+
+def test_what_about_with_no_product_is_pivot() -> None:
+    assert is_topic_pivot_message("What about something else?") is True

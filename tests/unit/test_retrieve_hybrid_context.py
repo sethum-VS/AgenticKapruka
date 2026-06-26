@@ -416,3 +416,23 @@ async def test_retrieve_hybrid_context_skips_past_occasion_on_topic_pivot() -> N
 
     hints = result["hybrid_context"].get("hints") or {}
     assert "occasion" not in hints or hints.get("occasion") != "anniversary"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_wires_anniversary_hints() -> None:
+    """Anniversary query populates exclude_categories from enrich_anniversary_hints."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="anniversary flowers for my wife")],
+        "intent": "discovery",
+        "session_id": "sess-anniversary-hints",
+    }
+
+    updates = await retrieve_hybrid_context(state)
+
+    hints = updates["hybrid_context"].get("hints") or {}
+    exclude = str(hints.get("exclude_categories") or "")
+    assert exclude, "Expected anniversary exclude_categories hint"
+    assert any(
+        kw in exclude.lower()
+        for kw in ("greeting", "card", "voucher")
+    ), f"Expected greeting/voucher in exclude_categories: {exclude!r}"

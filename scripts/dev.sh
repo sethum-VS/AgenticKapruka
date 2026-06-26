@@ -209,6 +209,15 @@ cmd_start() {
   log "  Tailwind: $TAILWIND_LOG"
   log "  Trace:    DEBUG_TRACE=$DEBUG_TRACE LOG_LEVEL=$LOG_LEVEL (make logs)"
   log "  Stop all: make stop-all"
+
+  # Warn when Neo4j GraphRAG is not bootstrapped (carousel quality degrades).
+  neo4j_status="$(curl -s "http://127.0.0.1:$BACKEND_PORT/health" 2>/dev/null \
+    | "$PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('services',{}).get('neo4j_graphrag','unknown'))" 2>/dev/null || true)"
+  if [[ "$neo4j_status" != "healthy" ]]; then
+    log ""
+    log "  ⚠  Neo4j GraphRAG is '$neo4j_status' — carousel quality may degrade."
+    log "     Run: python scripts/bootstrap_neo4j.py"
+  fi
 }
 
 cmd_stop() {

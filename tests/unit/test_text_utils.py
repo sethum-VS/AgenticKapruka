@@ -83,3 +83,20 @@ def test_product_card_template_normalizes_mojibake_name() -> None:
     html = render_product_carousel([product])
     assert _MOJIBAKE_EN_DASH not in html
     assert "–" in html
+
+
+def test_normalize_catalog_text_strips_wrapping_backticks() -> None:
+    """`vibe Check` → vibe Check (backtick wrapping stripped)."""
+    assert normalize_catalog_text("`vibe Check`") == "vibe Check"
+
+
+def test_normalize_catalog_text_strips_triple_backticks() -> None:
+    """```product name``` → product name."""
+    assert normalize_catalog_text("```product name```") == "product name"
+
+
+def test_normalize_catalog_text_collapses_double_space_after_strip() -> None:
+    # Backticks stripped, then interior double-spaces collapsed to single
+    result = normalize_catalog_text("`  hello  world  `")
+    assert "hello" in result
+    assert "  " not in result, f"Double spaces should be collapsed: {result!r}"

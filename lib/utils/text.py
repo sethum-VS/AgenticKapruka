@@ -8,6 +8,7 @@ import re
 _MANGLED_NUMERIC_ENTITY = re.compile(r"[Nn]#(\d+);")
 _DOUBLE_ENCODED_ENTITY = re.compile(r"&amp;#(\d+);")
 _MOJIBAKE_MARKERS = re.compile(r"â€|Ã.|Â.")
+_BACKTICK_WRAP = re.compile(r"^`+|`+$")
 _MOJIBAKE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("\u00e2\u20ac\u2122", "'"),
     ("\u00e2\u20ac\u02dc", "'"),
@@ -52,4 +53,6 @@ def repair_utf8_mojibake(value: str) -> str:
 
 def normalize_catalog_text(value: str) -> str:
     """Mojibake repair plus HTML entity decoding for catalog and reply text."""
-    return decode_html_entities(repair_utf8_mojibake(value))
+    text = decode_html_entities(repair_utf8_mojibake(value))
+    text = _BACKTICK_WRAP.sub("", text)
+    return re.sub(r"  +", " ", text)

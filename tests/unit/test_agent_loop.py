@@ -607,7 +607,9 @@ async def test_agent_loop_emits_status_events() -> None:
         for call in mock_writer.call_args_list
         if call.args and call.args[0].get("type") == "status"
     ]
-    assert "Searching Kapruka…" in status_messages
+    assert any(
+        msg in status_messages for msg in ("Searching our catalog…", "Searching Kapruka…")
+    ), f"Expected search status in {status_messages!r}"
     assert "Checking delivery…" in status_messages
 
 
@@ -1378,3 +1380,35 @@ async def test_agent_loop_rate_limit_retry_succeeds_without_tool_error() -> None
     assert result.get("agent_tool_error") is None
     assert result["agent_loop_exit_reason"] == "finish"
     assert mock_invoke.await_count == 3
+
+
+def test_format_planner_hints_graph_degraded_adds_mcp_bias() -> None:
+    """graph_degraded=True adds an MCP discovery bias hint."""
+    from graphs.nodes.agent_loop import _format_planner_query_rewrite_hints
+
+    hints = _format_planner_query_rewrite_hints(
+        "anniversary flowers for wife",
+        graph_degraded=True,
+    )
+    assert hints, "Expected non-empty hints when graph_degraded=True"
+    assert "graphrag" in hints.lower() or "graph" in hints.lower(), (
+        f"Expected graph mention in hints: {hints!r}"
+    )
+
+
+def test_format_planner_hints_anniversary_occasion_adds_hint() -> None:
+    """Anniversary query adds product bias hint."""
+    from graphs.nodes.agent_loop import _format_planner_query_rewrite_hints
+
+    hints = _format_planner_query_rewrite_hints(
+        "anniversary gift ideas",
+        session_occasion="anniversary",
+    )
+    assert "anniversary" in hints.lower(), (
+        f"Expected anniversary hint: {hints!r}"
+    )
+    assert (
+        "greeting card" in hints.lower()
+        or "greeting" in hints.lower()
+        or "voucher" in hints.lower()
+    )

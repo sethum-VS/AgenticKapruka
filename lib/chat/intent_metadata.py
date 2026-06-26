@@ -23,3 +23,5 @@ class IntentMetadata(TypedDict, total=False):
     budgeted_gift_discovery: bool
     budget_confirmation_pending: bool
     graph_degraded: bool
+    delivery_date_ambiguous: bool
+    delivery_date_clarification: str | None

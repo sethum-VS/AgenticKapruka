@@ -20,6 +20,7 @@ from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
     VECTOR_CONFIDENCE_THRESHOLD,
     build_graph_hybrid_context,
+    enrich_anniversary_hints,
     enrich_birthday_cake_hints,
     enrich_flower_fruit_negative_hints,
     fetch_category_display_names,
@@ -267,6 +268,7 @@ async def retrieve_hybrid_context(
         hybrid_context,
         intent_metadata=intent_metadata,
     )
+    hybrid_context = enrich_anniversary_hints(user_message, hybrid_context)
 
     graph_degraded = False
     if neo4j_client is not None and not skip_graph_reembed:

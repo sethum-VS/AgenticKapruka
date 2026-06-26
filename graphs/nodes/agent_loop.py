@@ -41,7 +41,7 @@ from lib.chat.product_curation import (
 )
 from lib.chat.query_preprocessor import is_delivery_context_relevant_turn
 from lib.chat.search_broadening import apply_first_broaden
-from lib.chat.status_copy import SEARCHING_KAPRUKA
+from lib.chat.status_copy import SEARCHING_CATALOG
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
@@ -82,13 +82,13 @@ ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
 )
 
 _TOOL_STATUS_MESSAGES: dict[str, str] = {
-    SEARCH_PRODUCTS_TOOL: SEARCHING_KAPRUKA,
+    SEARCH_PRODUCTS_TOOL: SEARCHING_CATALOG,
     CHECK_DELIVERY_TOOL: "Checking delivery…",
     LIST_CITIES_TOOL: "Listing delivery cities…",
     LIST_CATEGORIES_TOOL: "Browsing categories…",
     GET_PRODUCT_TOOL: "Fetching product details…",
 }
-_DEFAULT_STATUS_MESSAGE = SEARCHING_KAPRUKA
+_DEFAULT_STATUS_MESSAGE = SEARCHING_CATALOG
 
 PLANNER_SEARCH_RESULT_LIMIT = 5
 PLANNER_CATEGORY_NODE_LIMIT = 10
@@ -607,6 +607,7 @@ def _curate_search_trace_result(
     graph_up = has_graph_hybrid_context(hybrid_context)
     session_focus = state.get("session_product_focus")
     session_recipient = state.get("session_recipient_hint")
+    session_occasion_val = state.get("session_occasion")
     strict_budget = bool(is_budget_refinement_message(user_message))
     curated = apply_anniversary_curation(
         apply_gift_curation(
@@ -627,6 +628,7 @@ def _curate_search_trace_result(
         ),
         query=user_message,
         hybrid_context=hybrid_context,
+        session_occasion=session_occasion_val if isinstance(session_occasion_val, str) else None,
     )
     curated = apply_recipient_curation(
         curated,
@@ -767,11 +769,18 @@ def _format_planner_query_rewrite_hints(
     message_count: int = 1,
     budget_max: float | None = None,
     graph_context_available: bool = False,
+    graph_degraded: bool = False,
     session_product_focus: str | None = None,
+    session_occasion: str | None = None,
     topic_pivot: bool = False,
 ) -> str:
     """Soft search-query rewrite suggestions for broad cake and mom/birthday turns."""
     hints: list[str] = []
+    if graph_degraded:
+        hints.append(
+            "GraphRAG returned no products this turn — rely on kapruka_search_products "
+            "with broad discovery queries rather than graph-based context."
+        )
     has_budget = budget_max is not None and budget_max > 0
     bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
     if bare_focus:
@@ -846,6 +855,19 @@ def _format_planner_query_rewrite_hints(
         if graph_context_available:
             puja_avoid += " Graph exclude_categories hint lists puja/religious categories to skip."
         hints.append(puja_avoid)
+    _is_anniversary = (
+        re.search(r"\banniversary\b", user_message, re.I)
+        or (isinstance(session_occasion, str) and "anniversary" in session_occasion.lower())
+    )
+    if _is_anniversary:
+        ann_hint = (
+            "Anniversary occasion: prefer kapruka_search_products with q=\"anniversary flowers\" "
+            "or q=\"anniversary gift hamper\"; avoid greeting cards, watch boxes, storage boxes, "
+            "and gift vouchers."
+        )
+        if graph_context_available:
+            ann_hint += " Graph exclude_categories lists cards/vouchers to skip."
+        hints.append(ann_hint)
     if not hints:
         return ""
     bullet_lines = "\n".join(f"- {hint}" for hint in hints)
@@ -941,12 +963,15 @@ def _build_planner_user_prompt(state: AgentState) -> str:
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     budget_max = intent_metadata.get("budget_max")
     hybrid_context = state.get("hybrid_context") or {}
+    session_occasion = state.get("session_occasion")
     rewrite_hints = _format_planner_query_rewrite_hints(
         user_message,
         message_count=len(messages),
         budget_max=budget_max if isinstance(budget_max, (int, float)) else None,
         graph_context_available=has_graph_hybrid_context(hybrid_context),
+        graph_degraded=bool(intent_metadata.get("graph_degraded")),
         session_product_focus=session_focus if isinstance(session_focus, str) else None,
+        session_occasion=session_occasion if isinstance(session_occasion, str) else None,
         topic_pivot=bool(intent_metadata.get("topic_pivot")),
     )
     if rewrite_hints:
@@ -1076,8 +1101,6 @@ async def agent_loop(
         user_message,
         currency=currency,
     )
-
-    _emit_status(_DEFAULT_STATUS_MESSAGE)
 
     iteration_limit = MAX_ITERATIONS
 
