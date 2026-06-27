@@ -150,7 +150,7 @@ def test_rich_cake_colombo_proceeds_with_zone_clarify() -> None:
     assert result.band == "proceed"
 
 
-def test_roses_galle_clarifies_occasion() -> None:
+def test_roses_galle_proceeds_with_product_and_delivery() -> None:
     result = score_request_specificity(
         "Fresh roses to Galle tomorrow",
         session_product_focus=None,
@@ -159,8 +159,20 @@ def test_roses_galle_clarifies_occasion() -> None:
         session_budget_max=None,
         intent_metadata={"target_city": "Galle"},
     )
-    assert result.band == "clarify"
-    assert result.missing_dimension == "occasion"
+    assert result.band == "proceed"
+
+
+def test_birthday_cake_mom_colombo_proceeds_without_date() -> None:
+    result = score_request_specificity(
+        "I need a birthday cake for my mom in Colombo",
+        session_product_focus=None,
+        session_occasion=None,
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata={"target_city": "Colombo"},
+    )
+    assert result.band == "proceed"
+    assert result.clarifying_question is None
 
 
 def test_situational_clarify_prefix() -> None:
@@ -222,3 +234,80 @@ async def test_llm_refine_proceed_when_model_scores_high() -> None:
     )
     assert refined.band == "proceed"
     assert refined.score >= PROCEED_THRESHOLD
+
+
+# P1-5 regression: "I want to buy something nice" must NOT inherit stale session context
+def test_generic_something_nice_clarifies_despite_stale_session() -> None:
+    """P1-5: 'I want to buy something nice' should clarify even with stale birthday/mom session."""
+    result = score_request_specificity(
+        "I want to buy something nice",
+        session_product_focus="chocolate",
+        session_occasion="birthday",
+        session_recipient_hint="mom",
+        session_budget_max=8000.0,
+        intent_metadata={"budget_max": 8000.0},
+    )
+    assert result.band == "clarify", (
+        f"Expected clarify for vague 'something nice' but got {result.band!r} "
+        f"(score={result.score}, dims={result.dimension_scores})"
+    )
+
+
+def test_something_nice_product_dimension_ignores_stale_focus() -> None:
+    """P1-5: 'something nice' product dimension must be 0.0 even with session_product_focus."""
+    from lib.chat.request_specificity import _score_product_dimension
+
+    score = _score_product_dimension(
+        "I want to buy something nice",
+        session_product_focus="chocolate",
+        session_flavor_hint=None,
+        session_recipient_hint=None,
+        intent_metadata={},
+    )
+    assert score == 0.0, f"Expected 0.0 but got {score}"
+
+
+def test_something_nice_occasion_dimension_ignores_stale_context() -> None:
+    """P1-5: 'something nice' occasion dimension must not inflate from stale session."""
+    from lib.chat.request_specificity import _score_occasion_dimension
+
+    score = _score_occasion_dimension(
+        "I want to buy something nice",
+        session_occasion="birthday",
+        session_recipient_hint="mom",
+    )
+    assert score == 0.0, f"Expected 0.0 but got {score}"
+
+
+def test_i_need_a_gift_clarifies_despite_stale_session() -> None:
+    """P2-11: bare 'I need a gift' must not inherit stale mom/birthday session."""
+    result = score_request_specificity(
+        "I need a gift",
+        session_product_focus="chocolate",
+        session_occasion="birthday",
+        session_recipient_hint="mom",
+        session_budget_max=8000.0,
+        intent_metadata={"budget_max": 8000.0},
+    )
+    assert result.band == "clarify", (
+        f"Expected clarify for vague 'I need a gift' but got {result.band!r}"
+    )
+
+
+def test_delivery_only_inquiry_proceeds_without_product_clarify() -> None:
+    """Delivery fee + city + date must not trigger product clarifying question."""
+    message = "Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"
+    metadata = {
+        "requires_delivery_validation": True,
+        "target_city": "Colombo 05",
+    }
+    result = score_request_specificity(
+        message,
+        session_product_focus=None,
+        session_occasion=None,
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata=metadata,
+    )
+    assert result.band == "proceed"
+    assert result.clarifying_question is None

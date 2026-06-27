@@ -10,6 +10,46 @@ from lib.utils.timezone import colombo_today, colombo_today_iso, is_past_colombo
 
 _ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
+_MONTH_NAMES: dict[str, int] = {
+    "january": 1,
+    "jan": 1,
+    "february": 2,
+    "feb": 2,
+    "march": 3,
+    "mar": 3,
+    "april": 4,
+    "apr": 4,
+    "may": 5,
+    "june": 6,
+    "jun": 6,
+    "july": 7,
+    "jul": 7,
+    "august": 8,
+    "aug": 8,
+    "september": 9,
+    "sep": 9,
+    "sept": 9,
+    "october": 10,
+    "oct": 10,
+    "november": 11,
+    "nov": 11,
+    "december": 12,
+    "dec": 12,
+}
+
+# "July 5th", "5 July", "July 5, 2026"
+_NAMED_MONTH_DAY = re.compile(
+    r"\b(?:(?P<month>jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|"
+    r"jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?"
+    r"(?:\s*,?\s*(?P<year>\d{4}))?|"
+    r"(?P<day_leading>\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?"
+    r"(?P<month_leading>jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|"
+    r"jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*(?P<year_leading>\d{4}))?)\b",
+    re.I,
+)
+
 _WEEKDAY_NAMES: dict[str, int] = {
     "monday": 0,
     "tuesday": 1,
@@ -104,8 +144,42 @@ def validate_delivery_date_iso(value: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def _parse_named_month_day(text: str, *, today: date) -> date | None:
+    """Parse 'July 5th', '5 July 2026', etc. Year defaults to today.year (roll forward if past)."""
+    match = _NAMED_MONTH_DAY.search(text)
+    if not match:
+        return None
+    month_key = (match.group("month") or match.group("month_leading") or "").lower()
+    day_str = match.group("day") or match.group("day_leading")
+    year_str = match.group("year") or match.group("year_leading")
+    month = _MONTH_NAMES.get(month_key)
+    if month is None or not day_str:
+        return None
+    try:
+        day = int(day_str)
+    except ValueError:
+        return None
+    year = int(year_str) if year_str else today.year
+    try:
+        parsed = date(year, month, day)
+    except ValueError:
+        return None
+    if not year_str and parsed < today:
+        try:
+            parsed = date(today.year + 1, month, day)
+        except ValueError:
+            return None
+    return parsed
+
+
 def _date_from_raw_value(raw: str, *, today: date) -> str | None:
     """Resolve a single raw date string to validated YYYY-MM-DD or None."""
+    named = _parse_named_month_day(raw, today=today)
+    if named is not None:
+        if named < today:
+            return None
+        return named.isoformat()
+
     iso_match = _ISO_DATE.search(raw)
     if iso_match:
         candidate = iso_match.group(1)
@@ -137,16 +211,17 @@ def normalize_delivery_date(
     if today is None:
         today = colombo_today()
 
+    # Prefer an explicit date in the current user message over stale planner/session args.
+    resolved_from_message = _date_from_raw_value(user_message, today=today)
+    if resolved_from_message is not None:
+        return resolved_from_message
+
     for key in ("delivery_date", "date"):
         raw = tool_args.get(key)
         if isinstance(raw, str) and raw.strip():
             resolved = _date_from_raw_value(raw, today=today)
             if resolved is not None:
                 return resolved
-
-    resolved_from_message = _date_from_raw_value(user_message, today=today)
-    if resolved_from_message is not None:
-        return resolved_from_message
 
     parsed = parse_relative_delivery_date(user_message, today=today)
     if parsed is not None and parsed >= today:

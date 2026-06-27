@@ -173,6 +173,16 @@ def test_route_after_analyze_intent_defaults_to_retrieve_when_intent_missing() -
     assert route_after_analyze_intent(state) == "retrieve_hybrid_context"
 
 
+def test_route_after_analyze_intent_duplicate_proceed_skips_checkout_graph() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="Proceed to checkout")],
+        "intent": "general",
+        "intent_metadata": {"duplicate_checkout_proceed": True},
+        "session_id": "sess-route-dup-proceed",
+    }
+    assert route_after_analyze_intent(state) == "generate_response"
+
+
 def test_route_after_analyze_intent_support_topic_skips_hybrid_context() -> None:
     state: AgentState = {
         "messages": [
@@ -181,6 +191,58 @@ def test_route_after_analyze_intent_support_topic_skips_hybrid_context() -> None
         "intent": "general",
         "intent_metadata": {"support_topic": "quality"},
         "session_id": "sess-route-support",
+    }
+    assert route_after_analyze_intent(state) == "generate_response"
+
+
+def test_route_after_analyze_intent_support_with_delivery_routes_preflight() -> None:
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content="What's the delivery fee to Colombo and what's your return policy?",
+            ),
+        ],
+        "intent": "general",
+        "intent_metadata": {
+            "support_topic": "returns",
+            "requires_delivery_validation": True,
+            "target_city": "Colombo 03",
+        },
+        "session_id": "sess-route-support-delivery",
+    }
+    assert route_after_analyze_intent(state) == "resolve_delivery_context"
+
+
+def test_route_after_analyze_intent_delivery_only_routes_preflight() -> None:
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content=(
+                    "Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"
+                ),
+            ),
+        ],
+        "intent": "discovery",
+        "specificity_band": "clarify",
+        "agent_clarifying_question": "What type of gift — flowers, cake, voucher, or hamper?",
+        "intent_metadata": {
+            "requires_delivery_validation": True,
+            "target_city": "Colombo 05",
+        },
+        "session_id": "sess-route-delivery-only",
+    }
+    assert route_after_analyze_intent(state) == "resolve_delivery_context"
+
+
+def test_route_after_analyze_intent_specificity_clarify_skips_hybrid_context() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="I want to buy something nice")],
+        "intent": "discovery",
+        "specificity_band": "clarify",
+        "agent_clarifying_question": (
+            "What type of gift — flowers, cake, voucher, or hamper?"
+        ),
+        "session_id": "sess-route-specificity",
     }
     assert route_after_analyze_intent(state) == "generate_response"
 

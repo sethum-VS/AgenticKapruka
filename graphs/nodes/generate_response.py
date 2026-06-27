@@ -8,7 +8,7 @@ import logging
 import re
 import secrets
 from datetime import date
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 from google import genai
 from google.genai import types
@@ -29,7 +29,7 @@ from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
-from lib.chat.intent_heuristics import is_budget_refinement_message
+from lib.chat.intent_heuristics import build_guest_checkout_reply, is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.off_topic import impossible_request_subject, off_topic_topic
 from lib.chat.product_curation import (
@@ -126,7 +126,8 @@ _CAROUSEL_NEGATION_PATTERN = re.compile(
     r"no\s+fresh|"
     r"none\s+within|"
     r"no\s+options\s+under|"
-    r"no\s+products|nothing\s+matching|don'?t\s+have\s+any"
+    r"no\s+products|nothing\s+matching|don'?t\s+have\s+any|"
+    r"no\s+(?:cakes?|flowers?|chocolates?|hampers?|gifts?)\s+(?:under|within|below|for)\b"
     r")\b",
     re.I,
 )
@@ -380,6 +381,7 @@ def delivery_claim_guard(
     delivery_city_status: str | None = None,
     delivery_city_confirmed: bool = False,
     delivery_context_relevant: bool = True,
+    state: Mapping[str, object] | None = None,
 ) -> str:
     """Replace ungrounded delivery fee/availability claims when check_delivery is absent."""
     if not delivery_context_relevant:
@@ -388,6 +390,15 @@ def delivery_claim_guard(
         return reply_text
     if _tool_trace_has_check_delivery(tool_trace):
         return reply_text
+    if state is not None:
+        from lib.chat.query_preprocessor import should_defer_delivery_date
+
+        if should_defer_delivery_date(state, user_message):
+            city = extract_target_city(user_message) or "your area"
+            return (
+                f"Here are some Kapruka options for delivery to {city}. "
+                "We can confirm your delivery zone and date at checkout."
+            )
     if _user_named_city_and_date(user_message):
         city = extract_target_city(user_message) or "your city"
         return (
@@ -1343,6 +1354,43 @@ def build_products_carousel_html(
     return render_product_carousel(products)
 
 
+def _delivery_fee_reply_from_state(
+    state: AgentState,
+    user_message: str,
+) -> str | None:
+    """Build a verified delivery-fee line from tool_trace when available."""
+    if not is_delivery_fee_question(user_message):
+        return None
+    fee_invocation = _last_check_delivery_invocation(state.get("tool_trace"))
+    if fee_invocation is None:
+        return None
+    fee_delivery = fee_invocation.get("result")
+    if not isinstance(fee_delivery, dict) or not fee_delivery.get("available"):
+        return None
+    try:
+        from lib.kapruka.types import CheckDeliveryOutput
+
+        fee_output = CheckDeliveryOutput.model_validate(fee_delivery)
+        fee_city = _canonical_city_from_check_delivery_invocation(fee_invocation)
+        if not fee_city or fee_output.rate <= 0:
+            return None
+        if _is_city_only_check_delivery(fee_invocation):
+            return _build_verified_city_delivery_line(
+                city=fee_city,
+                rate=fee_output.rate,
+                currency=fee_output.currency,
+            )
+        return _build_verified_delivery_fee_line(
+            city=fee_city,
+            checked_date=fee_output.checked_date,
+            rate=fee_output.rate,
+            currency=fee_output.currency,
+        )
+    except Exception:
+        logger.debug("generate_response: delivery fee reply failed", exc_info=True)
+        return None
+
+
 def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> str | None:
     """Synthesize a checkout-step reply from run_checkout_graph tool_results."""
     if not tool_results:
@@ -1536,14 +1584,33 @@ async def generate_response(
         }
 
     intent_metadata = state.get("intent_metadata") or {}
+    if isinstance(intent_metadata, dict) and intent_metadata.get("guest_checkout_info"):
+        reply = build_guest_checkout_reply(
+            cart_has_items=bool(intent_metadata.get("guest_checkout_cart_has_items")),
+        )
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+
+    if isinstance(intent_metadata, dict) and intent_metadata.get("duplicate_checkout_proceed"):
+        return {}
+
+    intent_metadata = state.get("intent_metadata") or {}
     if isinstance(intent_metadata, dict) and intent_metadata.get("support_topic"):
         reply = build_support_faq_reply(user_message)
+        fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if fee_reply:
+            reply = f"{reply}\n\n{fee_reply}"
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
         }
     if is_support_question(user_message):
         reply = build_support_faq_reply(user_message)
+        fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if fee_reply:
+            reply = f"{reply}\n\n{fee_reply}"
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
@@ -1628,7 +1695,12 @@ async def generate_response(
         )
         last_search = list(state.get("last_search_products") or [])
         if is_product_detail_turn(user_message):
-            matched = match_product_from_last_search(user_message, last_search)
+            matched = match_product_from_last_search(
+                user_message,
+                last_search,
+                last_visible_products=list(state.get("last_visible_products") or []),
+                session_product_focus=state.get("session_product_focus"),
+            )
             if matched is not None:
                 detail = summarize_product_from_carousel(matched)
                 error_reply = f"{error_reply}\n\nFrom our earlier results: {detail}"
@@ -1833,6 +1905,8 @@ async def generate_response(
         matched = match_product_from_last_search(
             user_message,
             state.get("last_search_products"),
+            last_visible_products=last_visible_products or None,
+            session_product_focus=session_product_focus,
         )
         get_payload = (tool_results or {}).get(GET_PRODUCT_TOOL)
         detail_reply: str | None = None
@@ -1938,6 +2012,13 @@ async def generate_response(
         visible_products=visible_products,
         allow_stale_fallback=allow_stale_fallback,
     )
+
+    # Delivery fee fast-path: answer directly from check_delivery when the user asks
+    # about delivery cost and a verified check_delivery result is available.
+    if is_delivery_fee_question(user_message) and not visible_products:
+        fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if fee_reply:
+            return _assistant_response_fields(fee_reply, products_html=products_html)
 
     effective_tool_results = _suppress_delivery_tool_results(
         tool_results,
@@ -2047,6 +2128,7 @@ async def generate_response(
         delivery_city_status=state.get("delivery_city_status"),
         delivery_city_confirmed=bool(state.get("session_delivery_city_confirmed")),
         delivery_context_relevant=delivery_context_relevant,
+        state=dict(state),
     )
     if delivery_context_relevant:
         reply_text = _apply_verified_dated_delivery_template(reply_text, tool_trace)

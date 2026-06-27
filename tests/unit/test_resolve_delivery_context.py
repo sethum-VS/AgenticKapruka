@@ -96,8 +96,41 @@ async def test_resolve_delivery_context_ambiguous_colombo_clarifies() -> None:
 
     assert result["delivery_city_status"] == "ambiguous"
     assert result["agent_clarifying_question"] == ambiguous.customer_message
-    assert result["agent_loop_exit_reason"] == "ask_user"
+    assert result["delivery_context_ready"] is True
+    assert result.get("agent_loop_exit_reason") is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_delivery_context_ambiguous_colombo_blocks_on_delivery_intent() -> None:
+    service = AsyncMock(spec=KaprukaService)
+    state: AgentState = {
+        "messages": [HumanMessage(content="Can you deliver to Colombo this Sunday?")],
+        "session_id": "sess-resolve-delivery-intent",
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "en",
+            "requires_delivery_validation": True,
+            "target_city": "Colombo",
+            "budget_max": None,
+        },
+    }
+    ambiguous = CityResolution(
+        status="ambiguous",
+        candidates=["Colombo 01", "Colombo 02"],
+        customer_message="Colombo has several delivery zones. Which area?",
+    )
+    with patch(
+        "graphs.nodes.resolve_delivery_context.resolve_delivery_city",
+        new=AsyncMock(return_value=ambiguous),
+    ):
+        result = await resolve_delivery_context(
+            state,
+            kapruka_service=service,
+            client_ip=_CLIENT_IP,
+        )
+
     assert result["delivery_context_ready"] is False
+    assert result["agent_loop_exit_reason"] == "ask_user"
 
 
 @pytest.mark.asyncio

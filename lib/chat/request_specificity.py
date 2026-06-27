@@ -20,7 +20,7 @@ from lib.chat.intent_heuristics import (
     classify_routing_guard,
     is_bare_category_pivot,
     is_budgeted_gift_ideas_message,
-    is_topic_pivot_message,
+    is_guest_checkout_question,
 )
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import FLASH_MODEL
@@ -124,6 +124,8 @@ def should_bypass_specificity_scorer(
         return True
     if guard_intent is not None:
         return True
+    if is_guest_checkout_question(stripped):
+        return True
     if classify_routing_guard(stripped) is not None:
         return True
     if stripped == PROCEED_CHECKOUT_MESSAGE:
@@ -139,8 +141,25 @@ def should_bypass_specificity_scorer(
     return bool(is_budgeted_gift_ideas_message(stripped))
 
 
+_GENERIC_WANTS_SOMETHING_RE = re.compile(
+    r"\bsomething\s+(?:nice|good|great|special|beautiful|pretty|awesome|lovely|cool|thoughtful|unique)\b"
+    r"|\banything\s+(?:nice|good|great|special|beautiful|pretty|awesome|lovely|cool|thoughtful)\b"
+    r"|\bi\s+(?:want|need)\s+to\s+(?:buy|get|order|send)\s+something\b",
+    re.I,
+)
+_BARE_GIFT_NEED_RE = re.compile(
+    r"\bi\s+(?:need|want)\s+(?:a\s+)?(?:gift|present)\b",
+    re.I,
+)
+
+
 def _is_extra_vague_gift_query(message: str) -> bool:
-    return bool(_VAGUE_GIFT_RE.search(message.strip()))
+    stripped = message.strip()
+    return bool(
+        _VAGUE_GIFT_RE.search(stripped)
+        or _GENERIC_WANTS_SOMETHING_RE.search(stripped)
+        or _BARE_GIFT_NEED_RE.search(stripped)
+    )
 
 
 def _score_product_dimension(
@@ -162,9 +181,10 @@ def _score_product_dimension(
         return 1.0
     if is_bare_category_pivot(stripped) is not None:
         return 1.0
-    focus = (session_product_focus or "").strip().lower()
-    if focus and focus != "gift":
-        return 1.0
+    if not _is_extra_vague_gift_query(stripped):
+        focus = (session_product_focus or "").strip().lower()
+        if focus and focus != "gift":
+            return 1.0
     flavor = (session_flavor_hint or intent_metadata.get("session_flavor_hint") or "").strip()
     if flavor:
         return 0.5
@@ -184,10 +204,9 @@ def _score_occasion_dimension(
     stripped = message.strip()
     has_occasion = bool(_OCCASION_RE.search(stripped))
     has_recipient = bool(_RECIPIENT_RE.search(stripped) or _FOR_RECIPIENT_RE.search(stripped))
-    if is_topic_pivot_message(stripped):
-        has_occasion = has_occasion or bool(session_occasion)
-        has_recipient = has_recipient or bool(session_recipient_hint)
-    else:
+    # Only inherit stale session context for follow-up / pivot turns, not generic fresh queries.
+    # Inheriting context for "I want to buy something nice" inflates score and skips clarification.
+    if not _is_extra_vague_gift_query(stripped):
         has_occasion = has_occasion or bool(session_occasion)
         has_recipient = has_recipient or bool(session_recipient_hint)
     if has_occasion and has_recipient:
@@ -224,6 +243,45 @@ def _score_delivery_dimension(
     return 0.0
 
 
+def is_delivery_only_inquiry(
+    message: str,
+    *,
+    intent_metadata: IntentMetadata | None = None,
+) -> bool:
+    """True when the turn is only about delivery area/date/fees, not product discovery."""
+    from lib.chat.query_preprocessor import (
+        QueryPreprocessor,
+        _has_perishable_gift_intent,
+    )
+
+    meta: IntentMetadata = intent_metadata or QueryPreprocessor().process(message)
+    if not meta.get("requires_delivery_validation"):
+        return False
+    stripped = message.strip()
+    if _has_perishable_gift_intent(stripped) or contains_product_id(stripped):
+        return False
+    delivery_score = _score_delivery_dimension(
+        stripped,
+        intent_metadata=meta,
+        session_delivery_date=meta.get("session_delivery_date") or meta.get("delivery_date"),
+    )
+    if delivery_score < 1.0:
+        return False
+    product_score = _score_product_dimension(
+        stripped,
+        session_product_focus=None,
+        session_flavor_hint=None,
+        session_recipient_hint=None,
+        intent_metadata=meta,
+    )
+    occasion_score = _score_occasion_dimension(
+        stripped,
+        session_occasion=None,
+        session_recipient_hint=None,
+    )
+    return product_score < 0.5 and occasion_score < 0.5
+
+
 def _score_budget_dimension(
     message: str,
     *,
@@ -237,9 +295,11 @@ def _score_budget_dimension(
         return 1.0
     budget_meta = intent_metadata.get("budget_max")
     if isinstance(budget_meta, (int, float)) and budget_meta > 0:
-        return 1.0
+        if not _is_extra_vague_gift_query(stripped):
+            return 1.0
     if isinstance(session_budget_max, (int, float)) and session_budget_max > 0:
-        return 1.0
+        if not _is_extra_vague_gift_query(stripped):
+            return 1.0
     if extract_max_price(stripped) is not None:
         return 0.5
     return 0.0
@@ -355,6 +415,11 @@ def score_request_specificity(
         ),
     }
     score = _weighted_score(dimension_scores)
+    delivery_score = _score_delivery_dimension(
+        stripped,
+        intent_metadata=meta,
+        session_delivery_date=meta.get("session_delivery_date") or meta.get("delivery_date"),
+    )
     if meta.get("target_city") and (
         meta.get("session_delivery_date")
         or meta.get("delivery_date")
@@ -379,8 +444,13 @@ def score_request_specificity(
         dimension_scores.get("product", 0.0) >= 1.0
         and dimension_scores.get("occasion", 0.0) < 0.5
         and dimension_scores.get("budget", 0.0) < 1.0
+        and delivery_score < 1.0
     ):
         band = "clarify"
+    if dimension_scores.get("product", 0.0) >= 1.0 and delivery_score >= 1.0:
+        band = "proceed"
+    if is_delivery_only_inquiry(stripped, intent_metadata=meta):
+        band = "proceed"
     if (
         dimension_scores.get("budget", 0.0) >= 1.0
         and dimension_scores.get("product", 0.0) < 0.5

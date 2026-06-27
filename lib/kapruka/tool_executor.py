@@ -8,6 +8,11 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from graphs.nodes.resolve_cart_product import match_products_by_phrase
+from lib.chat.product_reference import (
+    _normalize_ordinal_phrase,
+    is_ordinal_phrase,
+    resolve_product_reference,
+)
 from graphs.state import AgentState
 from lib.kapruka.errors import KaprukaError, KaprukaRateLimitError
 from lib.kapruka.service import KaprukaService
@@ -125,20 +130,44 @@ def enrich_get_product_args(
         if isinstance(session_focus, str) and session_focus.strip():
             phrase = session_focus.strip()
 
-    if phrase and last_search:
-        for threshold in (0.6, 0.4):
-            matched, _tied, _question = match_products_by_phrase(
-                phrase,
-                last_search,
-                threshold=threshold,
+    last_visible = [
+        item for item in (state.get("last_visible_products") or []) if isinstance(item, dict)
+    ]
+
+    if phrase:
+        ordinal_phrase = _normalize_ordinal_phrase(phrase)
+        if is_ordinal_phrase(ordinal_phrase):
+            reference = resolve_product_reference(
+                ordinal_phrase,
+                last_visible_products=last_visible or None,
+                last_search_products=last_search or None,
+                session_product_focus=state.get("session_product_focus"),
             )
-            if matched is not None:
-                pid = matched.get("id")
-                if pid is not None:
-                    resolved = {**enriched, "product_id": str(pid)}
+            if reference is not None and reference.get("status") == "resolved":
+                product = reference.get("product")
+                if isinstance(product, dict) and product.get("id") is not None:
+                    resolved = {**enriched, "product_id": str(product["id"])}
                     for key in name_keys:
                         resolved.pop(key, None)
                     return resolved, None
+
+    if phrase and last_search:
+        for candidates in (last_visible, last_search):
+            if not candidates:
+                continue
+            for threshold in (0.6, 0.4):
+                matched, _tied, _question = match_products_by_phrase(
+                    phrase,
+                    candidates,
+                    threshold=threshold,
+                )
+                if matched is not None:
+                    pid = matched.get("id")
+                    if pid is not None:
+                        resolved = {**enriched, "product_id": str(pid)}
+                        for key in name_keys:
+                            resolved.pop(key, None)
+                        return resolved, None
 
     if phrase or any(key in args for key in name_keys):
         return enriched, {

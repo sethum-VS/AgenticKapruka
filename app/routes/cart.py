@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from app.dependencies import get_redis
-from app.templating import render_cart_partial
+from app.middleware.errors import human_readable_message
+from app.templating import render_cart_add_error_response, render_cart_partial
 from lib.chat.deps import client_ip_from_request, ensure_kapruka_service
 from lib.chat.session import SESSION_COOKIE_NAME, cookie_params, resolve_chat_thread_id
 from lib.kapruka.errors import KaprukaError, KaprukaNotFoundError
@@ -25,8 +28,13 @@ from lib.redis.client import RedisClient
 from lib.redis.session import get_session_currency
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 RedisDep = Annotated[RedisClient, Depends(get_redis)]
+
+
+def _is_htmx_request(request: Request) -> bool:
+    return request.headers.get("HX-Request", "").lower() == "true"
 
 
 def _cart_html_response(*, html: str, new_cookie: str | None) -> HTMLResponse:
@@ -45,6 +53,32 @@ async def _cart_partial_response(
     currency = await get_session_currency(redis_client, session_id)
     items = await get_cart(redis_client, session_id)
     html = render_cart_partial(items=items, currency=currency)
+    return _cart_html_response(html=html, new_cookie=new_cookie)
+
+
+async def _cart_add_error_response(
+    redis_client: RedisClient,
+    session_id: str,
+    *,
+    new_cookie: str | None,
+    product_id: str,
+    error_code: str,
+    message: str,
+    quantity: int,
+    icing_text: str | None,
+) -> HTMLResponse:
+    """Return cart panel with visible error + retry (HTTP 200 so HTMX swaps)."""
+    currency = await get_session_currency(redis_client, session_id)
+    items = await get_cart(redis_client, session_id)
+    html = render_cart_add_error_response(
+        items=items,
+        currency=currency,
+        product_id=product_id,
+        error_code=error_code,
+        message=message,
+        quantity=quantity,
+        icing_text=icing_text,
+    )
     return _cart_html_response(html=html, new_cookie=new_cookie)
 
 
@@ -72,8 +106,10 @@ async def cart_add(
     if not is_valid_product_id(product_id):
         raise HTTPException(status_code=422, detail="Invalid product ID")
 
-    currency = await get_session_currency(redis_client, thread_id)
-    service = await ensure_kapruka_service(request, redis_client)
+    currency_task = asyncio.create_task(get_session_currency(redis_client, thread_id))
+    service_task = asyncio.create_task(ensure_kapruka_service(request, redis_client))
+    currency = await currency_task
+    service = await service_task
 
     try:
         product = await service.get_product(
@@ -82,15 +118,73 @@ async def cart_add(
             currency=currency,
         )
     except KaprukaNotFoundError as exc:
+        if _is_htmx_request(request):
+            return await _cart_add_error_response(
+                redis_client,
+                thread_id,
+                new_cookie=new_cookie,
+                product_id=product_id,
+                error_code=exc.code,
+                message=human_readable_message(exc),
+                quantity=quantity,
+                icing_text=icing_text,
+            )
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except KaprukaError as exc:
+        if _is_htmx_request(request):
+            return await _cart_add_error_response(
+                redis_client,
+                thread_id,
+                new_cookie=new_cookie,
+                product_id=product_id,
+                error_code=exc.code,
+                message=human_readable_message(exc),
+                quantity=quantity,
+                icing_text=icing_text,
+            )
         raise HTTPException(status_code=502, detail=exc.message) from exc
+    except Exception as exc:
+        logger.warning("cart_add get_product failed for %s", product_id, exc_info=True)
+        if _is_htmx_request(request):
+            return await _cart_add_error_response(
+                redis_client,
+                thread_id,
+                new_cookie=new_cookie,
+                product_id=product_id,
+                error_code="upstream_error",
+                message="Please try again in a moment.",
+                quantity=quantity,
+                icing_text=icing_text,
+            )
+        raise
 
     if not product.in_stock:
+        if _is_htmx_request(request):
+            return await _cart_add_error_response(
+                redis_client,
+                thread_id,
+                new_cookie=new_cookie,
+                product_id=product_id,
+                error_code="product_out_of_stock",
+                message="That product is no longer in stock.",
+                quantity=quantity,
+                icing_text=icing_text,
+            )
         raise HTTPException(status_code=422, detail="Product is out of stock")
 
     price_amount = product.price.amount
     if price_amount is None:
+        if _is_htmx_request(request):
+            return await _cart_add_error_response(
+                redis_client,
+                thread_id,
+                new_cookie=new_cookie,
+                product_id=product_id,
+                error_code="validation_error",
+                message="Product price is unavailable.",
+                quantity=quantity,
+                icing_text=icing_text,
+            )
         raise HTTPException(status_code=422, detail="Product price is unavailable")
 
     try:

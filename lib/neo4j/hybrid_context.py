@@ -488,6 +488,7 @@ _CATEGORY_SEARCH_TERMS: dict[str, str] = {
     "flowers": "flower",
     "birthday": "birthday cake",
     "cakes": "cake",
+    "tea": "tea gift",
     "gifts": "cake",
     "gift": "cake",
     "food": "cake",
@@ -495,6 +496,8 @@ _CATEGORY_SEARCH_TERMS: dict[str, str] = {
     "perfumes": "perfume",
     "jewellery": "jewelry",
 }
+
+_VEGETARIAN_RE = re.compile(r"\bvegetarian\b", re.I)
 
 # Neo4j Category nodes are Kapruka parent departments (e.g. Cakes, Flowers). They are not
 # valid kapruka_search_products category filters — only occasion/subcategory names work
@@ -547,6 +550,7 @@ def _product_like_tokens(message: str) -> list[str]:
 _PRODUCT_TOKEN_PRIORITY: tuple[str, ...] = (
     "chocolate",
     "chocolates",
+    "tea",
     "cake",
     "cakes",
     "flower",
@@ -557,6 +561,18 @@ _PRODUCT_TOKEN_PRIORITY: tuple[str, ...] = (
     "gift",
     "gifts",
 )
+
+_RELEVANCE_SORT_PRODUCTS_RE = re.compile(
+    r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b",
+    re.I,
+)
+
+
+def _budget_search_sort(query: str) -> str:
+    """Tea/coffee gift searches need relevance sort; price_asc surfaces cheap snacks."""
+    if _RELEVANCE_SORT_PRODUCTS_RE.search(query):
+        return "relevance"
+    return "price_asc"
 
 
 def _primary_product_token(message: str) -> str | None:
@@ -639,9 +655,12 @@ def is_birthday_cake_scoped_turn(
         return True
     if topic_pivot:
         return False
+    stripped = query.strip()
+    # Birthday + chocolate without "cake" still scopes to birthday cakes (not confectionery)
+    if _BIRTHDAY_OCCASION_RE.search(stripped) and _CHOCOLATE_FLAVOR_RE.search(stripped):
+        return True
     if not birthday_occasion_from_context(hybrid_context, user_message=query):
         return False
-    stripped = query.strip()
     return bool(stripped and _CAKE_TERM.search(stripped))
 
 
@@ -1120,6 +1139,8 @@ def build_discovery_search_args(
         fallback_category = "Birthday"
 
     args: dict[str, Any] = {"q": query, "currency": currency}
+    if _VEGETARIAN_RE.search(query):
+        args["q"] = query.strip()
     if category:
         args["category"] = category
     elif not topic_pivot and (
@@ -1133,12 +1154,12 @@ def build_discovery_search_args(
         args["category"] = "Birthday"
 
     if _PRICE_SORT_RE.search(query):
-        args["sort"] = "price_asc"
+        args["sort"] = _budget_search_sort(query)
 
     budget_cap = extract_budget(query)
     if budget_cap is not None:
         args["max_price"] = budget_cap.amount
-        args["sort"] = "price_asc"
+        args["sort"] = _budget_search_sort(query)
         args["currency"] = budget_cap.currency
         primary_token = _primary_product_token(query)
         if primary_token:
@@ -1155,7 +1176,7 @@ def build_discovery_search_args(
         max_price = _extract_max_price(query)
         if max_price is not None:
             args["max_price"] = max_price
-            args["sort"] = "price_asc"
+            args["sort"] = _budget_search_sort(query)
             primary_token = _primary_product_token(query)
             if primary_token:
                 args["q"] = _birthday_biased_product_keyword(
@@ -1167,7 +1188,15 @@ def build_discovery_search_args(
                 args["q"] = _fallback_search_query(fallback_category)
 
     if _MOM_BIRTHDAY_RE.search(query) and "gift" in query.lower():
-        args["q"] = "Happy Birthday Mom"
+        # Use product-specific q when the query carries a product focus
+        if _CHOCOLATE_FLAVOR_RE.search(query):
+            args["q"] = "chocolate birthday cake"
+            args.setdefault("category", "Birthday")
+        elif _CAKE_TERM.search(query):
+            args["q"] = "birthday cake"
+            args.setdefault("category", "Birthday")
+        else:
+            args["q"] = "Happy Birthday Mom"
 
     if _is_meta_catalog_query(query):
         args["q"] = _fallback_search_query(fallback_category)
@@ -1183,6 +1212,9 @@ def build_discovery_search_args(
     if anniversary_occasion:
         args["q"] = _anniversary_biased_search_q(query)
 
+    if re.search(r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b", query, re.I):
+        args.pop("category", None)
+
     if intent_metadata:
         session_budget = intent_metadata.get("budget_max")
         budget_currency = intent_metadata.get("budget_currency")
@@ -1192,7 +1224,7 @@ def build_discovery_search_args(
             and "max_price" not in args
         ):
             args["max_price"] = float(session_budget)
-            args.setdefault("sort", "price_asc")
+            args.setdefault("sort", _budget_search_sort(query))
         if isinstance(budget_currency, str) and budget_currency.strip():
             args["currency"] = budget_currency.strip().upper()
 
@@ -1222,6 +1254,14 @@ def _birthday_planner_q_needs_override(planner_q: str, user_message: str) -> boo
     if _should_canonicalize_birthday_search_q(user_message):
         canonical = canonical_birthday_cake_search_q(user_message)
         return stripped.lower() != canonical.lower()
+    # Birthday + chocolate intent but planner didn't include "cake" in the query → override
+    # e.g. planner used "chocolate birthday gift" but should be "chocolate birthday cake"
+    if (
+        _BIRTHDAY_OCCASION_RE.search(user_message)
+        and _CHOCOLATE_FLAVOR_RE.search(user_message)
+        and "cake" not in stripped.lower()
+    ):
+        return True
     return False
 
 
@@ -1307,7 +1347,15 @@ def merge_planner_search_args(
         hybrid_context,
         topic_pivot=topic_pivot,
     )
-    if birthday_scoped and _birthday_planner_q_needs_override(planner_q, discovery_message):
+    needs_override = _birthday_planner_q_needs_override(planner_q, discovery_message)
+    logger.debug(
+        "merge_planner_search_args: planner_q=%r birthday_scoped=%s needs_override=%s canonical_q=%r",
+        planner_q,
+        birthday_scoped,
+        needs_override,
+        canonical.get("q"),
+    )
+    if birthday_scoped and needs_override:
         if "q" in canonical:
             merged["q"] = canonical["q"]
 
@@ -1320,6 +1368,16 @@ def merge_planner_search_args(
     for key in ("category", "max_price", "sort", "currency"):
         if key in canonical:
             merged[key] = canonical[key]
+
+    if re.search(r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b", user_message, re.I):
+        merged.pop("category", None)
+    elif str(merged.get("category") or "").strip().lower() == "birthday" and re.search(
+        r"\btea\b",
+        str(merged.get("q") or ""),
+        re.I,
+    ):
+        merged.pop("category", None)
+
     return merged
 
 

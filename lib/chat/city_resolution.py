@@ -10,7 +10,7 @@ from lib.kapruka.service import KaprukaService
 
 CityResolutionStatus = Literal["resolved", "ambiguous", "not_found", "missing"]
 
-_COLOMBO_ZONE = re.compile(r"^colombo(?:\s+\d{2})?$", re.I)
+_COLOMBO_ZONE = re.compile(r"^colombo\s+\d{2}$", re.I)
 _AMBIGUOUS_CANDIDATE_LIMIT = 5
 
 
@@ -78,21 +78,22 @@ async def resolve_delivery_city(
 
     cities = await service.list_delivery_cities(client_ip, query=stripped, limit=limit)
 
+    if _is_bare_colombo(stripped):
+        colombo_zones = [city for city in cities if _COLOMBO_ZONE.match(city.strip())]
+        if len(colombo_zones) > 1:
+            candidates = colombo_zones[:_AMBIGUOUS_CANDIDATE_LIMIT]
+            return CityResolution(
+                status="ambiguous",
+                candidates=candidates,
+                customer_message=_ambiguous_colombo_message(candidates),
+            )
+
     exact = _exact_match(stripped, cities)
     if exact is not None:
         return CityResolution(status="resolved", canonical=exact)
 
     if len(cities) == 1:
         return CityResolution(status="resolved", canonical=cities[0])
-
-    if _is_bare_colombo(stripped) and len(cities) > 1:
-        colombo_zones = [city for city in cities if _COLOMBO_ZONE.match(city.strip())]
-        candidates = (colombo_zones or cities)[:_AMBIGUOUS_CANDIDATE_LIMIT]
-        return CityResolution(
-            status="ambiguous",
-            candidates=candidates,
-            customer_message=_ambiguous_colombo_message(candidates),
-        )
 
     if not cities:
         return CityResolution(status="not_found", customer_message=build_city_not_found_message())

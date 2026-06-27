@@ -5,7 +5,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from graphs.nodes.analyze_intent import _extract_latest_user_message
+from graphs.nodes.resolve_delivery_context import (
+    _preflight_check_delivery,
+    _resolve_session_delivery_city,
+)
 from graphs.state import AgentState
+from lib.chat.product_detail import is_delivery_fee_question
 from lib.kapruka.errors import KaprukaNotFoundError, KaprukaValidationError
 from lib.kapruka.service import KaprukaService
 from lib.redis.cart import CartLimitExceeded, add_item, get_cart
@@ -199,4 +205,23 @@ async def execute_cart_action(
             "If checkout fails, refresh and try again."
         )
 
-    return {"cart_action_result": result_payload}
+    updates: dict[str, Any] = {"cart_action_result": result_payload}
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if (
+        is_delivery_fee_question(user_message)
+        and kapruka_service is not None
+        and client_ip
+    ):
+        city = _resolve_session_delivery_city(state, user_message) or state.get(
+            "session_delivery_city_canonical"
+        )
+        if isinstance(city, str) and city.strip():
+            preflight = await _preflight_check_delivery(
+                kapruka_service=kapruka_service,
+                client_ip=client_ip,
+                city=city.strip(),
+                product_id=product_id,
+            )
+            updates["tool_trace"] = [preflight]
+
+    return updates

@@ -270,6 +270,29 @@ def test_build_discovery_search_args_parses_under_price_budget() -> None:
     assert args["category"] == "Birthday"
 
 
+def test_build_discovery_search_args_tea_gift_under_budget() -> None:
+    """Tea gift queries must search for tea, not generic gift/chocolate."""
+    args = build_discovery_search_args(
+        "tea gift under Rs 5000",
+        {},
+        currency="LKR",
+    )
+    assert "tea" in args["q"].lower()
+    assert args.get("max_price") == 5000.0
+    assert args.get("sort") == "relevance"
+
+
+def test_build_discovery_search_args_gift_ideas_tea_colleague_uses_relevance_sort() -> None:
+    args = build_discovery_search_args(
+        "Gift ideas under Rs. 5,000 for a colleague who loves tea",
+        {},
+        currency="LKR",
+    )
+    assert "tea" in args["q"].lower()
+    assert args.get("max_price") == 5000.0
+    assert args.get("sort") == "relevance"
+
+
 def test_build_discovery_search_args_wife_birthday_chocolate_prefers_chocolate_gift() -> None:
     args = build_discovery_search_args(
         "wife birthday chocolate under 6000",
@@ -641,3 +664,91 @@ def test_merge_planner_search_args_roses_galle_strips_city() -> None:
     )
     assert "Galle" not in merged["q"]
     assert "roses" in merged["q"].lower()
+
+
+# P0-1 regression: mom-birthday + chocolate + budget must search "chocolate birthday cake"
+def test_build_discovery_search_args_mom_birthday_chocolate_budget_uses_chocolate_cake_q() -> None:
+    """P0-1: 'birthday gift for mom ... loves chocolate budget 8000' must not return Happy Birthday Mom q."""
+    args = build_discovery_search_args(
+        "birthday gift for mom Colombo loves chocolate budget 8000",
+        {},
+        currency="LKR",
+    )
+    assert "chocolate birthday cake" in args["q"].lower(), f"Expected chocolate birthday cake, got {args['q']!r}"
+    assert args.get("category") == "Birthday"
+    assert args["max_price"] == 8000.0
+
+
+def test_build_discovery_search_args_mom_birthday_no_product_falls_back_to_happy_birthday_mom() -> None:
+    """P0-1: bare 'birthday gift for mom' with no product focus keeps Happy Birthday Mom."""
+    args = build_discovery_search_args(
+        "birthday gift for mom Colombo budget 8000",
+        {},
+        currency="LKR",
+    )
+    # No chocolate or cake in query — should fall back to generic
+    assert args["q"] == "Happy Birthday Mom"
+    assert args["max_price"] == 8000.0
+
+
+def test_build_discovery_search_args_mom_birthday_cake_uses_birthday_cake_q() -> None:
+    """P0-1: 'birthday gift for mom, cake' without chocolate → 'birthday cake' q."""
+    args = build_discovery_search_args(
+        "birthday gift for mom I want a cake budget 5000",
+        {},
+        currency="LKR",
+    )
+    assert "birthday cake" in args["q"].lower(), f"Got {args['q']!r}"
+    assert args.get("category") == "Birthday"
+
+
+def test_merge_planner_search_args_birthday_chocolate_gift_overrides_to_cake() -> None:
+    """P0-1 regression: planner uses 'chocolate birthday gift' but must be overridden to 'chocolate birthday cake'."""
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "chocolate birthday gift", "delivery_city": "Colombo"},
+        user_message="birthday gift for mom Colombo loves chocolate budget 8000",
+        hybrid_context={"hints": {"exclude_categories": "Flower, Flowers, Bouquet, Floral"}, "product_count": 0},
+        currency="LKR",
+        intent_metadata={"budget_max": 8000.0, "budget_currency": "LKR"},
+    )
+    assert "cake" in merged["q"].lower(), (
+        f"Expected 'chocolate birthday cake' or similar, got {merged['q']!r}"
+    )
+    assert "condom" not in merged["q"].lower()
+
+
+def test_birthday_planner_q_needs_override_chocolate_gift_returns_true() -> None:
+    """P0-1: planner q 'chocolate birthday gift' needs override for birthday+chocolate query."""
+    from lib.neo4j.hybrid_context import _birthday_planner_q_needs_override
+
+    assert _birthday_planner_q_needs_override(
+        "chocolate birthday gift",
+        "birthday gift for mom Colombo loves chocolate budget 8000",
+    )
+
+
+def test_birthday_planner_q_needs_override_already_correct_returns_false() -> None:
+    """P0-1: planner q already set to 'chocolate birthday cake' should NOT be overridden."""
+    from lib.neo4j.hybrid_context import _birthday_planner_q_needs_override
+
+    assert not _birthday_planner_q_needs_override(
+        "chocolate birthday cake",
+        "birthday gift for mom Colombo loves chocolate budget 8000",
+    )
+
+
+def test_merge_planner_search_args_tea_strips_birthday_category() -> None:
+    """Tea queries must not inherit a stale Birthday category filter from hybrid hints."""
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "tea gift", "category": "Birthday", "max_price": 5000},
+        user_message="tea gift under Rs 5000",
+        hybrid_context={"hints": {"category": "Birthday"}},
+        currency="LKR",
+        intent_metadata={"budget_max": 5000.0, "budget_currency": "LKR"},
+    )
+    assert "tea" in merged["q"].lower()
+    assert "category" not in merged

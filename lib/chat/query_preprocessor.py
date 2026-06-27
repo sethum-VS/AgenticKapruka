@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Literal, Mapping
 
 from lib.chat.delivery_dates import normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
@@ -189,6 +189,37 @@ def extract_target_city(text: str) -> str | None:
     if match:
         return _normalize_city(match.group(1))
     return None
+
+
+def should_defer_delivery_date(
+    state: Mapping[str, object],
+    user_message: str,
+) -> bool:
+    """Defer delivery date collection to checkout for gift discovery that names a city."""
+    if _has_delivery_intent(user_message):
+        return False
+    session_date = state.get("session_delivery_date") or state.get("delivery_date")
+    if isinstance(session_date, str) and session_date.strip():
+        return False
+    if normalize_delivery_date({}, user_message) is not None:
+        return False
+    intent_metadata = state.get("intent_metadata")
+    metadata: dict[str, object] = (
+        dict(intent_metadata) if isinstance(intent_metadata, dict) else {}
+    )
+    target_city = metadata.get("target_city") or extract_target_city(user_message)
+    if not (isinstance(target_city, str) and target_city.strip()):
+        return False
+    if _has_perishable_gift_intent(user_message):
+        return True
+    if re.search(r"\bbirthday\b", user_message, re.I) and re.search(
+        r"\bcake\b",
+        user_message,
+        re.I,
+    ):
+        return True
+    session_focus = state.get("session_product_focus")
+    return isinstance(session_focus, str) and bool(session_focus.strip())
 
 
 def is_delivery_context_relevant_turn(

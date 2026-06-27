@@ -47,6 +47,9 @@ def test_cart_drawer_js_registers_alpine_component() -> None:
     assert "syncCountFromPanel" in source
     assert 'target.id !== "cart-panel"' in source
     assert "data-item-count" in source
+    assert "proceedCheckoutInFlight" in source
+    assert "isChatFormInFlight" in source
+    assert "proceedToCheckoutFromDrawer" in source
 
 
 def test_cart_drawer_empty_state() -> None:

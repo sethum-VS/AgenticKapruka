@@ -8,6 +8,7 @@ from typing import Any
 from graphs.checkout_state import CHECKOUT_STEP_ORDER, CheckoutState, next_checkout_step
 from graphs.state import CheckoutStep
 from lib.chat.delivery_dates import normalize_delivery_date
+from lib.chat.intent_heuristics import is_proceed_checkout_message
 from lib.chat.query_preprocessor import extract_target_city
 
 _ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
@@ -105,6 +106,8 @@ def apply_chat_message_to_checkout(state: CheckoutState, message: str) -> Checko
     """Merge parsed fields from a user message into checkout state."""
     text = message.strip()
     if not text:
+        return state
+    if is_proceed_checkout_message(text):
         return state
 
     current = state.get("current_step") or "cart"

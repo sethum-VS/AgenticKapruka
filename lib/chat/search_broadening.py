@@ -46,6 +46,11 @@ def broaden_search_args(
         return None
 
     if step == "gift_voucher_fallback":
+        if re.search(r"\btea\b", q, re.I):
+            simplified = "tea" if q.lower().strip() != "tea" else None
+            if simplified:
+                return {**args, "q": simplified}
+            return None
         if not _GIFT_IN_Q.search(q):
             return None
         if q.lower().strip() in {"voucher", "gift voucher"}:
@@ -59,6 +64,8 @@ def broaden_search_args(
         return {**args, "q": "voucher"}
 
     if step == "simplify_q":
+        if re.search(r"\btea\b", q, re.I) and re.search(r"\bgift\b", q, re.I):
+            return {**args, "q": "tea"}
         if str(args.get("category") or "").strip().lower() == "birthday":
             return None
         new_q = q

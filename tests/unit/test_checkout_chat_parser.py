@@ -99,3 +99,17 @@ def test_review_confirmation_matches_place_the_order() -> None:
 
     assert updated.get("action") == "advance"
     assert updated.get("target_step") == "review"
+
+
+def test_apply_chat_message_ignores_cart_drawer_proceed_trigger() -> None:
+    """Duplicate drawer phrase must not be parsed as a delivery city."""
+    from lib.chat.intent_heuristics import PROCEED_CHECKOUT_MESSAGE
+
+    state = initial_checkout_state(session_id=_SESSION_ID)
+    state["current_step"] = "delivery_city"
+    state["step_valid"] = {"cart": True}
+
+    updated = apply_chat_message_to_checkout(state, PROCEED_CHECKOUT_MESSAGE)
+
+    assert updated == state
+    assert "delivery_city" not in updated or not updated.get("delivery_city")

@@ -63,6 +63,24 @@ def test_normalize_delivery_date_from_user_message_when_args_past() -> None:
     assert resolved == "2026-06-13"
 
 
+def test_normalize_delivery_date_july_5th_from_message() -> None:
+    """Named month/day in user message resolves to ISO (P0 delivery date bug)."""
+    saturday = date(2026, 6, 27)
+    resolved = normalize_delivery_date({}, "Please deliver on July 5th", today=saturday)
+    assert resolved == "2026-07-05"
+
+
+def test_normalize_delivery_date_prefers_message_over_stale_args() -> None:
+    """Explicit date in message wins over stale session/planner args."""
+    saturday = date(2026, 6, 27)
+    resolved = normalize_delivery_date(
+        {"delivery_date": "2026-06-28"},
+        "delivery on July 5 please",
+        today=saturday,
+    )
+    assert resolved == "2026-07-05"
+
+
 def test_normalize_delivery_date_missing_returns_none() -> None:
     """No date in args or message returns None."""
     assert normalize_delivery_date({"city": "Colombo"}, "deliver to Colombo", today=_FRIDAY) is None

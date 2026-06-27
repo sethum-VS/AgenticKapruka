@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.messages import HumanMessage
 
+from graphs.nodes.execute_cart_action import execute_cart_action
 from graphs.nodes.resolve_cart_product import (
     match_products_by_phrase,
     phrase_product_overlap_score,
     resolve_cart_product,
 )
-from graphs.nodes.execute_cart_action import execute_cart_action
 from graphs.state import AgentState
 from lib.kapruka.errors import KaprukaValidationError
 from lib.kapruka.types import (
@@ -251,3 +251,118 @@ async def test_execute_cart_action_softens_live_stock_mismatch() -> None:
     assert action["status"] == "added"
     assert "stock_warning" in action
     mock_add_item.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_cart_action_preflight_when_delivery_fee_asked() -> None:
+    from unittest.mock import patch
+
+    from lib.redis.cart import StoredCartItem
+
+    mock_service = AsyncMock()
+    live_product = MagicMock()
+    live_product.name = "Amma cake"
+    live_product.in_stock = True
+    live_product.price = MagicMock(amount=5200.0, currency="LKR")
+    mock_service.get_product.return_value = live_product
+    mock_redis = MagicMock()
+    stored_item = StoredCartItem(
+        product_id="cake00amma001",
+        quantity=1,
+        name="Amma cake",
+        price_amount=5200.0,
+        price_currency="LKR",
+    )
+    state: AgentState = {
+        "session_id": "sess-cart-fee",
+        "currency": "LKR",
+        "session_delivery_city_canonical": "Colombo 03",
+        "messages": [
+            HumanMessage(
+                content=(
+                    "Add the Amma cake please. What's the delivery fee to Colombo?"
+                ),
+            ),
+        ],
+        "cart_action_result": {
+            "status": "resolved",
+            "product": {
+                "id": "cake00amma001",
+                "name": "Amma cake",
+                "price": {"amount": 5200.0, "currency": "LKR"},
+                "in_stock": True,
+            },
+        },
+    }
+    preflight = {
+        "name": "kapruka_check_delivery",
+        "args": {"city": "Colombo 03"},
+        "result": {
+            "city": "Colombo 03",
+            "available": True,
+            "rate": 300,
+            "currency": "LKR",
+            "checked_date": "2026-06-27",
+        },
+    }
+
+    with (
+        patch(
+            "graphs.nodes.execute_cart_action.get_cart",
+            new_callable=AsyncMock,
+        ) as mock_get_cart,
+        patch(
+            "graphs.nodes.execute_cart_action.add_item",
+            new_callable=AsyncMock,
+        ) as mock_add_item,
+        patch(
+            "graphs.nodes.execute_cart_action._preflight_check_delivery",
+            new_callable=AsyncMock,
+            return_value=preflight,
+        ) as mock_preflight,
+    ):
+        mock_get_cart.return_value = []
+        mock_add_item.return_value = stored_item
+        mock_get_cart.side_effect = [[], [stored_item]]
+
+        result = await execute_cart_action(
+            state,
+            redis_client=mock_redis,
+            kapruka_service=mock_service,
+            client_ip="127.0.0.1",
+        )
+
+    assert result["cart_action_result"]["status"] == "added"
+    mock_preflight.assert_awaited_once()
+    assert result.get("tool_trace") == [preflight]
+
+
+# P0-3 regression: bare "add [product]" without "to cart" should extract phrase
+def test_extract_cart_product_phrase_bare_add_without_to_cart() -> None:
+    """P0-3: 'Add the Amma's Delightful Creation cake' should extract the product name."""
+    from lib.chat.intent_heuristics import extract_cart_product_phrase
+
+    phrase = extract_cart_product_phrase("Add the Amma's Delightful Creation cake")
+    assert phrase is not None, "Should extract product from bare 'add [product]' utterance"
+    assert "Amma" in phrase
+    assert "cake" in phrase.lower()
+
+
+def test_extract_cart_product_phrase_explicit_to_cart_still_works() -> None:
+    """P0-3: explicit 'to cart' pattern still works after adding bare pattern."""
+    from lib.chat.intent_heuristics import extract_cart_product_phrase
+
+    phrase = extract_cart_product_phrase("Add the chocolate cake to my cart")
+    assert phrase is not None
+    assert "chocolate cake" in phrase.lower()
+
+
+def test_match_last_visible_fallback_when_not_in_last_search() -> None:
+    """P0-3: phrase match should fall back to last_visible_products when not in last_search."""
+    from graphs.nodes.resolve_cart_product import match_products_by_phrase
+
+    visible = [{"id": "cake-001", "name": "Amma's Delightful Creation"}]
+
+    product, _, clarify = match_products_by_phrase("Amma's Delightful Creation", visible)
+    assert product is not None
+    assert product["id"] == "cake-001"

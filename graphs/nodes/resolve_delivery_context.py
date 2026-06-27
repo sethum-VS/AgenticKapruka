@@ -10,10 +10,14 @@ from google import genai
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.address_resolution import resolve_shipment_address
-from lib.chat.city_resolution import resolve_delivery_city
+from lib.chat.city_resolution import _is_bare_colombo, resolve_delivery_city
 from lib.chat.delivery_dates import is_delivery_date_only_message, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
-from lib.chat.query_preprocessor import _has_delivery_intent, extract_target_city
+from lib.chat.query_preprocessor import (
+    _has_delivery_intent,
+    _has_perishable_gift_intent,
+    extract_target_city,
+)
 from lib.kapruka.product_id import contains_product_id
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
@@ -25,6 +29,9 @@ RouteAfterResolveDeliveryContext = Literal["agent_loop", "call_mcp_tools", "gene
 
 def route_after_resolve_delivery_context(state: AgentState) -> RouteAfterResolveDeliveryContext:
     """Route to product-ID MCP fast-path or the agent loop (clarify+search)."""
+    intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
+    if intent_metadata.get("support_topic"):
+        return "generate_response"
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if contains_product_id(user_message):
         return "call_mcp_tools"
@@ -44,6 +51,16 @@ def _resolve_session_delivery_city(state: AgentState, user_message: str) -> str 
     if isinstance(session_city, str) and session_city.strip():
         return session_city.strip()
     return None
+
+
+def _should_soft_colombo_zone_nudge(state: AgentState, user_message: str) -> bool:
+    """Gift discovery with bare 'Colombo' gets a gentle zone nudge, not a hard stop."""
+    if _has_delivery_intent(user_message):
+        return False
+    raw_city = extract_target_city(user_message)
+    if not isinstance(raw_city, str) or not _is_bare_colombo(raw_city):
+        return False
+    return _has_perishable_gift_intent(user_message)
 
 
 def _needs_city_resolution(state: AgentState, user_message: str) -> bool:
@@ -363,6 +380,19 @@ async def resolve_delivery_context(
         resolution.status,
         raw_city,
     )
+    if resolution.status == "ambiguous" and _should_soft_colombo_zone_nudge(state, user_message):
+        logger.info(
+            "resolve_delivery_context: soft Colombo zone nudge for gift discovery %r",
+            raw_city,
+        )
+        return {
+            **resolved_base,
+            "delivery_city_raw": raw_city,
+            "delivery_city_status": "ambiguous",
+            "delivery_city_candidates": resolution.candidates,
+            "delivery_context_ready": True,
+            "agent_clarifying_question": customer_message,
+        }
     return {
         **resolved_base,
         "delivery_context_ready": False,

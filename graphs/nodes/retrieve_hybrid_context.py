@@ -11,6 +11,7 @@ from app.config import get_settings
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, Intent
 from lib.chat.intent_heuristics import is_budget_refinement_message
+from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.intent_metadata import IntentMetadata
 from lib.debug.trace import trace_route_decision
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
@@ -60,12 +61,52 @@ EmbedTextsFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
     """Conditional edge after analyze_intent: checkout sub-graph or HybridRAG skip."""
     intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if is_delivery_only_inquiry(user_message, intent_metadata=intent_metadata):
+        trace_route_decision(
+            from_node="analyze_intent",
+            target="resolve_delivery_context",
+            intent=state.get("intent"),
+            reason="delivery-only inquiry with city and date",
+        )
+        return "resolve_delivery_context"
+    clarifying = state.get("agent_clarifying_question")
+    if (
+        state.get("specificity_band") == "clarify"
+        and isinstance(clarifying, str)
+        and clarifying.strip()
+    ):
+        trace_route_decision(
+            from_node="analyze_intent",
+            target="generate_response",
+            intent=state.get("intent"),
+            reason="specificity gate — clarify without catalog search",
+        )
+        return "generate_response"
     if intent_metadata.get("support_topic"):
+        if intent_metadata.get("requires_delivery_validation"):
+            trace_route_decision(
+                from_node="analyze_intent",
+                target="resolve_delivery_context",
+                intent=state.get("intent"),
+                reason="support FAQ with delivery fee question",
+            )
+            return "resolve_delivery_context"
         trace_route_decision(
             from_node="analyze_intent",
             target="generate_response",
             intent=state.get("intent"),
             reason="support or policy FAQ",
+        )
+        return "generate_response"
+
+    intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
+    if intent_metadata.get("duplicate_checkout_proceed"):
+        trace_route_decision(
+            from_node="analyze_intent",
+            target="generate_response",
+            intent=state.get("intent"),
+            reason="duplicate proceed-to-checkout suppressed",
         )
         return "generate_response"
 

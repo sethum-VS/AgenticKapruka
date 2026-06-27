@@ -85,12 +85,16 @@
     {% endif %}
   </a>
   <div class="flex flex-1 flex-col p-4">
-    <h3 class="mb-1 line-clamp-1 text-label-md font-label-md font-semibold text-text-main">
+    <h3
+      class="mb-1 line-clamp-2 text-label-md font-label-md font-semibold text-text-main"
+      title="{{ product.name | normalize_catalog }}"
+    >
       <a
         href="{{ product.url }}"
         class="hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         target="_blank"
         rel="noopener noreferrer"
+        title="{{ product.name | normalize_catalog }}"
       >
         {{ product.name | normalize_catalog }}
       </a>

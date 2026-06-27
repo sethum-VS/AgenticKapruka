@@ -123,16 +123,16 @@ async def resolve_cart_product(
     )
     if reference is not None:
         if reference.get("status") == "resolved" and reference.get("product") is not None:
-            product = reference["product"]
+            resolved_product = reference["product"] or {}
             logger.info(
                 "resolve_cart_product: reference %r -> %s",
                 phrase,
-                product.get("id"),
+                resolved_product.get("id"),
             )
             return {
                 "cart_action_result": {
                     "status": "resolved",
-                    "product": product,
+                    "product": resolved_product,
                     "phrase": phrase,
                 },
             }
@@ -155,6 +155,15 @@ async def resolve_cart_product(
             last_search,
             threshold=_BORDERLINE_OVERLAP_THRESHOLD,
         )
+    # Fallback: also search last_visible_products (carousel may show products from merged searches)
+    if product is None and not clarify and last_visible:
+        product, tied, clarify = match_products_by_phrase(phrase, last_visible)
+        if product is None and not clarify:
+            product, tied, clarify = match_products_by_phrase(
+                phrase,
+                last_visible,
+                threshold=_BORDERLINE_OVERLAP_THRESHOLD,
+            )
     if clarify:
         logger.info("resolve_cart_product: tie among %d candidates for %r", len(tied), phrase)
         return {

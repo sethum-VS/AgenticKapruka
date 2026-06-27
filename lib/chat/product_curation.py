@@ -67,6 +67,20 @@ _MALE_RECIPIENTS = frozenset(
         "grandfather",
     },
 )
+_NEUTRAL_RECIPIENTS = frozenset(
+    {
+        "colleague",
+        "coworker",
+        "co-worker",
+        "friend",
+        "neighbor",
+        "neighbour",
+        "boss",
+        "teacher",
+        "client",
+        "customer",
+    },
+)
 _FOR_HIM_RE = re.compile(
     r"\b(?:for him|for dad|father'?s?|men'?s?|gentleman|boyfriend)\b|^Dad\b",
     re.I,
@@ -103,6 +117,7 @@ _CAKE_ACCESSORY_BLACKLIST = re.compile(
 )
 _FOCUS_TOKEN_PATTERNS: dict[str, re.Pattern[str]] = {
     "chocolate": re.compile(r"\b(?:chocolate|choco|cocoa)\b", re.I),
+    "tea": re.compile(r"\b(?:tea|teas|ceylon|dilmah|qualitea)\b", re.I),
     "cake": re.compile(r"\b(?:cake|birthday)\b", re.I),
     "flowers": re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b", re.I),
     "gift": re.compile(r"\b(?:hamper|combo|combopack|gift)\b", re.I),
@@ -410,6 +425,8 @@ def _gift_curation_active(
 ) -> bool:
     from lib.chat.intent_heuristics import is_budgeted_gift_ideas_message
 
+    if re.search(r"\b(?:tea|teas)\b", user_message, re.I):
+        return False
     if is_budgeted_gift_ideas_message(user_message):
         return True
     if session_product_focus == "gift":
@@ -472,6 +489,34 @@ def demote_non_chocolate_for_chocolate_focus(
             demoted.append(product)
         else:
             preferred.append(product)
+    return preferred + demoted
+
+
+def demote_non_tea_for_tea_focus(
+    products: list[dict[str, Any]],
+    query: str,
+    *,
+    session_product_focus: str | None = None,
+) -> list[dict[str, Any]]:
+    """Demote biscuits and unrelated gifts when the customer asked for tea."""
+    if not products:
+        return []
+    tea_focus = session_product_focus == "tea" or bool(
+        _FOCUS_TOKEN_PATTERNS["tea"].search(query),
+    )
+    if not tea_focus:
+        return list(products)
+
+    preferred: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        blob = _product_text_blob(product)
+        if _FOCUS_TOKEN_PATTERNS["tea"].search(blob):
+            preferred.append(product)
+        else:
+            demoted.append(product)
+    if not preferred:
+        return list(products)
     return preferred + demoted
 
 
@@ -593,6 +638,12 @@ def apply_recipient_curation(
         mismatch = _FOR_HIM_RE
     elif recipient in _MALE_RECIPIENTS:
         mismatch = _FOR_HER_RE
+    elif recipient in _NEUTRAL_RECIPIENTS:
+        mismatch = re.compile(
+            r"\b(?:for him|for her|for dad|for mom|father'?s?|mother'?s?|"
+            r"men'?s?|women'?s?|gentleman|ladies)\b|^Dad\b",
+            re.I,
+        )
     else:
         return list(products)
     preferred: list[dict[str, Any]] = []
@@ -887,6 +938,11 @@ def curate_carousel_products(
         query,
         session_product_focus=session_product_focus,
     )
+    scoped = demote_non_tea_for_tea_focus(
+        scoped,
+        query,
+        session_product_focus=session_product_focus,
+    )
     scoped = filter_excluded_category_hints(
         scoped,
         hybrid_context,
@@ -943,32 +999,47 @@ def curate_carousel_products(
     return _finalize_carousel(scoped)
 
 
+_CARD_SNIPPET_MAX_LEN = 96
+
+
+def _truncate_card_snippet(text: str) -> str:
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= _CARD_SNIPPET_MAX_LEN:
+        return cleaned
+    clipped = cleaned[:_CARD_SNIPPET_MAX_LEN].rsplit(" ", 1)[0]
+    return f"{clipped}…"
+
+
 def _build_card_description_fallback(
     product: dict[str, Any],
     *,
     session_occasion: str | None = None,
     session_recipient_hint: str | None = None,
-    session_delivery_city: str | None = None,
+    session_delivery_city: str | None = None,  # accepted but not used — causes stale subtitles
 ) -> str:
     """One-line carousel copy when MCP description is empty."""
     name = str(product.get("name") or "").strip()
-    context_bits: list[str] = []
-    if isinstance(session_occasion, str) and session_occasion.strip():
-        context_bits.append(f"for {session_occasion.strip()}")
-    if isinstance(session_recipient_hint, str) and session_recipient_hint.strip():
-        context_bits.append(f"for your {session_recipient_hint.strip()}")
-    if isinstance(session_delivery_city, str) and session_delivery_city.strip():
-        context_bits.append(f"to {session_delivery_city.strip()}")
 
-    if context_bits:
-        return f"A thoughtful Kapruka pick {' '.join(context_bits)}."
-
+    # Product-specific blurbs take priority over generic session context
     if name and _BIRTHDAY_PRODUCT_RE.search(name):
+        if _FOCUS_TOKEN_PATTERNS["chocolate"].search(name):
+            return "Rich chocolate birthday cake for your celebration."
         return "A celebration cake from Kapruka's curated bakery selection."
     if name and _FOCUS_TOKEN_PATTERNS["flowers"].search(name):
         return "Fresh floral arrangement from Kapruka."
     if name and _FOCUS_TOKEN_PATTERNS["gift"].search(name):
         return "A curated Kapruka gift box or hamper."
+
+    # Occasion/recipient context fallback — delivery city intentionally omitted
+    # (including it causes stale "to Galle" subtitles on unrelated turns)
+    context_bits: list[str] = []
+    if isinstance(session_occasion, str) and session_occasion.strip():
+        context_bits.append(f"for {session_occasion.strip()}")
+    if isinstance(session_recipient_hint, str) and session_recipient_hint.strip():
+        context_bits.append(f"for your {session_recipient_hint.strip()}")
+
+    if context_bits:
+        return f"A thoughtful Kapruka pick {' '.join(context_bits)}."
 
     return "A thoughtful Kapruka gift for your occasion."
 
@@ -983,6 +1054,11 @@ def enrich_product_card_description(
     """Attach card_description_fallback when the catalog omits a description."""
     if str(product.get("description") or "").strip():
         return product
+    summary = str(product.get("summary") or "").strip()
+    if summary:
+        enriched = dict(product)
+        enriched["card_description_fallback"] = _truncate_card_snippet(summary)
+        return enriched
     enriched = dict(product)
     enriched["card_description_fallback"] = _build_card_description_fallback(
         product,

@@ -54,6 +54,16 @@ async def test_resolve_delivery_city_bare_colombo_is_ambiguous() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_delivery_city_bare_colombo_ambiguous_even_with_exact_colombo() -> None:
+    """Bare 'Colombo' should prompt for a zone even when the API returns an exact match."""
+    service = AsyncMock(spec=KaprukaService)
+    service.list_delivery_cities.return_value = ["Colombo", *_COLOMBO_ZONES]
+    resolution = await resolve_delivery_city(service, _CLIENT_IP, "Colombo")
+    assert resolution.status == "ambiguous"
+    assert resolution.candidates == _COLOMBO_ZONES[:5]
+
+
+@pytest.mark.asyncio
 async def test_resolve_delivery_city_single_galle_match() -> None:
     service = AsyncMock(spec=KaprukaService)
     service.list_delivery_cities.return_value = ["Galle"]

@@ -1331,6 +1331,22 @@ def test_delivery_claim_guard_city_date_asks_before_fee() -> None:
     assert "Rs. 400" not in guarded
 
 
+def test_delivery_claim_guard_defers_date_for_city_gift_discovery() -> None:
+    reply = "I can deliver to Colombo — the delivery fee is Rs. 300."
+    state = {
+        "intent_metadata": {"target_city": "Colombo"},
+    }
+    guarded = delivery_claim_guard(
+        reply,
+        tool_trace=[],
+        user_message="I need a birthday cake for my mom in Colombo",
+        state=state,
+    )
+    assert "When would you like" not in guarded
+    assert "checkout" in guarded.lower()
+    assert "Colombo" in guarded
+
+
 def test_delivery_claim_guard_skips_discovery_only_turns() -> None:
     reply = "I have not verified Kapruka delivery for that location and date yet."
     guarded = delivery_claim_guard(

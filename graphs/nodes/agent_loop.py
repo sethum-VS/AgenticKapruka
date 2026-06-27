@@ -35,6 +35,7 @@ from lib.chat.product_curation import (
     apply_recipient_curation,
     carousel_focus_guard,
     demote_non_chocolate_for_chocolate_focus,
+    demote_non_tea_for_tea_focus,
     demote_off_focus_products,
     filter_excluded_category_hints,
     filter_gift_noise_products,
@@ -42,7 +43,13 @@ from lib.chat.product_curation import (
     is_cake_accessory,
     is_flower_fruit_intent,
 )
-from lib.chat.query_preprocessor import _has_perishable_gift_intent, is_delivery_context_relevant_turn
+from lib.chat.query_preprocessor import (
+    _has_delivery_intent,
+    _has_perishable_gift_intent,
+    extract_target_city,
+    is_delivery_context_relevant_turn,
+    should_defer_delivery_date,
+)
 from lib.chat.search_broadening import apply_first_broaden
 from lib.chat.status_copy import SEARCHING_CATALOG, long_search_status_message
 from lib.debug.trace import trace_agent_iteration
@@ -431,6 +438,8 @@ def _budgeted_gift_physical_queries(user_message: str) -> tuple[str, ...]:
     """Physical gift searches to run before voucher fallback on budgeted gift turns."""
     lowered = user_message.lower()
     queries: list[str] = []
+    if re.search(r"\b(?:tea|teas)\b", lowered):
+        queries.append("tea gift")
     if "hamper" in lowered:
         queries.append("gift hamper")
     if "chocolate" in lowered:
@@ -744,6 +753,11 @@ def _curate_search_trace_result(
         user_message,
         session_product_focus=session_focus if isinstance(session_focus, str) else None,
     )
+    curated = demote_non_tea_for_tea_focus(
+        curated,
+        user_message,
+        session_product_focus=session_focus if isinstance(session_focus, str) else None,
+    )
     curated = filter_excluded_category_hints(
         curated,
         hybrid_context,
@@ -888,11 +902,45 @@ def _delivery_check_pending(
     return _has_perishable_gift_intent(user_message) or is_flower_fruit_intent(user_message)
 
 
+def _should_run_discovery_city_gift_search(
+    state: AgentState,
+    user_message: str,
+    *,
+    already_ran: bool,
+) -> bool:
+    """Search catalog first when a gift turn names a city but no delivery date."""
+    if already_ran:
+        return False
+    return should_defer_delivery_date(state, user_message)
+
+
+def _discovery_city_gift_search_args(state: AgentState, user_message: str) -> dict[str, Any]:
+    """Build iteration-0 search args for city-scoped gift discovery."""
+    enriched_args = merge_planner_search_args(
+        {"q": "birthday cake"},
+        user_message=user_message,
+        hybrid_context=state.get("hybrid_context") or {},
+        currency=_resolve_currency(state),
+        intent_metadata=state.get("intent_metadata"),
+        state=dict(state),
+    )
+    if is_broad_cakes_query(user_message) or is_birthday_cake_intent(user_message):
+        enriched_args["q"] = "birthday cake"
+        enriched_args.setdefault("category", "Birthday")
+    elif is_flower_fruit_intent(user_message):
+        enriched_args.setdefault("q", "roses bouquet")
+        enriched_args.setdefault("category", "Flowers")
+    return enriched_args
+
+
 def _should_force_finish_after_search(
     state: AgentState,
     tool_trace: list[ToolInvocation],
 ) -> bool:
     """Return True when a successful search should end the loop on the next iteration."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if should_defer_delivery_date(state, user_message):
+        return True
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     pending_delivery = intent_metadata.get("requires_delivery_validation") or bool(
         intent_metadata.get("target_city")
@@ -1248,6 +1296,7 @@ async def agent_loop(
     budgeted_gift_ideas_search_applied = False
     budget_refinement_search_applied = False
     situational_flowers_search_applied = False
+    discovery_city_gift_search_applied = False
     session_delivery_date_update: str | None = None
     session_search_query_update: str | None = None
 
@@ -1492,6 +1541,57 @@ async def agent_loop(
                 agent_loop_done = True
                 break
 
+        if (
+            iteration == 0
+            and not discovery_city_gift_search_applied
+            and _should_run_discovery_city_gift_search(
+                state,
+                user_message,
+                already_ran=discovery_city_gift_search_applied,
+            )
+        ):
+            discovery_city_gift_search_applied = True
+            tool_name = SEARCH_PRODUCTS_TOOL
+            enriched_args = _inject_tool_currency(
+                tool_name,
+                _discovery_city_gift_search_args(state, user_message),
+                state,
+                currency,
+            )
+            _emit_status(_status_message_for_tool(tool_name))
+            result = await _invoke_tool_with_rate_limit_retry(
+                tool_name,
+                enriched_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+            result = _curate_search_trace_result(result, state=state)
+            search_q_arg = enriched_args.get("q")
+            if isinstance(search_q_arg, str) and search_q_arg.strip():
+                session_search_query_update = _persist_session_search_query(
+                    search_q_arg,
+                    intent_metadata=state.get("intent_metadata")
+                    if isinstance(state.get("intent_metadata"), dict)
+                    else None,
+                )
+            tool_trace.append(
+                {"name": tool_name, "args": enriched_args, "result": result},
+            )
+            tool_call_count += 1
+            if isinstance(result, dict) and result.get("error"):
+                agent_tool_error = _agent_tool_error_from_result(tool_name, result)
+                exit_reason = "tool_error"
+                agent_loop_done = True
+                break
+            if _search_has_products(result) and _should_force_finish_after_search(
+                state,
+                tool_trace,
+            ):
+                exit_reason = "finish"
+                agent_loop_done = True
+                break
+
         if iteration > 0 or not budget_refinement_search_applied:
             intent_metadata = state.get("intent_metadata") or {}
             has_budget = bool(
@@ -1645,21 +1745,52 @@ async def agent_loop(
                     enriched_args["city"] = target_city.strip()
             if isinstance(canonical_city, str) and canonical_city.strip():
                 enriched_args["city"] = canonical_city.strip()
-            state_date = state.get("delivery_date")
-            session_date = state.get("session_delivery_date")
-            if isinstance(session_date, str) and session_date.strip():
-                enriched_args["delivery_date"] = session_date.strip()
-            elif isinstance(state_date, str) and state_date.strip():
-                enriched_args["delivery_date"] = state_date.strip()
+            elif (
+                kapruka_service is not None
+                and isinstance(enriched_args.get("city"), str)
+                and enriched_args["city"].strip()
+            ):
+                from lib.chat.city_resolution import resolve_delivery_city
+
+                resolution = await resolve_delivery_city(
+                    kapruka_service,
+                    rate_limit_key,
+                    enriched_args["city"].strip(),
+                )
+                if resolution.status == "resolved" and resolution.canonical:
+                    enriched_args["city"] = resolution.canonical
+                elif resolution.status == "ambiguous":
+                    agent_clarifying_question = (
+                        resolution.customer_message
+                        or "Colombo has several delivery zones. Which area should we deliver to?"
+                    )
+                    exit_reason = "ask_user"
+                    agent_loop_done = True
+                    break
+            message_date = normalize_delivery_date({}, user_message)
+            if message_date is not None:
+                enriched_args["delivery_date"] = message_date
+            else:
+                state_date = state.get("delivery_date")
+                session_date = state.get("session_delivery_date")
+                if isinstance(session_date, str) and session_date.strip():
+                    enriched_args["delivery_date"] = session_date.strip()
+                elif isinstance(state_date, str) and state_date.strip():
+                    enriched_args["delivery_date"] = state_date.strip()
             resolved_date = normalize_delivery_date(enriched_args, user_message)
             if resolved_date is None:
-                agent_clarifying_question = delivery_date_clarifying_question()
-                session_awaiting_delivery_date = True
-                exit_reason = "ask_user"
-                agent_loop_done = True
-                break
-            enriched_args = {**enriched_args, "delivery_date": resolved_date}
-            enriched_args.pop("date", None)
+                if should_defer_delivery_date(state, user_message):
+                    enriched_args.pop("delivery_date", None)
+                    enriched_args.pop("date", None)
+                else:
+                    agent_clarifying_question = delivery_date_clarifying_question()
+                    session_awaiting_delivery_date = True
+                    exit_reason = "ask_user"
+                    agent_loop_done = True
+                    break
+            else:
+                enriched_args = {**enriched_args, "delivery_date": resolved_date}
+                enriched_args.pop("date", None)
 
         if _is_duplicate_invocation(tool_trace, tool_name, enriched_args):
             logger.debug(

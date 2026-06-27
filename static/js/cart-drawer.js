@@ -1,6 +1,40 @@
 /**
  * Alpine.js cartDrawer — slide-over cart panel with badge synced from HTMX cart swaps.
  */
+const PROCEED_CHECKOUT_MESSAGE = "Proceed to checkout";
+let proceedCheckoutInFlight = false;
+
+function isChatFormInFlight() {
+  const form = document.getElementById("chat-form");
+  return Boolean(form?.classList.contains("htmx-request"));
+}
+
+function closeCartDrawer() {
+  const drawerRoot = document.querySelector('[data-testid="cart-drawer"]');
+  if (!drawerRoot || !window.Alpine) {
+    return;
+  }
+  const data = Alpine.$data(drawerRoot);
+  if (data && typeof data.close === "function") {
+    data.close();
+  }
+}
+
+function proceedToCheckoutFromDrawer() {
+  const form = document.getElementById("chat-form");
+  const input = document.getElementById("chat-message");
+  if (!form || !input) {
+    return;
+  }
+  if (proceedCheckoutInFlight || isChatFormInFlight()) {
+    return;
+  }
+  proceedCheckoutInFlight = true;
+  input.value = PROCEED_CHECKOUT_MESSAGE;
+  form.requestSubmit();
+  closeCartDrawer();
+}
+
 document.addEventListener("alpine:init", () => {
   Alpine.data("cartDrawer", (initialCount = 0) => ({
     open: false,
@@ -10,17 +44,6 @@ document.addEventListener("alpine:init", () => {
     init() {
       document.body.addEventListener("htmx:afterSwap", (event) => {
         this.syncCountFromPanel(event);
-      });
-      // HTMX outerHTML swaps do not activate Alpine @click on injected cart partials.
-      document.body.addEventListener("click", (event) => {
-        const target = event.target;
-        if (!(target instanceof Element)) {
-          return;
-        }
-        if (!target.closest('[data-testid="cart-proceed-checkout"]')) {
-          return;
-        }
-        this.proceedToCheckout();
       });
     },
 
@@ -71,14 +94,7 @@ document.addEventListener("alpine:init", () => {
     },
 
     proceedToCheckout() {
-      const form = document.getElementById("chat-form");
-      const input = document.getElementById("chat-message");
-      if (!form || !input) {
-        return;
-      }
-      input.value = "Proceed to checkout";
-      form.requestSubmit();
-      this.close();
+      proceedToCheckoutFromDrawer();
     },
 
     syncCountFromPanel(event) {
@@ -93,4 +109,24 @@ document.addEventListener("alpine:init", () => {
       this.itemCount = Number.isNaN(count) ? 0 : count;
     },
   }));
+});
+
+// Single delegated handler — avoids duplicate submits when multiple cartDrawer roots mount.
+document.body.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+  if (!target.closest('[data-testid="cart-proceed-checkout"]')) {
+    return;
+  }
+  event.preventDefault();
+  proceedToCheckoutFromDrawer();
+});
+
+document.body.addEventListener("htmx:afterRequest", (event) => {
+  const elt = event.detail?.elt;
+  if (elt?.id === "chat-form") {
+    proceedCheckoutInFlight = false;
+  }
 });

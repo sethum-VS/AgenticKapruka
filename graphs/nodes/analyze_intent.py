@@ -9,7 +9,7 @@ from typing import Any, cast
 from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel
 
-from graphs.state import AgentState, CurrencyCode, Intent
+from graphs.state import AgentState, CheckoutStep, CurrencyCode, Intent
 from lib.chat.delivery_dates import (
     ambiguous_weekday_clarifying_question,
     is_ambiguous_weekday_phrase,
@@ -17,9 +17,11 @@ from lib.chat.delivery_dates import (
 )
 from lib.chat.intent_heuristics import (
     PROCEED_CHECKOUT_MESSAGE,
+    build_guest_checkout_reply,
     classify_routing_guard,
     is_budgeted_gift_ideas_message,
     is_cart_add_trigger,
+    is_guest_checkout_question,
     is_order_intent_message,
     is_topic_pivot_message,
 )
@@ -47,6 +49,10 @@ logger = logging.getLogger(__name__)
 # Default shopping-path intent before agent_loop refines discovery vs general.
 _SHOPPING_PATH_INTENT: Intent = "discovery"
 
+_ACTIVE_CHECKOUT_STEPS: frozenset[CheckoutStep] = frozenset(
+    {"delivery_city", "delivery_date", "recipient", "sender", "review"},
+)
+
 _query_preprocessor = QueryPreprocessor()
 
 _CAKE_FOCUS = re.compile(r"\b(?:cup)?cakes?\b", re.I)
@@ -56,6 +62,7 @@ _FLOWERS_FOCUS = re.compile(
 )
 _FLORAL_DESIGN = re.compile(r"\b(?:floral|design|designs)\b", re.I)
 _GIFT_FOCUS = re.compile(r"\b(?:gift|voucher|hamper)s?\b", re.I)
+_TEA_FOCUS = re.compile(r"\b(?:tea|teas)\b", re.I)
 _CHOCOLATE_FOCUS = re.compile(r"\b(?:chocolate|chocolates|cocoa|choco)\b", re.I)
 _COMBO_FOCUS = re.compile(r"\b(?:combo|combopack)\b", re.I)
 _OCCASION_FOCUS = re.compile(
@@ -141,6 +148,8 @@ def _derive_product_focus(user_message: str) -> str | None:
         return "flowers"
     if _CHOCOLATE_FOCUS.search(stripped):
         return "chocolate"
+    if _TEA_FOCUS.search(stripped):
+        return "tea"
     if _GIFT_FOCUS.search(stripped):
         return "gift"
     return None
@@ -240,6 +249,8 @@ def _flag_budget_confirmation_on_context_change(
         and isinstance(prior_focus, str)
         and prior_focus.strip()
         and derived_focus != prior_focus.strip().lower()
+        # Don't ask again when switching within the same product family (e.g. chocolate ↔ cake)
+        and not {derived_focus, prior_focus.strip().lower()} <= {"cake", "chocolate"}
     ):
         return cast(
             IntentMetadata,
@@ -522,23 +533,57 @@ async def analyze_intent(
             },
         )
 
-    if is_support_question(user_message):
+    if is_guest_checkout_question(user_message):
+        cart_has_items = await _session_cart_has_items(state, redis_client)
         logger.info(
-            "analyze_intent: support/policy question (%s)",
-            classify_support_topic(user_message),
+            "analyze_intent: guest checkout info question (cart_has_items=%s)",
+            cart_has_items,
         )
         intent_metadata = cast(
             IntentMetadata,
             {
                 **intent_metadata,
-                "support_topic": classify_support_topic(user_message),
-                "requires_delivery_validation": False,
-                "target_city": None,
+                "guest_checkout_info": True,
+                "guest_checkout_cart_has_items": cart_has_items,
             },
         )
         return _with_budget({"intent": "general", "intent_metadata": intent_metadata})
 
+    if is_support_question(user_message):
+        from lib.chat.product_detail import is_delivery_fee_question
+
+        compound_delivery = is_delivery_fee_question(user_message)
+        logger.info(
+            "analyze_intent: support/policy question (%s, compound_delivery=%s)",
+            classify_support_topic(user_message),
+            compound_delivery,
+        )
+        support_meta: dict[str, Any] = {
+            **intent_metadata,
+            "support_topic": classify_support_topic(user_message),
+            "requires_delivery_validation": compound_delivery,
+        }
+        if not compound_delivery:
+            support_meta["target_city"] = None
+        intent_metadata = cast(IntentMetadata, support_meta)
+        return _with_budget({"intent": "general", "intent_metadata": intent_metadata})
+
     if user_message.strip() == PROCEED_CHECKOUT_MESSAGE:
+        checkout_step = state.get("checkout_state")
+        if checkout_step in _ACTIVE_CHECKOUT_STEPS:
+            logger.info(
+                "analyze_intent: suppress duplicate proceed-to-checkout at step %s",
+                checkout_step,
+            )
+            return _with_budget(
+                {
+                    "intent": "general",
+                    "intent_metadata": {
+                        **intent_metadata,
+                        "duplicate_checkout_proceed": True,
+                    },
+                },
+            )
         logger.info("analyze_intent: proceed-to-checkout trigger from cart drawer")
         return _with_budget({"intent": "checkout", "intent_metadata": intent_metadata})
 
@@ -609,6 +654,8 @@ async def analyze_intent(
                     "session_awaiting_clarification_dimension": specificity.missing_dimension,
                     "specificity_score": specificity.score,
                     "specificity_band": "clarify",
+                    "tool_trace": [],
+                    "tool_results": None,
                 },
             )
         specificity_fields = {

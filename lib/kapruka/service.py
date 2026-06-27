@@ -8,9 +8,15 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
+import httpx
 from pydantic import BaseModel
 
-from lib.kapruka.errors import KaprukaRateLimitError
+from lib.kapruka.errors import (
+    KaprukaError,
+    KaprukaNotFoundError,
+    KaprukaRateLimitError,
+    KaprukaValidationError,
+)
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.kapruka.tools import (
     check_delivery,
@@ -53,6 +59,22 @@ from lib.redis.rate_limit import check_rate_limit
 
 T = TypeVar("T")
 
+_TRANSIENT_RETRY_DELAY_SECONDS = 0.5
+
+
+def _is_transient_fetch_error(exc: BaseException) -> bool:
+    """True for MCP transport failures that may succeed on a quick retry."""
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    if isinstance(exc, ExceptionGroup):
+        return any(_is_transient_fetch_error(nested) for nested in exc.exceptions)
+    return isinstance(exc, KaprukaError) and not isinstance(
+        exc,
+        KaprukaNotFoundError | KaprukaValidationError | KaprukaRateLimitError,
+    )
+
 
 def _cache_args(model: BaseModel) -> dict[str, Any]:
     """Build canonical MCP params dict for cache-key hashing."""
@@ -85,11 +107,11 @@ class KaprukaService:
         if cached is not None:
             return from_cache(cached)
 
+        logger = logging.getLogger(__name__)
         try:
             result = await fetch()
         except KaprukaRateLimitError as exc:
             delay = min(exc.retry_after_seconds, 5)
-            logger = logging.getLogger(__name__)
             logger.info(
                 "Kapruka rate limit on %s; retrying after %ss",
                 tool_name,
@@ -107,6 +129,16 @@ class KaprukaService:
                 )
                 await asyncio.sleep(second_delay)
                 result = await fetch()
+        except Exception as exc:
+            if not _is_transient_fetch_error(exc):
+                raise
+            logger.info(
+                "Kapruka transient failure on %s; retrying once after %ss",
+                tool_name,
+                _TRANSIENT_RETRY_DELAY_SECONDS,
+            )
+            await asyncio.sleep(_TRANSIENT_RETRY_DELAY_SECONDS)
+            result = await fetch()
 
         await set_cached(self._redis, tool_name, cache_args, to_cache(result))
         return result

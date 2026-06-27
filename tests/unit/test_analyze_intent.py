@@ -110,6 +110,28 @@ async def test_analyze_intent_proceed_checkout_skips_gemini() -> None:
 
 
 @pytest.mark.asyncio
+async def test_analyze_intent_suppresses_duplicate_proceed_at_delivery_city() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content=PROCEED_CHECKOUT_MESSAGE)],
+        "session_id": "sess-intent-005b",
+        "checkout_state": "delivery_city",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    expected_metadata: IntentMetadata = _preprocessor.process(PROCEED_CHECKOUT_MESSAGE)
+    assert result == {
+        "intent": "general",
+        "intent_metadata": {
+            **expected_metadata,
+            "duplicate_checkout_proceed": True,
+        },
+    }
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_analyze_intent_cart_add_routes_to_cart_intent() -> None:
     mock_client = MagicMock()
     message = "Add the Blush Roses combo to my cart please"

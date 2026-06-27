@@ -23,6 +23,7 @@ from lib.checkout.chat_parser import (
 )
 from lib.checkout.prefill import seed_checkout_from_agent_state
 from lib.checkout.review import review_context_from_checkout_state
+from lib.chat.intent_heuristics import is_proceed_checkout_message
 from lib.kapruka.service import KaprukaService
 from lib.redis.cart import get_cart
 from lib.redis.checkout import get_checkout_session, save_checkout_session
@@ -64,6 +65,43 @@ def _maybe_render_review_html(state: CheckoutState) -> str | None:
     from app.templating import render_checkout_review
 
     return render_checkout_review(review=context)
+
+
+def _checkout_tool_payload(
+    result: CheckoutState,
+    *,
+    cart_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build run_checkout_graph tool_results payload from checkout state."""
+    current_step = result.get("current_step")
+    resolved_cart_items: list[dict[str, Any]] = list(result.get("cart_items") or cart_items)
+    review_html = (
+        result.get("response_html")
+        if current_step == "review"
+        else _maybe_render_review_html(result)
+    )
+    return {
+        "current_step": current_step,
+        "cart_items": resolved_cart_items,
+        "step_valid": result.get("step_valid") or {},
+        "validation_errors": result.get("validation_errors"),
+        "delivery_city": result.get("delivery_city"),
+        "delivery_address": result.get("delivery_address"),
+        "delivery_location_type": result.get("delivery_location_type"),
+        "delivery_date": result.get("delivery_date"),
+        "delivery_instructions": result.get("delivery_instructions"),
+        "recipient_name": result.get("recipient_name"),
+        "recipient_phone": result.get("recipient_phone"),
+        "sender_name": result.get("sender_name"),
+        "sender_anonymous": result.get("sender_anonymous"),
+        "gift_message": result.get("gift_message"),
+        "review_html": review_html if current_step == "review" else None,
+        "payment_cta_html": result.get("response_html") if current_step == "finalize" else None,
+        "checkout_url": result.get("checkout_url"),
+        "order_ref": result.get("order_ref"),
+        "expires_at": result.get("expires_at"),
+        "order_summary": result.get("order_summary"),
+    }
 
 
 async def _invoke_checkout_graph(
@@ -133,6 +171,22 @@ async def run_checkout_graph(
     checkout_input = seed_checkout_from_agent_state(checkout_input, state)
 
     user_message = _extract_latest_user_message(state.get("messages") or [])
+    active_step = checkout_input.get("current_step") or "cart"
+    if (
+        user_message.strip()
+        and is_proceed_checkout_message(user_message)
+        and active_step != "cart"
+    ):
+        logger.info(
+            "run_checkout_graph: skipping duplicate proceed-to-checkout at step %s",
+            active_step,
+        )
+        payload = _checkout_tool_payload(checkout_input, cart_items=cart_items)
+        return {
+            "checkout_state": active_step,
+            "tool_results": {CHECKOUT_TOOL_KEY: payload},
+        }
+
     if user_message.strip():
         checkout_input = apply_chat_message_to_checkout(checkout_input, user_message)
 
@@ -148,33 +202,10 @@ async def run_checkout_graph(
 
     current_step = result.get("current_step")
     resolved_cart_items: list[dict[str, Any]] = list(result.get("cart_items") or cart_items)
-    review_html = (
-        result.get("response_html")
-        if current_step == "review"
-        else _maybe_render_review_html(cast(CheckoutState, result))
+    payload = _checkout_tool_payload(
+        cast(CheckoutState, result),
+        cart_items=resolved_cart_items,
     )
-    payload: dict[str, Any] = {
-        "current_step": current_step,
-        "cart_items": resolved_cart_items,
-        "step_valid": result.get("step_valid") or {},
-        "validation_errors": result.get("validation_errors"),
-        "delivery_city": result.get("delivery_city"),
-        "delivery_address": result.get("delivery_address"),
-        "delivery_location_type": result.get("delivery_location_type"),
-        "delivery_date": result.get("delivery_date"),
-        "delivery_instructions": result.get("delivery_instructions"),
-        "recipient_name": result.get("recipient_name"),
-        "recipient_phone": result.get("recipient_phone"),
-        "sender_name": result.get("sender_name"),
-        "sender_anonymous": result.get("sender_anonymous"),
-        "gift_message": result.get("gift_message"),
-        "review_html": review_html if current_step == "review" else None,
-        "payment_cta_html": result.get("response_html") if current_step == "finalize" else None,
-        "checkout_url": result.get("checkout_url"),
-        "order_ref": result.get("order_ref"),
-        "expires_at": result.get("expires_at"),
-        "order_summary": result.get("order_summary"),
-    }
 
     if redis_client is not None and session_id:
         persist_state = cast(CheckoutState, {**result, "cart_items": resolved_cart_items})

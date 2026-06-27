@@ -20,6 +20,11 @@ _CART_PUT_IN_PATTERN = re.compile(
     r"\bput\s+(.+?)\s+in(?:to)?\s+(?:my\s+)?cart\b",
     re.I,
 )
+# Bare "add [product]" without explicit "to cart" — anchored to avoid false positives
+_CART_ADD_BARE_PATTERN = re.compile(
+    r"^(?:please\s+)?add\s+(?:the\s+)?(.+?)(?:\s+(?:please|now|for\s+me))?\s*[.!?]?\s*$",
+    re.I,
+)
 
 _TRACKING_GUARD_TOKENS: frozenset[str] = frozenset(
     (
@@ -57,6 +62,38 @@ _CHECKOUT_TRIGGER_TOKENS: frozenset[str] = frozenset(
 )
 
 PROCEED_CHECKOUT_MESSAGE = "Proceed to checkout"
+
+_GUEST_CHECKOUT_RE = re.compile(
+    r"\b(?:checkout|check\s+out)\s+as\s+(?:a\s+)?guest\b|"
+    r"\bguest\s+(?:checkout|check\s*out)\b|"
+    r"\b(?:can|could)\s+i\s+(?:checkout|check\s+out|order|pay)\s+(?:as\s+(?:a\s+)?guest|without\s+(?:an?\s+)?account)\b",
+    re.I,
+)
+
+
+def is_guest_checkout_question(message: str) -> bool:
+    """True for informational guest-checkout questions — not a checkout trigger."""
+    return bool(message.strip() and _GUEST_CHECKOUT_RE.search(message.strip()))
+
+
+def build_guest_checkout_reply(*, cart_has_items: bool = True) -> str:
+    """Explain Kapruka click-to-pay guest checkout."""
+    if cart_has_items:
+        lead = (
+            "Yes — you can checkout as a guest on Kapruka without creating an account. "
+            "Use Proceed to checkout (or ask me to start checkout), then complete delivery "
+            "details in chat and pay via the secure Kapruka click-to-pay link."
+        )
+    else:
+        lead = (
+            "Yes — Kapruka supports guest checkout (click-to-pay) without an account. "
+            "Add a gift to your cart first, then say Proceed to checkout to continue."
+        )
+    return (
+        f"{lead}\n\n"
+        "You'll enter recipient and delivery details during checkout; no login is required "
+        "to place a guest order."
+    )
 
 _VAGUE_GIFT_RE = re.compile(
     r"\b(?:gift ideas|present ideas|what should i gift)\b",
@@ -96,7 +133,11 @@ def is_cart_add_trigger(message: str) -> bool:
     text = message.strip()
     if not text:
         return False
-    return bool(_CART_ADD_TO_PATTERN.search(text) or _CART_PUT_IN_PATTERN.search(text))
+    return bool(
+        _CART_ADD_TO_PATTERN.search(text)
+        or _CART_PUT_IN_PATTERN.search(text)
+        or _CART_ADD_BARE_PATTERN.match(text)
+    )
 
 
 def extract_cart_product_phrase(message: str) -> str | None:
@@ -109,6 +150,11 @@ def extract_cart_product_phrase(message: str) -> str | None:
         if match:
             phrase = match.group(1).strip(" .,!?:;\"'")
             return phrase or None
+    # Bare "add [product]" without "to cart" — lower-priority fallback
+    m = _CART_ADD_BARE_PATTERN.match(text)
+    if m:
+        phrase = m.group(1).strip(" .,!?:;\"'")
+        return phrase or None
     return None
 
 
@@ -152,6 +198,8 @@ def is_checkout_trigger(message: str) -> bool:
     """Return True for explicit checkout/cart-view triggers — not add-to-cart phrases."""
     lowered = message.strip().lower()
     if not lowered:
+        return False
+    if is_guest_checkout_question(message):
         return False
     if is_cart_add_trigger(message):
         return False
