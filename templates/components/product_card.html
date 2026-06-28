@@ -86,7 +86,7 @@
   </a>
   <div class="flex flex-1 flex-col p-4">
     <h3
-      class="mb-1 line-clamp-2 text-label-md font-label-md font-semibold text-text-main"
+      class="mb-1 min-w-0 line-clamp-3 break-words text-label-md font-label-md font-semibold text-text-main"
       title="{{ product.name | normalize_catalog }}"
     >
       <a
@@ -94,13 +94,12 @@
         class="hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         target="_blank"
         rel="noopener noreferrer"
-        title="{{ product.name | normalize_catalog }}"
       >
         {{ product.name | normalize_catalog }}
       </a>
     </h3>
     <p class="mb-3 line-clamp-2 flex-1 text-body-sm font-body-sm text-on-surface-variant">
-      {% if product.description %}{{ product.description }}{% elif product.card_description_fallback %}{{ product.card_description_fallback }}{% else %}A thoughtful Kapruka gift for your occasion.{% endif %}
+      {% if product.description %}{{ product.description }}{% elif product.card_description_fallback %}{{ product.card_description_fallback }}{% elif product.summary %}{{ product.summary }}{% else %}A thoughtful Kapruka gift for your occasion.{% endif %}
     </p>
     <div class="mt-auto flex items-center justify-between">
       <span class="text-label-md font-label-md font-bold text-primary" data-testid="product-price">

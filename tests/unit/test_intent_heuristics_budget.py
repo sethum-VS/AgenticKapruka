@@ -6,6 +6,7 @@ from lib.chat.intent_heuristics import (
     has_explicit_budget_constraint,
     is_bare_category_pivot,
     is_budget_refinement_message,
+    is_natural_budget_gift_message,
     is_topic_pivot_message,
 )
 
@@ -50,3 +51,9 @@ def test_has_explicit_budget_constraint_false_on_topic_pivot() -> None:
         6000.0,
         topic_pivot=True,
     )
+
+
+def test_is_natural_budget_gift_message_wife_budget() -> None:
+    assert is_natural_budget_gift_message("wife, budget around 5000 rupees")
+    assert not is_natural_budget_gift_message("birthday cake for mom under 5000")
+    assert is_natural_budget_gift_message("Gift ideas under Rs. 5,000")

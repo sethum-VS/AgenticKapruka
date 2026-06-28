@@ -326,7 +326,7 @@ async def test_analyze_intent_cakes_followup_after_product_clarify_proceeds() ->
 
 
 @pytest.mark.asyncio
-async def test_analyze_intent_budgeted_gift_chip_routes_to_search() -> None:
+async def test_analyze_intent_budgeted_gift_chip_clarifies_before_search() -> None:
     mock_client = MagicMock()
     state: AgentState = {
         "messages": [HumanMessage(content="Gift ideas under Rs. 5,000")],
@@ -335,8 +335,9 @@ async def test_analyze_intent_budgeted_gift_chip_routes_to_search() -> None:
 
     result = await analyze_intent(state, genai_client=mock_client)
 
-    assert result.get("agent_clarifying_question") is None
-    assert result.get("session_awaiting_clarification_dimension") is None
+    assert result.get("agent_clarifying_question")
+    assert result.get("session_awaiting_clarification_dimension") == "product"
+    assert result.get("specificity_band") == "clarify"
     assert result["intent_metadata"].get("budgeted_gift_discovery") is True
 
 
@@ -458,6 +459,42 @@ async def test_analyze_intent_occasion_change_sets_budget_confirmation_pending()
     assert result.get("session_occasion") == "anniversary"
     assert result.get("session_budget_max") == 6000.0
     assert result["intent_metadata"].get("budget_confirmation_pending") is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_natural_budget_gift_clears_polluted_session() -> None:
+    """Long-session cake context must not steer wife+budget gift discovery."""
+    mock_client = MagicMock()
+    polluted_cakes = [
+        {"id": "CAKE001", "name": "Birthday Symphony Cake", "price": {"amount": 6500}},
+    ]
+    state: AgentState = {
+        "messages": [HumanMessage(content="wife, budget around 5000 rupees")],
+        "session_id": "sess-budget-gift-pivot",
+        "session_product_focus": "cake",
+        "session_occasion": "birthday",
+        "session_recipient_hint": "mom",
+        "session_search_query": "birthday cake for mom in Colombo",
+        "last_visible_products": polluted_cakes,
+        "last_search_products": polluted_cakes,
+        "hybrid_context": {
+            "hints": {"occasion": "Birthday", "category": "Cakes"},
+            "occasions": ["Birthday"],
+        },
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent_metadata"].get("budgeted_gift_discovery") is True
+    assert result.get("session_product_focus") == "gift"
+    assert result.get("session_occasion") is None
+    assert result.get("session_recipient_hint") == "wife"
+    assert result.get("session_search_query") is None
+    assert result.get("last_visible_products") is None
+    assert result.get("last_search_products") is None
+    hints = result["hybrid_context"]["hints"]
+    assert "occasion" not in hints
+    assert "category" not in hints
 
 
 @pytest.mark.asyncio

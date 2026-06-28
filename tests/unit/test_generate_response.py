@@ -469,6 +469,42 @@ def test_build_products_carousel_html_fallback_uses_budget_refined_last_search()
     assert 'data-product-id="expensive"' not in html
 
 
+def test_build_products_carousel_html_stale_fallback_uses_mcp_summary() -> None:
+    last_search = [
+        {
+            "id": "cake1",
+            "name": "Springtime Birthday Ribbon Cake",
+            "summary": "Delicate sponge with ribbon decoration.",
+            "price": {"amount": 5770.0, "currency": "LKR"},
+            "in_stock": True,
+            "url": "https://www.kapruka.com/cake",
+        },
+    ]
+    html = build_products_carousel_html(
+        None,
+        last_search_products=last_search,
+    )
+    assert html is not None
+    assert "Delicate sponge with ribbon decoration." in html
+    assert "thoughtful Kapruka gift for your occasion" not in html
+
+
+def test_build_products_carousel_html_visible_products_uses_mcp_summary() -> None:
+    products = [
+        {
+            "id": "cake2",
+            "name": "Happy Birthday Symphony Ribbon Cake",
+            "summary": "Elegant ribbon cake for celebrations.",
+            "price": {"amount": 6500.0, "currency": "LKR"},
+            "in_stock": True,
+            "url": "https://www.kapruka.com/cake2",
+        },
+    ]
+    html = build_products_carousel_html(None, visible_products=products)
+    assert html is not None
+    assert "Elegant ribbon cake for celebrations." in html
+
+
 def test_turn_implies_perishable_gift_chocolate_focus() -> None:
     from graphs.nodes.generate_response import _generate_reply_sync, _turn_implies_perishable_gift
 
@@ -1212,6 +1248,77 @@ def test_build_agent_tool_error_message_get_product_unresolved() -> None:
         error_code="product_id_unresolved",
     )
     assert "carousel" in message.lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_product_detail_follow_up_uses_session_weight() -> None:
+    """Follow-up detail turns reuse persisted MCP attributes when tool_results reset."""
+    mock_client = MagicMock()
+    carousel_product = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": "Fresh sponge with ribbon.",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+    }
+    state: AgentState = {
+        "messages": [HumanMessage(content="what is it")],
+        "intent": "discovery",
+        "tool_results": {},
+        "tool_trace": [],
+        "last_search_products": [carousel_product],
+        "last_visible_products": [carousel_product],
+        "session_resolved_product": {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "price": {"amount": 5770.0, "currency": "LKR"},
+            "attributes": {"weight": "2.77"},
+        },
+        "session_id": "sess-gen-product-detail-followup",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "2.77 Lbs" in result["assistant_message"]
+    assert "CAKE00KA001685" in result["assistant_message"]
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_persists_get_product_in_session() -> None:
+    """Fresh kapruka_get_product results are saved for later turns."""
+    mock_client = MagicMock()
+    get_product_payload = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": "Fresh sponge with ribbon.",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+        "attributes": {"weight": "2.77"},
+    }
+    state: AgentState = {
+        "messages": [HumanMessage(content="Tell me more about the Springtime cake")],
+        "intent": "discovery",
+        "tool_results": {GET_PRODUCT_TOOL: get_product_payload},
+        "tool_trace": [
+            {
+                "name": GET_PRODUCT_TOOL,
+                "args": {"product_id": "CAKE00KA001685"},
+                "result": get_product_payload,
+            },
+        ],
+        "last_search_products": [get_product_payload],
+        "session_id": "sess-gen-product-detail-persist",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert result.get("session_resolved_product") == {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": "Fresh sponge with ribbon.",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+        "attributes": {"weight": "2.77"},
+    }
+    mock_client.models.generate_content.assert_not_called()
 
 
 def test_build_agent_tool_error_message_validation_error_hides_pydantic_loc() -> None:

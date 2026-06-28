@@ -138,7 +138,7 @@ def should_bypass_specificity_scorer(
         return True
     if is_ambiguous_weekday_phrase(stripped):
         return True
-    return bool(is_budgeted_gift_ideas_message(stripped))
+    return False
 
 
 _GENERIC_WANTS_SOMETHING_RE = re.compile(
@@ -321,7 +321,7 @@ def _resolve_band(
 ) -> SpecificityBand:
     budget = dimension_scores.get("budget", 0.0)
     product = dimension_scores.get("product", 0.0)
-    if budget >= 1.0 and (product >= 0.5 or is_budgeted_gift_ideas_message(message)):
+    if budget >= 1.0 and product >= 0.5:
         return "proceed"
     if score >= PROCEED_THRESHOLD:
         return "proceed"
@@ -455,7 +455,6 @@ def score_request_specificity(
         dimension_scores.get("budget", 0.0) >= 1.0
         and dimension_scores.get("product", 0.0) < 0.5
         and dimension_scores.get("occasion", 0.0) < 0.5
-        and not is_budgeted_gift_ideas_message(stripped)
     ):
         band = "clarify"
     missing = _pick_missing_dimension(dimension_scores)

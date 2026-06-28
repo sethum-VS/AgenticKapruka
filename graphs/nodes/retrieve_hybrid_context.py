@@ -257,7 +257,13 @@ async def retrieve_hybrid_context(
     hybrid_context: dict[str, Any] = dict(state.get("hybrid_context") or {})
     user_message = _extract_latest_user_message(state.get("messages") or [])
     intent_metadata: IntentMetadata | None = state.get("intent_metadata")
-    topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
+    topic_pivot = bool(
+        intent_metadata
+        and (
+            intent_metadata.get("topic_pivot")
+            or intent_metadata.get("discovery_context_reset")
+        )
+    )
     skip_graph_reembed = bool(
         is_budget_refinement_message(user_message) and hybrid_context,
     )

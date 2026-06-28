@@ -9,6 +9,46 @@ function isChatFormInFlight() {
   return Boolean(form?.classList.contains("htmx-request"));
 }
 
+function chatComposerShell() {
+  const form = document.getElementById("chat-form");
+  return form?.parentElement?.parentElement ?? null;
+}
+
+function updateCartDrawerComposerClearance() {
+  const backdrop = document.querySelector('[data-testid="cart-backdrop"]');
+  const panel = document.querySelector('[data-testid="cart-drawer-panel"]');
+  const shell = chatComposerShell();
+  const clearance =
+    shell && shell.getBoundingClientRect
+      ? Math.max(0, window.innerHeight - shell.getBoundingClientRect().top)
+      : 0;
+  const bottom = clearance > 0 ? `${clearance}px` : "";
+  if (backdrop) {
+    backdrop.style.bottom = bottom;
+  }
+  if (panel) {
+    panel.style.bottom = bottom;
+  }
+}
+
+function resetCartDrawerComposerClearance() {
+  const backdrop = document.querySelector('[data-testid="cart-backdrop"]');
+  const panel = document.querySelector('[data-testid="cart-drawer-panel"]');
+  if (backdrop) {
+    backdrop.style.bottom = "";
+  }
+  if (panel) {
+    panel.style.bottom = "";
+  }
+}
+
+function focusChatComposer() {
+  const input = document.getElementById("chat-message");
+  if (input instanceof HTMLElement) {
+    input.focus();
+  }
+}
+
 function closeCartDrawer() {
   const drawerRoot = document.querySelector('[data-testid="cart-drawer"]');
   if (!drawerRoot || !window.Alpine) {
@@ -33,6 +73,9 @@ function proceedToCheckoutFromDrawer() {
   input.value = PROCEED_CHECKOUT_MESSAGE;
   form.requestSubmit();
   closeCartDrawer();
+  requestAnimationFrame(() => {
+    focusChatComposer();
+  });
 }
 
 document.addEventListener("alpine:init", () => {
@@ -45,12 +88,18 @@ document.addEventListener("alpine:init", () => {
       document.body.addEventListener("htmx:afterSwap", (event) => {
         this.syncCountFromPanel(event);
       });
+      window.addEventListener("resize", () => {
+        if (this.open) {
+          updateCartDrawerComposerClearance();
+        }
+      });
     },
 
     openDrawer() {
       const panel = document.getElementById("cart-panel");
       if (!panel || !window.htmx) {
         this.open = true;
+        this.$nextTick(() => updateCartDrawerComposerClearance());
         return;
       }
 
@@ -65,6 +114,7 @@ document.addEventListener("alpine:init", () => {
           this.syncCountFromPanel(event);
         }
         this.open = true;
+        this.$nextTick(() => updateCartDrawerComposerClearance());
       };
 
       const onSettle = (event) => {
@@ -91,6 +141,7 @@ document.addEventListener("alpine:init", () => {
 
     close() {
       this.open = false;
+      resetCartDrawerComposerClearance();
     },
 
     proceedToCheckout() {

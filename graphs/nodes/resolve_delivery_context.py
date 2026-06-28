@@ -13,6 +13,7 @@ from lib.chat.address_resolution import resolve_shipment_address
 from lib.chat.city_resolution import _is_bare_colombo, resolve_delivery_city
 from lib.chat.delivery_dates import is_delivery_date_only_message, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
+from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.query_preprocessor import (
     _has_delivery_intent,
     _has_perishable_gift_intent,
@@ -35,6 +36,8 @@ def route_after_resolve_delivery_context(state: AgentState) -> RouteAfterResolve
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if contains_product_id(user_message):
         return "call_mcp_tools"
+    if is_delivery_only_inquiry(user_message, intent_metadata=intent_metadata):
+        return "generate_response"
     return "agent_loop"
 
 

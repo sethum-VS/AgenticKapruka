@@ -565,6 +565,25 @@ def test_build_budget_refinement_search_args_uses_session_query() -> None:
     assert args["max_price"] == 6000.0
 
 
+def test_build_budget_refinement_skips_when_budgeted_gift_discovery() -> None:
+    from lib.neo4j.hybrid_context import build_budget_refinement_search_args
+
+    args = build_budget_refinement_search_args(
+        {
+            "session_search_query": "birthday cake for mom",
+            "session_product_focus": "cake",
+            "session_budget_max": 5000.0,
+            "intent_metadata": {
+                "budget_max": 5000.0,
+                "budgeted_gift_discovery": True,
+            },
+        },
+        "wife, budget around 5000 rupees",
+        currency="LKR",
+    )
+    assert args is None
+
+
 def test_build_budget_refinement_search_args_birthday_chocolate_bias() -> None:
     from lib.neo4j.hybrid_context import build_budget_refinement_search_args
 

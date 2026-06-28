@@ -42,9 +42,13 @@ from lib.chat.product_curation import (
     refine_last_search_by_budget,
 )
 from lib.chat.product_detail import (
+    enrich_tool_results_with_session_product,
     is_delivery_fee_question,
     is_product_detail_turn,
+    is_valid_product_detail_payload,
     match_product_from_last_search,
+    normalize_resolved_product,
+    resolve_product_detail,
     summarize_product_from_carousel,
 )
 from lib.chat.product_honesty import (
@@ -52,6 +56,7 @@ from lib.chat.product_honesty import (
     reply_already_discloses_artificial_floral,
 )
 from lib.chat.query_preprocessor import extract_target_city, is_delivery_context_relevant_turn
+from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.search_broadening import build_empty_search_reply
 from lib.chat.status_copy import PUTTING_TOGETHER_RECOMMENDATIONS
 from lib.chat.support_faq import build_support_faq_reply, is_support_question
@@ -1315,6 +1320,9 @@ def build_products_carousel_html(
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
     session_product_focus: str | None = None,
+    session_occasion: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_delivery_city: str | None = None,
     last_search_products: list[dict[str, Any]] | None = None,
     last_visible_products: list[dict[str, Any]] | None = None,
     visible_products: list[dict[str, Any]] | None = None,
@@ -1351,6 +1359,12 @@ def build_products_carousel_html(
             products = last_search_products
     if not products:
         return None
+    products = enrich_carousel_product_descriptions(
+        products,
+        session_occasion=session_occasion,
+        session_recipient_hint=session_recipient_hint,
+        session_delivery_city=session_delivery_city,
+    )
     return render_product_carousel(products)
 
 
@@ -1702,8 +1716,14 @@ async def generate_response(
                 session_product_focus=state.get("session_product_focus"),
             )
             if matched is not None:
-                detail = summarize_product_from_carousel(matched)
-                error_reply = f"{error_reply}\n\nFrom our earlier results: {detail}"
+                product, _session_update = resolve_product_detail(
+                    get_payload=None,
+                    matched=matched,
+                    session_resolved=state.get("session_resolved_product"),
+                )
+                if product is not None:
+                    detail = summarize_product_from_carousel(product)
+                    error_reply = f"{error_reply}\n\nFrom our earlier results: {detail}"
         tool_trace = state.get("tool_trace")
         if is_delivery_fee_question(user_message) and _tool_trace_has_check_delivery(tool_trace):
             delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
@@ -1736,6 +1756,9 @@ async def generate_response(
             graph_context_available=has_graph_hybrid_context(state.get("hybrid_context") or {}),
             hybrid_context=state.get("hybrid_context") or {},
             session_product_focus=state.get("session_product_focus"),
+            session_occasion=state.get("session_occasion"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            session_delivery_city=state.get("session_delivery_city_canonical"),
             last_search_products=last_search or None,
             allow_stale_fallback=allow_stale,
         )
@@ -1898,8 +1921,12 @@ async def generate_response(
     last_visible_products = list(state.get("last_visible_products") or [])
     pivot_meta = state.get("intent_metadata") or {}
     topic_pivot = bool(pivot_meta.get("topic_pivot")) if isinstance(pivot_meta, dict) else False
+    delivery_only = is_delivery_only_inquiry(
+        user_message,
+        intent_metadata=cast(IntentMetadata, pivot_meta) if isinstance(pivot_meta, dict) else None,
+    )
     fresh_search = _turn_has_fresh_search(state.get("tool_trace"))
-    allow_stale_fallback = not topic_pivot and not fresh_search
+    allow_stale_fallback = not topic_pivot and not fresh_search and not delivery_only
 
     if is_product_detail_turn(user_message):
         matched = match_product_from_last_search(
@@ -1909,16 +1936,15 @@ async def generate_response(
             session_product_focus=session_product_focus,
         )
         get_payload = (tool_results or {}).get(GET_PRODUCT_TOOL)
-        detail_reply: str | None = None
-        if (
-            isinstance(get_payload, dict)
-            and not get_payload.get("error")
-            and get_payload.get("name")
-        ):
-            detail_reply = summarize_product_from_carousel(get_payload)
-        elif matched is not None:
-            detail_reply = summarize_product_from_carousel(matched)
-        if detail_reply:
+        if not is_valid_product_detail_payload(get_payload):
+            get_payload = None
+        product, session_update = resolve_product_detail(
+            get_payload=get_payload,
+            matched=matched,
+            session_resolved=state.get("session_resolved_product"),
+        )
+        if product is not None:
+            detail_reply = summarize_product_from_carousel(product)
             tool_trace = state.get("tool_trace")
             detail_reply, delivery_status_html = _apply_perishable_delivery_honesty(
                 detail_reply,
@@ -1935,13 +1961,19 @@ async def generate_response(
                 graph_context_available=graph_context_available,
                 hybrid_context=hybrid_context,
                 session_product_focus=session_product_focus,
+                session_occasion=state.get("session_occasion"),
+                session_recipient_hint=state.get("session_recipient_hint"),
+                session_delivery_city=state.get("session_delivery_city_canonical"),
                 last_search_products=state.get("last_search_products"),
             )
-            return _assistant_response_fields(
+            response_fields = _assistant_response_fields(
                 detail_reply,
                 products_html=products_html,
                 delivery_status_html=delivery_status_html,
             )
+            if session_update is not None:
+                response_fields["session_resolved_product"] = session_update
+            return response_fields
 
     visible_products: list[dict[str, Any]] | None = None
     if (
@@ -2018,7 +2050,10 @@ async def generate_response(
     if is_delivery_fee_question(user_message) and not visible_products:
         fee_reply = _delivery_fee_reply_from_state(state, user_message)
         if fee_reply:
-            return _assistant_response_fields(fee_reply, products_html=products_html)
+            return _assistant_response_fields(
+                fee_reply,
+                products_html=None if delivery_only else products_html,
+            )
 
     effective_tool_results = _suppress_delivery_tool_results(
         tool_results,
@@ -2173,6 +2208,10 @@ async def generate_response(
         if context_clarifier.lower() not in reply_text.lower():
             reply_text = f"{reply_text.rstrip()}\n\n{context_clarifier}"
 
+    if delivery_only:
+        products_html = None
+        visible_products = None
+
     logger.info(
         "generate_response: rendered assistant reply (%d chars, carousel=%s)",
         len(reply_text),
@@ -2196,4 +2235,8 @@ async def generate_response(
         cleared["budget_confirmation_pending"] = False
         cleared["delivery_date_ambiguous"] = False
         updates["intent_metadata"] = cast(IntentMetadata, cleared)
+    effective_results = _resolve_effective_tool_results(state)
+    get_payload = (effective_results or {}).get(GET_PRODUCT_TOOL)
+    if is_valid_product_detail_payload(get_payload):
+        updates["session_resolved_product"] = normalize_resolved_product(get_payload)
     return updates

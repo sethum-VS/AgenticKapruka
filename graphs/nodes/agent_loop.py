@@ -27,6 +27,7 @@ from lib.chat.intent_heuristics import (
     is_budget_refinement_message,
     is_budgeted_gift_ideas_message,
 )
+from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.product_curation import (
     apply_anniversary_curation,
     apply_birthday_cake_curation,
@@ -50,7 +51,9 @@ from lib.chat.query_preprocessor import (
     is_delivery_context_relevant_turn,
     should_defer_delivery_date,
 )
+from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.search_broadening import apply_first_broaden
+from lib.chat.support_faq import is_support_question
 from lib.chat.status_copy import SEARCHING_CATALOG, long_search_status_message
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
@@ -1264,6 +1267,156 @@ def _is_duplicate_invocation(
     return False
 
 
+def _trace_has_check_delivery(tool_trace: list[ToolInvocation]) -> bool:
+    return any(invocation["name"] == CHECK_DELIVERY_TOOL for invocation in tool_trace)
+
+
+def _fast_path_agent_loop_updates(
+    tool_trace: list[ToolInvocation],
+    *,
+    tool_call_count: int,
+    refined_intent: Intent | None = "general",
+    exit_reason: str = "finish",
+    session_delivery_date_update: str | None = None,
+) -> dict[str, Any]:
+    updates: dict[str, Any] = {
+        "tool_trace": tool_trace,
+        "tool_call_count": tool_call_count,
+        "agent_loop_done": True,
+        "agent_loop_exit_reason": exit_reason,
+        "agent_loop_iterations": 0,
+        "intent": refined_intent,
+    }
+    if tool_trace:
+        updates["tool_results"] = {
+            invocation["name"]: invocation["result"] for invocation in tool_trace
+        }
+    if session_delivery_date_update is not None:
+        updates["session_delivery_date"] = session_delivery_date_update
+        updates["delivery_date"] = session_delivery_date_update
+    return updates
+
+
+async def _run_pending_delivery_check(
+    state: AgentState,
+    tool_trace: list[ToolInvocation],
+    *,
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+    user_message: str,
+) -> tuple[list[ToolInvocation], int, str | None]:
+    """Run kapruka_check_delivery when city+date are known but not yet in the trace."""
+    tool_call_count = 0
+    session_delivery_date_update: str | None = None
+    if _trace_has_check_delivery(tool_trace):
+        return tool_trace, tool_call_count, session_delivery_date_update
+    if not _delivery_check_pending(state, tool_trace, user_message):
+        return tool_trace, tool_call_count, session_delivery_date_update
+
+    canonical_city = state.get("delivery_city_canonical") or state.get(
+        "session_delivery_city_canonical",
+    )
+    session_date = state.get("session_delivery_date") or state.get("delivery_date")
+    if not (
+        isinstance(canonical_city, str)
+        and canonical_city.strip()
+        and isinstance(session_date, str)
+        and session_date.strip()
+    ):
+        return tool_trace, tool_call_count, session_delivery_date_update
+
+    delivery_args: dict[str, Any] = {
+        "city": canonical_city.strip(),
+        "delivery_date": session_date.strip(),
+    }
+    product_id = _resolve_delivery_product_id(state)
+    if product_id:
+        delivery_args["product_id"] = product_id
+    delivery_args = _inject_tool_currency(
+        CHECK_DELIVERY_TOOL,
+        delivery_args,
+        state,
+        currency,
+    )
+    if _is_duplicate_invocation(tool_trace, CHECK_DELIVERY_TOOL, delivery_args):
+        return tool_trace, tool_call_count, session_delivery_date_update
+
+    _emit_status(_status_message_for_tool(CHECK_DELIVERY_TOOL))
+    delivery_result = await invoke_tool(
+        CHECK_DELIVERY_TOOL,
+        delivery_args,
+        kapruka_service=kapruka_service,
+        client_ip=rate_limit_key,
+        currency=currency,
+    )
+    tool_trace = [
+        *tool_trace,
+        {"name": CHECK_DELIVERY_TOOL, "args": delivery_args, "result": delivery_result},
+    ]
+    tool_call_count = 1
+    if isinstance(delivery_result, dict) and not delivery_result.get("error"):
+        session_delivery_date_update = delivery_args["delivery_date"]
+    return tool_trace, tool_call_count, session_delivery_date_update
+
+
+async def _try_agent_loop_fast_path(
+    state: AgentState,
+    *,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> dict[str, Any] | None:
+    """Skip the Gemini planner when intent is clear (FAQ, delivery-only, cart)."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    base_tool_count = int(state.get("tool_call_count") or 0)
+
+    if state.get("intent") == "cart":
+        logger.debug("agent_loop: cart fast-path — skipping planner")
+        return _fast_path_agent_loop_updates(
+            tool_trace,
+            tool_call_count=base_tool_count,
+        )
+
+    if intent_metadata.get("support_topic") or (
+        is_support_question(user_message) and not _turn_needs_catalog(state)
+    ):
+        logger.debug("agent_loop: support FAQ fast-path — skipping planner")
+        return _fast_path_agent_loop_updates(
+            tool_trace,
+            tool_call_count=base_tool_count,
+        )
+
+    if is_delivery_only_inquiry(user_message, intent_metadata=intent_metadata):
+        if _trace_has_check_delivery(tool_trace):
+            logger.debug(
+                "agent_loop: delivery-only fast-path — check_delivery already in trace",
+            )
+            return _fast_path_agent_loop_updates(
+                tool_trace,
+                tool_call_count=base_tool_count,
+            )
+        tool_trace, added_calls, session_delivery_date_update = await _run_pending_delivery_check(
+            state,
+            tool_trace,
+            kapruka_service=kapruka_service,
+            rate_limit_key=rate_limit_key,
+            currency=currency,
+            user_message=user_message,
+        )
+        if added_calls > 0:
+            logger.debug("agent_loop: delivery-only fast-path — ran check_delivery only")
+            return _fast_path_agent_loop_updates(
+                tool_trace,
+                tool_call_count=base_tool_count + added_calls,
+                session_delivery_date_update=session_delivery_date_update,
+            )
+
+    return None
+
+
 async def agent_loop(
     state: AgentState,
     *,
@@ -1306,6 +1459,16 @@ async def agent_loop(
         user_message,
         currency=currency,
     )
+
+    fast_path = await _try_agent_loop_fast_path(
+        state,
+        tool_trace=tool_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
+    if fast_path is not None:
+        return fast_path
 
     iteration_limit = MAX_ITERATIONS
 

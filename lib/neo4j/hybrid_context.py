@@ -769,10 +769,14 @@ def build_budget_refinement_search_args(
     if not is_budget_refinement_message(user_message):
         return None
 
-    session_q = state.get("session_search_query")
-    budget_cap = extract_budget(user_message)
     intent_metadata = state.get("intent_metadata") or {}
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
+    budget_gift_discovery = bool(intent_metadata.get("budgeted_gift_discovery"))
+    if budget_gift_discovery or topic_pivot:
+        return None
+
+    session_q = state.get("session_search_query")
+    budget_cap = extract_budget(user_message)
     max_price = intent_metadata.get("budget_max") or state.get("session_budget_max")
     if budget_cap is not None:
         max_price = budget_cap.amount

@@ -128,6 +128,30 @@ def is_budgeted_gift_ideas_message(message: str) -> bool:
     return extract_budget(stripped) is not None
 
 
+_BUDGET_GIFT_RECIPIENT_RE = re.compile(
+    r"\b(?:wife|husband|mom|mother|mum|dad|father|girlfriend|boyfriend|partner|"
+    r"sister|brother|son|daughter|grandma|grandmother|grandpa|grandfather|"
+    r"colleague|friend|boss)\b",
+    re.I,
+)
+
+
+def is_natural_budget_gift_message(message: str) -> bool:
+    """Budget + recipient or gift phrasing without an explicit product category."""
+    stripped = message.strip()
+    if not stripped or is_off_topic_message(stripped):
+        return False
+    if extract_budget(stripped) is None and extract_max_price(stripped) is None:
+        return False
+    if is_budgeted_gift_ideas_message(stripped):
+        return True
+    if _PRODUCT_CATEGORY_TOKENS.search(stripped):
+        return False
+    return bool(
+        _BUDGET_GIFT_RECIPIENT_RE.search(stripped) or _VAGUE_GIFT_RE.search(stripped)
+    )
+
+
 def is_cart_add_trigger(message: str) -> bool:
     """Return True for add-to-cart or put-in-cart phrasing."""
     text = message.strip()

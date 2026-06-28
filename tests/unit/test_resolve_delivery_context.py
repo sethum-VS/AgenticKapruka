@@ -46,6 +46,25 @@ def test_route_after_resolve_defaults_to_agent_loop() -> None:
     assert route_after_resolve_delivery_context(state) == "agent_loop"
 
 
+def test_route_after_resolve_delivery_only_skips_agent_loop() -> None:
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content=(
+                    "Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"
+                ),
+            ),
+        ],
+        "session_id": "sess-resolve-delivery-only",
+        "delivery_context_ready": True,
+        "intent_metadata": {
+            "requires_delivery_validation": True,
+            "target_city": "Colombo 05",
+        },
+    }
+    assert route_after_resolve_delivery_context(state) == "generate_response"
+
+
 @pytest.mark.asyncio
 async def test_resolve_delivery_context_skips_when_no_city_signal() -> None:
     service = AsyncMock(spec=KaprukaService)

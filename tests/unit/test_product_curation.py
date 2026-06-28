@@ -15,6 +15,8 @@ from lib.chat.product_curation import (
     demote_off_focus_products,
     ensure_flower_price_tier_diversity,
     demote_puja_products,
+    enrich_carousel_product_descriptions,
+    enrich_product_card_description,
     filter_gift_noise_products,
     filter_puja_products,
     has_graph_hybrid_context,
@@ -602,3 +604,35 @@ def test_apply_anniversary_curation_fallback_demote_when_few_remain() -> None:
     )
     assert len(curated) == 3, "all items present on fallback"
     assert curated[-1]["id"] == "card1", "greeting card demoted to end"
+
+
+def test_enrich_product_card_description_uses_mcp_summary() -> None:
+    product = {
+        "id": "cake1",
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": "Delicate sponge with ribbon decoration and buttercream.",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+    }
+    enriched = enrich_product_card_description(product)
+    assert enriched["card_description_fallback"] == (
+        "Delicate sponge with ribbon decoration and buttercream."
+    )
+
+
+def test_enrich_product_card_description_truncates_long_summary() -> None:
+    long_summary = " ".join(["word"] * 30)
+    product = {"id": "cake1", "name": "Cake", "summary": long_summary}
+    enriched = enrich_product_card_description(product)
+    fallback = str(enriched["card_description_fallback"])
+    assert len(fallback) <= 96
+    assert fallback.endswith("…")
+
+
+def test_enrich_carousel_product_descriptions_applies_to_all_items() -> None:
+    products = [
+        {"id": "a", "name": "Cake A", "summary": "Summary A."},
+        {"id": "b", "name": "Cake B", "summary": "Summary B."},
+    ]
+    enriched = enrich_carousel_product_descriptions(products)
+    assert enriched[0]["card_description_fallback"] == "Summary A."
+    assert enriched[1]["card_description_fallback"] == "Summary B."

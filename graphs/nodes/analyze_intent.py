@@ -22,6 +22,7 @@ from lib.chat.intent_heuristics import (
     is_budgeted_gift_ideas_message,
     is_cart_add_trigger,
     is_guest_checkout_question,
+    is_natural_budget_gift_message,
     is_order_intent_message,
     is_topic_pivot_message,
 )
@@ -359,6 +360,7 @@ def _clear_context_on_pivot(
             {
                 "last_visible_products": None,
                 "last_search_products": None,
+                "session_resolved_product": None,
             },
         )
     from lib.chat.query_preprocessor import extract_target_city
@@ -377,6 +379,40 @@ def _clear_context_on_pivot(
         )
 
     logger.info("analyze_intent: topic pivot — clearing hybrid occasion/search seeds")
+    return cleared_meta, hybrid, True, session_clear
+
+
+def _clear_context_on_budget_gift_discovery(
+    user_message: str,
+    state: AgentState,
+    intent_metadata: IntentMetadata,
+) -> tuple[IntentMetadata, dict[str, Any] | None, bool, dict[str, Any]]:
+    """Reset stale discovery seeds when budget + recipient starts a fresh gift search."""
+    if not is_natural_budget_gift_message(user_message):
+        return intent_metadata, None, False, {}
+
+    cleared_meta = cast(
+        IntentMetadata,
+        {
+            **intent_metadata,
+            "budgeted_gift_discovery": True,
+            "discovery_context_reset": True,
+        },
+    )
+    hybrid = dict(state.get("hybrid_context") or {})
+    hints = dict(hybrid.get("hints") or {})
+    for key in ("occasion", "category", "exclude_categories"):
+        hints.pop(key, None)
+    hybrid["hints"] = hints
+    hybrid["occasions"] = []
+
+    session_clear: dict[str, Any] = {
+        "last_visible_products": None,
+        "last_search_products": None,
+        "session_search_query": None,
+        "session_occasion": None,
+    }
+    logger.info("analyze_intent: natural budget gift — clearing stale discovery context")
     return cleared_meta, hybrid, True, session_clear
 
 
@@ -440,10 +476,28 @@ async def analyze_intent(
         intent_metadata,
         )
     )
+    budget_gift_meta, budget_hybrid_update, budget_gift_pivot, budget_session_clear = (
+        _clear_context_on_budget_gift_discovery(
+            user_message,
+            state,
+            intent_metadata,
+        )
+    )
+    if budget_gift_pivot:
+        intent_metadata = budget_gift_meta
+        if budget_hybrid_update is not None:
+            hybrid_context_update = budget_hybrid_update
+        pivot_session_clear = {**pivot_session_clear, **budget_session_clear}
     session_product_focus = _resolve_session_product_focus(state, user_message)
+    if budget_gift_pivot:
+        session_product_focus = "gift"
     session_flavor_hint = _resolve_session_flavor_hint(state, user_message)
-    session_occasion = _resolve_session_occasion(state, user_message)
-    session_recipient_hint = _resolve_session_recipient_hint(state, user_message)
+    if budget_gift_pivot:
+        session_occasion = _derive_session_occasion(user_message)
+        session_recipient_hint = _derive_session_recipient_hint(user_message)
+    else:
+        session_occasion = _resolve_session_occasion(state, user_message)
+        session_recipient_hint = _resolve_session_recipient_hint(state, user_message)
     intent_metadata = _flag_budget_confirmation_on_context_change(
         state,
         user_message,
@@ -467,7 +521,9 @@ async def analyze_intent(
         delivery_date = None
         session_delivery_date = state.get("session_delivery_date")
 
-    if is_budgeted_gift_ideas_message(user_message):
+    if is_budgeted_gift_ideas_message(user_message) or is_natural_budget_gift_message(
+        user_message,
+    ):
         intent_metadata = cast(
             IntentMetadata,
             {**intent_metadata, "budgeted_gift_discovery": True},
@@ -497,6 +553,10 @@ async def analyze_intent(
             if session_budget_max is None:
                 result["session_budget_max"] = None
                 result["session_budget_currency"] = None
+            result.update(pivot_session_clear)
+            if hybrid_context_update is not None:
+                result["hybrid_context"] = hybrid_context_update
+        elif budget_gift_pivot:
             result.update(pivot_session_clear)
             if hybrid_context_update is not None:
                 result["hybrid_context"] = hybrid_context_update

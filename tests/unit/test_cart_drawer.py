@@ -50,6 +50,9 @@ def test_cart_drawer_js_registers_alpine_component() -> None:
     assert "proceedCheckoutInFlight" in source
     assert "isChatFormInFlight" in source
     assert "proceedToCheckoutFromDrawer" in source
+    assert "updateCartDrawerComposerClearance" in source
+    assert "focusChatComposer" in source
+    assert "resetCartDrawerComposerClearance" in source
 
 
 def test_cart_drawer_empty_state() -> None:

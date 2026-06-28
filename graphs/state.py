@@ -87,5 +87,6 @@ class AgentState(TypedDict):
     zep_memory_facts: list[str] | None
     last_search_products: list[dict[str, Any]] | None
     last_visible_products: list[dict[str, Any]] | None
+    session_resolved_product: dict[str, Any] | None
     search_broaden_applied: bool | None
     cart_action_result: dict[str, Any] | None

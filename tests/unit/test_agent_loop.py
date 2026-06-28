@@ -1548,3 +1548,110 @@ def test_budgeted_gift_physical_queries_tea_colleague() -> None:
         "Gift ideas under Rs. 5,000 for a colleague who loves tea",
     )
     assert queries[0] == "tea gift"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_delivery_only_skips_planner() -> None:
+    """Delivery-only turns finish without Gemini planner or product search."""
+    mock_service = _mock_kapruka_service()
+    delivery_trace: ToolInvocation = {
+        "name": CHECK_DELIVERY_TOOL,
+        "args": {"city": "Colombo 05", "delivery_date": "2026-06-28"},
+        "result": {
+            "city": "Colombo 05",
+            "available": True,
+            "rate": 300.0,
+            "currency": "LKR",
+        },
+    }
+    state: AgentState = {
+        **_base_state(),
+        "messages": [
+            HumanMessage(
+                content=(
+                    "Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"
+                ),
+            ),
+        ],
+        "intent_metadata": {
+            "requires_delivery_validation": True,
+            "target_city": "Colombo 05",
+        },
+        "session_delivery_city_canonical": "Colombo 05",
+        "session_delivery_date": "2026-06-28",
+        "tool_trace": [delivery_trace],
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on delivery-only"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result.get("agent_loop_iterations") == 0
+    assert result["intent"] == "general"
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_support_faq_skips_planner() -> None:
+    """Support FAQ turns skip the planner when routed through agent_loop."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "messages": [
+            HumanMessage(
+                content=(
+                    "What is your return and refund policy if the cake arrives damaged?"
+                ),
+            ),
+        ],
+        "intent_metadata": {"support_topic": "quality"},
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on support FAQ"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result.get("agent_loop_iterations") == 0
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_cart_intent_skips_planner() -> None:
+    """Cart intent should not invoke the planner if it reaches agent_loop."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "intent": "cart",
+        "messages": [HumanMessage(content="Please add the second one to my cart")],
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on cart intent"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result.get("agent_loop_iterations") == 0
+    mock_service.search_products.assert_not_awaited()
