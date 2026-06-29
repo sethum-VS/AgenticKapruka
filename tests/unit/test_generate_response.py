@@ -1834,7 +1834,8 @@ async def test_generate_response_guard_blocks_llm_hallucinated_delivery_fee() ->
     result = await generate_response(state, genai_client=mock_client)
 
     assert "Rs. 500" not in result["assistant_message"]
-    assert "When would you like delivery?" in result["assistant_message"]
+    assert "Kandy" in result["assistant_message"]
+    assert "checkout" in result["assistant_message"].lower()
 
 
 def test_breakup_reply_omits_stale_kandy_delivery() -> None:
@@ -1922,3 +1923,91 @@ async def test_generate_response_budget_turn_prefers_refined_chocolate_carousel(
     assert "Heart Chocolate Box" in _combined_response_html(result)
     assert result.get("response_html") is not None
     assert "Greeting Card" not in _combined_response_html(result)
+
+
+@pytest.mark.asyncio
+async def test_generate_response_discovery_search_rate_limit_uses_friendly_copy() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="chocolate gift for my wife, budget 5000")],
+        "intent": "discovery",
+        "tool_results": {
+            SEARCH_PRODUCTS_TOOL: {
+                "error": "rate_limit_exceeded",
+                "message": "Rate limit exceeded. Wait a moment before retrying.",
+                "retry_after_seconds": 60,
+            },
+        },
+        "last_search_products": [
+            {
+                "id": "CHOC1",
+                "name": "Sweet Indulgence Chocolate Gift Box",
+                "price": {"amount": 3230.0, "currency": "LKR"},
+                "in_stock": True,
+            },
+        ],
+        "session_id": "sess-discovery-rate-limit",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "checking our catalog" in result["assistant_message"].lower()
+    assert "Rate limit exceeded" not in result["assistant_message"]
+
+
+@pytest.mark.asyncio
+async def test_generate_response_delivery_fee_skips_product_detail_early_return() -> None:
+    mock_client = MagicMock()
+    springtime = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": "Pastel ribbon cake.",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+        "attributes": {"weight": "2.77"},
+    }
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content="Can you deliver to Colombo 05 this Sunday? What's the delivery fee?",
+            ),
+        ],
+        "intent": "discovery",
+        "intent_metadata": {
+            "target_city": "Colombo 05",
+            "delivery_date": "2026-06-28",
+            "requires_delivery_validation": True,
+        },
+        "session_resolved_product": springtime,
+        "last_search_products": [springtime],
+        "tool_results": {
+            CHECK_DELIVERY_TOOL: {
+                "city": "Colombo 05",
+                "now": "2026-06-28T10:00:00+05:30",
+                "checked_date": "2026-06-28",
+                "available": True,
+                "rate": 300,
+                "currency": "LKR",
+            },
+        },
+        "tool_trace": [
+            {
+                "name": CHECK_DELIVERY_TOOL,
+                "args": {"city": "Colombo 05", "delivery_date": "2026-06-28"},
+                "result": {
+                    "city": "Colombo 05",
+                    "now": "2026-06-28T10:00:00+05:30",
+                    "checked_date": "2026-06-28",
+                    "available": True,
+                    "rate": 300,
+                    "currency": "LKR",
+                },
+            },
+        ],
+        "session_id": "sess-delivery-only-detail-guard",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "300" in result["assistant_message"]
+    assert "Springtime Birthday Ribbon Cake Is A" not in result["assistant_message"]
+    assert "product-card" not in (result.get("response_html") or "")

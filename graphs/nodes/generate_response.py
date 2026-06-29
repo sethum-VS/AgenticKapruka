@@ -1643,6 +1643,14 @@ async def generate_response(
             "assistant_message": welcome,
         }
 
+    clarifying_question = state.get("master_clarifying_question")
+    if isinstance(clarifying_question, str) and clarifying_question.strip():
+        question = clarifying_question.strip()
+        return {
+            "response_html": render_assistant_html(question),
+            "assistant_message": question,
+        }
+
     clarifying_question = state.get("agent_clarifying_question")
     exit_reason = state.get("agent_loop_exit_reason")
     intent_metadata = state.get("intent_metadata") or {}
@@ -1885,10 +1893,44 @@ async def generate_response(
         if isinstance(search_payload, dict):
             error_message = search_payload.get("message")
             if search_payload.get("error") and isinstance(error_message, str):
-                return {
-                    "response_html": render_assistant_html(error_message),
-                    "assistant_message": error_message,
-                }
+                error_code = str(search_payload.get("error"))
+                error_reply = build_agent_tool_error_message(
+                    tool=SEARCH_PRODUCTS_TOOL,
+                    raw_message=error_message,
+                    error_code=error_code,
+                )
+                allow_stale = error_code in ("429", "rate_limit_exceeded")
+                products_html = build_products_carousel_html(
+                    _resolve_effective_tool_results(state),
+                    budget_max=state.get("session_budget_max"),
+                    currency=state.get("currency") or "LKR",
+                    user_message=user_message,
+                    graph_context_available=has_graph_hybrid_context(
+                        state.get("hybrid_context") or {},
+                    ),
+                    hybrid_context=state.get("hybrid_context") or {},
+                    session_product_focus=state.get("session_product_focus"),
+                    session_occasion=state.get("session_occasion"),
+                    session_recipient_hint=state.get("session_recipient_hint"),
+                    session_delivery_city=state.get("session_delivery_city_canonical"),
+                    last_search_products=list(state.get("last_search_products") or []) or None,
+                    allow_stale_fallback=allow_stale,
+                )
+                rate_limit_banner = (
+                    _rate_limit_banner_html(
+                        {
+                            "error": error_code,
+                            "retry_after_seconds": search_payload.get("retry_after_seconds"),
+                        },
+                    )
+                    if allow_stale
+                    else None
+                )
+                return _assistant_response_fields(
+                    error_reply,
+                    products_html=products_html,
+                    rate_limit_banner_html=rate_limit_banner,
+                )
             if search_payload.get("results") == []:
                 can_refine_from_last_search = bool(
                     is_budget_refinement_message(user_message)
@@ -1925,10 +1967,28 @@ async def generate_response(
         user_message,
         intent_metadata=cast(IntentMetadata, pivot_meta) if isinstance(pivot_meta, dict) else None,
     )
+    if delivery_only or is_delivery_fee_question(user_message):
+        fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if fee_reply:
+            tool_trace = state.get("tool_trace")
+            fee_reply, delivery_status_html = _apply_perishable_delivery_honesty(
+                fee_reply,
+                tool_trace,
+                user_message=user_message,
+                session_product_focus=session_product_focus,
+                delivery_context_relevant=delivery_context_relevant,
+            )
+            return _assistant_response_fields(
+                fee_reply,
+                products_html=None,
+                delivery_status_html=delivery_status_html,
+            )
     fresh_search = _turn_has_fresh_search(state.get("tool_trace"))
     allow_stale_fallback = not topic_pivot and not fresh_search and not delivery_only
 
-    if is_product_detail_turn(user_message):
+    if is_product_detail_turn(user_message) and not delivery_only and not is_delivery_fee_question(
+        user_message,
+    ):
         matched = match_product_from_last_search(
             user_message,
             state.get("last_search_products"),
@@ -1944,7 +2004,7 @@ async def generate_response(
             session_resolved=state.get("session_resolved_product"),
         )
         if product is not None:
-            detail_reply = summarize_product_from_carousel(product)
+            detail_reply = summarize_product_from_carousel(product, user_message=user_message)
             tool_trace = state.get("tool_trace")
             detail_reply, delivery_status_html = _apply_perishable_delivery_honesty(
                 detail_reply,

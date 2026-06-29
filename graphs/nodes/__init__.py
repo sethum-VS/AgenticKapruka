@@ -9,6 +9,7 @@ from graphs.nodes.retrieve_hybrid_context import (
     retrieve_hybrid_context,
     route_after_analyze_intent,
 )
+from lib.chat.routing import RouteAfterAnalyzeIntent, route_after_master_flow
 from graphs.nodes.zep_memory_write import zep_memory_write
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "render_assistant_html",
     "retrieve_hybrid_context",
     "route_after_analyze_intent",
+    "route_after_master_flow",
     "select_tool_calls",
     "zep_memory_write",
 ]

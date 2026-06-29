@@ -7,6 +7,7 @@ from lib.chat.product_detail import (
     match_product_from_last_search,
     merge_with_session_resolved,
     normalize_resolved_product,
+    product_preference_note,
     product_weight,
     resolve_product_detail,
     summarize_product_from_carousel,
@@ -91,3 +92,29 @@ def test_enrich_tool_results_with_session_product_injects_persisted_detail() -> 
     )
     assert enriched is not None
     assert enriched[GET_PRODUCT_TOOL]["attributes"]["weight"] == "2.77"
+
+
+def test_product_preference_note_less_sweet_honest_default() -> None:
+    product = {
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": "Pastel ribbon cake for birthdays.",
+    }
+    note = product_preference_note("is it suitable for someone who prefers less sweet cakes?", product)
+    assert note is not None
+    assert "does not list exact sweetness" in note.lower()
+
+
+def test_summarize_product_from_carousel_includes_preference_note() -> None:
+    product = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": "Pastel ribbon cake.",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+        "attributes": {"weight": "2.77"},
+    }
+    summary = summarize_product_from_carousel(
+        product,
+        user_message="tell me more — is it less sweet?",
+    )
+    assert "2.77" in summary
+    assert "sweetness" in summary.lower()

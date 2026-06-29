@@ -181,3 +181,22 @@ document.body.addEventListener("htmx:afterRequest", (event) => {
     proceedCheckoutInFlight = false;
   }
 });
+
+function bindCartDrawerComposerFocus() {
+  const textarea = document.getElementById("chat-message");
+  if (!textarea || textarea.dataset.cartFocusBound === "true") {
+    return;
+  }
+  textarea.dataset.cartFocusBound = "true";
+  textarea.addEventListener("focusin", () => {
+    if (document.querySelector('[data-testid="cart-drawer-panel"]')) {
+      closeCartDrawer();
+    }
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bindCartDrawerComposerFocus);
+} else {
+  bindCartDrawerComposerFocus();
+}

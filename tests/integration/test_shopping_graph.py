@@ -34,6 +34,7 @@ _GRAPH_NODE_NAMES = frozenset(
     {
         "load_zep_memory",
         "analyze_intent",
+        "master_flow",
         "retrieve_hybrid_context",
         "agent_loop",
         "call_mcp_tools",

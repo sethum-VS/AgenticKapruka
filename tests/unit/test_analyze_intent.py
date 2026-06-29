@@ -326,7 +326,7 @@ async def test_analyze_intent_cakes_followup_after_product_clarify_proceeds() ->
 
 
 @pytest.mark.asyncio
-async def test_analyze_intent_budgeted_gift_chip_clarifies_before_search() -> None:
+async def test_analyze_intent_budgeted_gift_chip_proceeds_to_search() -> None:
     mock_client = MagicMock()
     state: AgentState = {
         "messages": [HumanMessage(content="Gift ideas under Rs. 5,000")],
@@ -335,9 +335,8 @@ async def test_analyze_intent_budgeted_gift_chip_clarifies_before_search() -> No
 
     result = await analyze_intent(state, genai_client=mock_client)
 
-    assert result.get("agent_clarifying_question")
-    assert result.get("session_awaiting_clarification_dimension") == "product"
-    assert result.get("specificity_band") == "clarify"
+    assert result.get("agent_clarifying_question") is None
+    assert result.get("session_awaiting_clarification_dimension") is None
     assert result["intent_metadata"].get("budgeted_gift_discovery") is True
 
 

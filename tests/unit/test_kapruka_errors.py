@@ -63,3 +63,11 @@ def test_parse_mcp_error_order_not_found() -> None:
         parse_mcp_error("Error (order_not_found): No order exists with the given order number")
 
     assert exc_info.value.code == "order_not_found"
+
+
+def test_parse_mcp_error_simple_format_rate_limit() -> None:
+    """Simple Error: payloads mentioning rate limits map to KaprukaRateLimitError."""
+    with pytest.raises(KaprukaRateLimitError) as exc_info:
+        parse_mcp_error("Error: Rate limit exceeded. Wait a moment before retrying.")
+
+    assert exc_info.value.code == "429"

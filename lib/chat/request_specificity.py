@@ -126,6 +126,8 @@ def should_bypass_specificity_scorer(
         return True
     if is_guest_checkout_question(stripped):
         return True
+    if is_budgeted_gift_ideas_message(stripped):
+        return True
     if classify_routing_guard(stripped) is not None:
         return True
     if stripped == PROCEED_CHECKOUT_MESSAGE:
@@ -451,7 +453,9 @@ def score_request_specificity(
         band = "proceed"
     if is_delivery_only_inquiry(stripped, intent_metadata=meta):
         band = "proceed"
-    if (
+    if is_budgeted_gift_ideas_message(stripped):
+        band = "proceed"
+    elif (
         dimension_scores.get("budget", 0.0) >= 1.0
         and dimension_scores.get("product", 0.0) < 0.5
         and dimension_scores.get("occasion", 0.0) < 0.5

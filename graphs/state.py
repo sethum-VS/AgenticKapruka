@@ -29,6 +29,15 @@ CheckoutStep = Literal[
     "finalize",
 ]
 CurrencyCode = Literal["LKR", "USD", "GBP", "AUD", "CAD", "EUR"]
+ActiveFlow = Literal[
+    "checkout_active",
+    "awaiting_delivery_date",
+    "awaiting_clarification",
+    "carousel_context",
+    "delivery_resolution",
+    "free_discovery",
+]
+MasterFlowDecision = Literal["proceed", "clarify", "pivot", "redirect", "checkout_exit"]
 
 
 class ToolInvocation(TypedDict):
@@ -90,3 +99,9 @@ class AgentState(TypedDict):
     session_resolved_product: dict[str, Any] | None
     search_broaden_applied: bool | None
     cart_action_result: dict[str, Any] | None
+    master_flow_invoked: bool | None
+    master_flow_decision: MasterFlowDecision | None
+    master_clarifying_question: str | None
+    master_flow_mismatch_reason: str | None
+    active_flow: ActiveFlow | None
+    checkout_paused: bool | None

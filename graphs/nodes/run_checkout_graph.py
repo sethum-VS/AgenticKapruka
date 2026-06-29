@@ -157,6 +157,31 @@ async def run_checkout_graph(
     session_id = state.get("session_id") or ""
     currency = state.get("currency")
 
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if state.get("checkout_paused") and not is_proceed_checkout_message(user_message):
+        checkout_step = state.get("checkout_state") or "cart"
+        cart_items = await load_cart_items_for_checkout(redis_client, session_id)
+        checkout_input = initial_checkout_state(
+            session_id=session_id,
+            currency=currency if currency is not None else None,
+            cart_items=cart_items,
+        )
+        if redis_client is not None and session_id:
+            persisted = await get_checkout_session(redis_client, session_id)
+            checkout_input = _merge_persisted_into_checkout(checkout_input, persisted)
+        checkout_input = seed_checkout_from_agent_state(checkout_input, state)
+        active_step = checkout_input.get("current_step") or checkout_step
+        payload = _checkout_tool_payload(checkout_input, cart_items=cart_items)
+        logger.info(
+            "run_checkout_graph: checkout paused — holding at step %s",
+            active_step,
+        )
+        return {
+            "checkout_state": active_step,
+            "checkout_paused": True,
+            "tool_results": {CHECKOUT_TOOL_KEY: payload},
+        }
+
     cart_items = await load_cart_items_for_checkout(redis_client, session_id)
     checkout_input = initial_checkout_state(
         session_id=session_id,
@@ -172,10 +197,14 @@ async def run_checkout_graph(
 
     user_message = _extract_latest_user_message(state.get("messages") or [])
     active_step = checkout_input.get("current_step") or "cart"
+    resume_from_pause = bool(state.get("checkout_paused")) and is_proceed_checkout_message(
+        user_message,
+    )
     if (
         user_message.strip()
         and is_proceed_checkout_message(user_message)
         and active_step != "cart"
+        and not resume_from_pause
     ):
         logger.info(
             "run_checkout_graph: skipping duplicate proceed-to-checkout at step %s",
@@ -225,6 +254,7 @@ async def run_checkout_graph(
     updates: dict[str, Any] = {
         "checkout_state": current_step,
         "tool_results": {CHECKOUT_TOOL_KEY: payload},
+        "checkout_paused": False,
     }
     if current_step in ("review", "finalize"):
         updates["model_tier"] = "pro"

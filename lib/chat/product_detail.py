@@ -13,9 +13,13 @@ from lib.chat.product_reference import (
 from lib.utils.currency import format_currency
 
 _PRODUCT_DETAIL = re.compile(
-    r"\b(?:is that a cake|cupcakes?|delivery fee|how much to deliver|"
+    r"\b(?:is that a cake|cupcakes?|"
     r"what(?:'s| is) (?:that|it)|tell me (?:more )?about|"
     r"is (?:that|it) (?:a )?cake|ingredients?|serving size)\b",
+    re.I,
+)
+_PREFERENCE_SWEETNESS_RE = re.compile(
+    r"\b(?:less sweet|not too sweet|low sugar|sugar[- ]?free|diabetic)\b",
     re.I,
 )
 _DELIVERY_FEE_QUESTION = re.compile(
@@ -199,7 +203,28 @@ def enrich_tool_results_with_session_product(
     return enriched
 
 
-def summarize_product_from_carousel(product: dict[str, Any]) -> str:
+def product_preference_note(user_message: str, product: dict[str, Any]) -> str | None:
+    """Honest sweetness guidance when the shopper asks about sugar level."""
+    if not _PREFERENCE_SWEETNESS_RE.search(user_message.strip()):
+        return None
+    catalog_text = f"{product.get('description') or ''} {product.get('summary') or ''}".lower()
+    if any(
+        token in catalog_text
+        for token in ("less sweet", "low sugar", "sugar free", "sugar-free", "diabetic")
+    ):
+        return "The catalog notes this may suit guests who prefer less sweetness."
+    return (
+        "Kapruka does not list exact sweetness for this cake. "
+        "Ribbon cakes are typically buttercream-based; if low sugar matters, "
+        "call Kapruka support at +94-11-7551111 before ordering."
+    )
+
+
+def summarize_product_from_carousel(
+    product: dict[str, Any],
+    *,
+    user_message: str | None = None,
+) -> str:
     """Short natural-language summary from a cached search or detail product dict."""
     name = str(product.get("name") or "that item")
     summary = str(product.get("summary") or product.get("description") or "").strip()
@@ -221,4 +246,8 @@ def summarize_product_from_carousel(product: dict[str, Any]) -> str:
         parts.append(summary)
     if price_line:
         parts.append(price_line.strip())
+    if user_message:
+        preference = product_preference_note(user_message, product)
+        if preference:
+            parts.append(preference)
     return " ".join(parts).strip()

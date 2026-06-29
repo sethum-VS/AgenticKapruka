@@ -33,11 +33,11 @@ def test_vague_gift_ideas_clarifies_product() -> None:
     assert result.clarifying_question
 
 
-def test_budgeted_gift_chip_runs_scorer() -> None:
-    assert not should_bypass_specificity_scorer("Gift ideas under Rs. 5,000")
+def test_budgeted_gift_chip_bypasses_scorer() -> None:
+    assert should_bypass_specificity_scorer("Gift ideas under Rs. 5,000")
 
 
-def test_budgeted_gift_chip_clarifies_product_when_scored() -> None:
+def test_budgeted_gift_chip_proceeds_when_scored() -> None:
     result = score_request_specificity(
         "Gift ideas under Rs. 5,000",
         session_product_focus=None,
@@ -46,9 +46,8 @@ def test_budgeted_gift_chip_clarifies_product_when_scored() -> None:
         session_budget_max=5000.0,
         intent_metadata={"budget_max": 5000.0},
     )
-    assert result.band == "clarify"
-    assert result.missing_dimension == "product"
-    assert result.clarifying_question
+    assert result.band == "proceed"
+    assert result.clarifying_question is None
 
 
 def test_specific_birthday_cake_proceeds() -> None:

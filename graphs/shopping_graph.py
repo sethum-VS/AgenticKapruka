@@ -17,18 +17,17 @@ from graphs.nodes.call_mcp_tools import call_mcp_tools
 from graphs.nodes.execute_cart_action import execute_cart_action
 from graphs.nodes.generate_response import generate_response
 from graphs.nodes.load_zep_memory import load_zep_memory
+from graphs.nodes.master_flow import master_flow
 from graphs.nodes.resolve_cart_product import resolve_cart_product
 from graphs.nodes.resolve_delivery_context import (
     resolve_delivery_context,
     route_after_resolve_delivery_context,
 )
-from graphs.nodes.retrieve_hybrid_context import (
-    retrieve_hybrid_context,
-    route_after_analyze_intent,
-)
+from graphs.nodes.retrieve_hybrid_context import retrieve_hybrid_context
 from graphs.nodes.run_checkout_graph import run_checkout_graph
 from graphs.nodes.zep_memory_write import zep_memory_write
 from graphs.state import AgentState
+from lib.chat.routing import route_after_master_flow
 from lib.kapruka.service import KaprukaService
 from lib.neo4j.client import Neo4jClient
 from lib.redis.checkpointer import get_checkpointer
@@ -108,6 +107,14 @@ def build_shopping_graph(
             client_ip=client_ip,
         )
 
+    async def _master_flow(state: AgentState) -> dict[str, Any]:
+        updates = await master_flow(
+            state,
+            genai_client=genai_client,
+            redis_client=redis_client,
+        )
+        return updates
+
     async def _resolve_cart_product(state: AgentState) -> dict[str, Any]:
         return await resolve_cart_product(
             state,
@@ -134,6 +141,7 @@ def build_shopping_graph(
     graph = StateGraph(AgentState)
     graph.add_node("load_zep_memory", _load_zep_memory)
     graph.add_node("analyze_intent", _analyze_intent)
+    graph.add_node("master_flow", _master_flow)
     graph.add_node("retrieve_hybrid_context", _retrieve_hybrid_context)
     graph.add_node("call_mcp_tools", _call_mcp_tools)
     graph.add_node("agent_loop", _agent_loop)
@@ -146,9 +154,10 @@ def build_shopping_graph(
 
     graph.add_edge(START, "load_zep_memory")
     graph.add_edge("load_zep_memory", "analyze_intent")
+    graph.add_edge("analyze_intent", "master_flow")
     graph.add_conditional_edges(
-        "analyze_intent",
-        route_after_analyze_intent,
+        "master_flow",
+        route_after_master_flow,
         {
             "retrieve_hybrid_context": "retrieve_hybrid_context",
             "call_mcp_tools": "call_mcp_tools",
@@ -226,6 +235,12 @@ def _per_turn_agent_reset_fields() -> dict[str, Any]:
         "tool_results": {},
         "tool_call_count": 0,
         "agent_clarifying_question": None,
+        "master_clarifying_question": None,
+        "master_flow_invoked": None,
+        "master_flow_decision": None,
+        "master_flow_mismatch_reason": None,
+        "active_flow": None,
+        "checkout_paused": None,
         "agent_tool_error": None,
         "agent_loop_done": None,
         "agent_loop_exit_reason": None,

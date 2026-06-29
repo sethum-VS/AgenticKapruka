@@ -5,7 +5,35 @@
 **Environment:** `http://127.0.0.1:8080/chat` (local dev, branch `refactor/cart-drawer-components`)  
 **Health at test time:** `healthy` after brief 503 at session start — Redis, Neo4j, neo4j_graphrag, Zep, MCP all up
 
-**STATUS: DONE_WITH_CONCERNS**
+**STATUS: DONE** (fixes implemented; browse re-verification passed on 2026-06-29)
+
+---
+
+## 8. Fix implementation (2026-06-29)
+
+| Issue | Fix | Files |
+|-------|-----|-------|
+| Rate-limit UX | Friendly copy at source + discovery path uses `build_agent_tool_error_message` + stale carousel fallback | `lib/kapruka/errors.py`, `lib/kapruka/tool_executor.py`, `graphs/nodes/generate_response.py`, `graphs/nodes/agent_loop.py` |
+| Budget chip regression | Bypass specificity scorer + force `proceed` for budgeted gift chips | `lib/chat/request_specificity.py` |
+| Delivery-only noise | Early fee fast-path with perishable honesty; guard product-detail branch; remove `delivery fee` from `_PRODUCT_DETAIL` | `graphs/nodes/generate_response.py`, `lib/chat/product_detail.py` |
+| Preference questions | `product_preference_note()` for less-sweet queries | `lib/chat/product_detail.py` |
+| Cart drawer blocks input | Composer `z-[60]`; close drawer on composer focus | `templates/chat/index.html`, `static/js/cart-drawer.js` |
+| Generic carousel subtitles | `_sanitize_catalog_summary()` strips MCP breadcrumbs | `lib/chat/product_curation.py` |
+| SSE network error UX | Inline "Connection interrupted" bubble on stream failure | `static/js/chat-sse.js` |
+
+**Regression tests:** 202 targeted unit tests pass (including `test_generate_response_perishable_warning_surfaces_in_chat`, delivery-fee skip product-detail, budget chip proceed, breadcrumb sanitization, preference note).
+
+### Browse re-QA (2026-06-29, gstack-browse)
+
+| Scenario | Result | Evidence |
+|----------|--------|----------|
+| Starter chip "Gift ideas under Rs. 5,000" | **PASS** | Carousel with chocolates ≤ Rs. 5,000 (Tender Love Rs. 1,990, etc.); no clarifying-only dead end |
+| Delivery fee after discovery | **PASS** | "Delivery to Colombo 05 on Sunday… Rs. 300 (verified with Kapruka)" without Springtime product dump |
+| Cart drawer + composer | **PASS** | `is editable` true on `#chat-message` with drawer open; fill succeeds |
+| Product detail weight | **PASS** | "Springtime Birthday Ribbon Cake weighs 2.77 Lbs" |
+| Less-sweet preference (combined ask) | **PARTIAL** | LLM path admits sweetness not in catalog; explicit weight query uses fast-path. Combined "less sweet + weight" still routes to LLM synthesis |
+
+**Not re-tested live:** MCP rate-limit friendly copy (requires exhausting 60 req/min quota).
 
 ---
 

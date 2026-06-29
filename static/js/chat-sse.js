@@ -303,6 +303,20 @@
     }
   }
 
+  function showStreamFailureMessage() {
+    const messages = document.getElementById("chat-messages");
+    if (!messages) {
+      return;
+    }
+    const bubble = document.createElement("div");
+    bubble.className = "chat-message assistant";
+    bubble.setAttribute("data-testid", "chat-stream-error");
+    bubble.innerHTML =
+      '<p class="text-body-sm text-on-surface-variant">Connection interrupted. Please send your message again.</p>';
+    messages.appendChild(bubble);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
   function registerAfterRequestBackup() {
     document.addEventListener("htmx:afterRequest", (event) => {
       const elt = event.detail?.elt;
@@ -418,6 +432,7 @@
       form.reset();
     } catch (error) {
       removePendingAssistantBubbles();
+      showStreamFailureMessage();
       chatDebugLog(form, "stream failed", error);
       toggleRequestState(form, false);
       document.body.dispatchEvent(

@@ -636,3 +636,18 @@ def test_enrich_carousel_product_descriptions_applies_to_all_items() -> None:
     enriched = enrich_carousel_product_descriptions(products)
     assert enriched[0]["card_description_fallback"] == "Summary A."
     assert enriched[1]["card_description_fallback"] == "Summary B."
+
+
+def test_enrich_product_card_description_strips_catalog_breadcrumbs() -> None:
+    product = {
+        "id": "cake1",
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": (
+            "cakes - Kaprukacakes, Birthday, Birthday Kapruka Cakes "
+            "The Springtime Birthday Ribbon Cake is a pastel ribbon cake."
+        ),
+    }
+    enriched = enrich_product_card_description(product)
+    fallback = str(enriched["card_description_fallback"])
+    assert fallback.startswith("The Springtime")
+    assert "Kaprukacakes" not in fallback

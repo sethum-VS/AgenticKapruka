@@ -1496,6 +1496,7 @@ async def agent_loop(
             budgeted_gift_ideas_search_applied = True
             tool_name = SEARCH_PRODUCTS_TOOL
             budget_max = float(state.get("session_budget_max") or 0)
+            budget_trace_start = len(tool_trace)
             base_args: dict[str, Any] = {
                 "currency": currency,
                 "max_price": budget_max,
@@ -1565,6 +1566,20 @@ async def agent_loop(
                 exit_reason = "finish"
                 agent_loop_done = True
                 break
+            budget_searches = [
+                entry
+                for entry in tool_trace[budget_trace_start:]
+                if entry.get("name") == tool_name
+            ]
+            if budget_searches and all(
+                _is_rate_limit_result(entry.get("result")) for entry in budget_searches
+            ):
+                last_rate_limited = budget_searches[-1].get("result")
+                if isinstance(last_rate_limited, dict):
+                    agent_tool_error = _agent_tool_error_from_result(tool_name, last_rate_limited)
+                    exit_reason = "tool_error"
+                    agent_loop_done = True
+                    break
 
         if (
             iteration == 0

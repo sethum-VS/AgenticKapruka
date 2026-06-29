@@ -297,14 +297,14 @@ async def invoke_tool(
         logger.warning("invoke_tool: %s rate limited", name, exc_info=True)
         return {
             "error": "rate_limit_exceeded",
-            "message": exc.message,
+            "message": "I'm checking our catalog — one moment.",
             "retry_after_seconds": exc.retry_after_seconds,
         }
     except RateLimitExceeded as exc:
         logger.warning("invoke_tool: %s app rate limit", name, exc_info=True)
         return {
             "error": "rate_limit_exceeded",
-            "message": str(exc),
+            "message": "I'm checking our catalog — one moment.",
             "retry_after_seconds": exc.retry_after_seconds,
         }
     except KaprukaError as exc:

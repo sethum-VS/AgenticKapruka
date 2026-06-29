@@ -1000,6 +1000,25 @@ def curate_carousel_products(
 
 
 _CARD_SNIPPET_MAX_LEN = 96
+_CATALOG_BREADCRUMB_SUMMARY_RE = re.compile(
+    r"^(?:specialGifts|cakes|flowers|chocolates|gift)\s*-\s*",
+    re.I,
+)
+
+
+def _sanitize_catalog_summary(text: str) -> str:
+    """Strip MCP category breadcrumbs and product-id prefixes from card copy."""
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return ""
+    the_idx = cleaned.find(" The ")
+    if the_idx >= 0:
+        cleaned = cleaned[the_idx + 1 :]
+    elif _CATALOG_BREADCRUMB_SUMMARY_RE.match(cleaned):
+        parts = cleaned.split(" ", 3)
+        if len(parts) >= 4:
+            cleaned = parts[3]
+    return cleaned.strip()
 
 
 def _truncate_card_snippet(text: str) -> str:
@@ -1052,9 +1071,12 @@ def enrich_product_card_description(
     session_delivery_city: str | None = None,
 ) -> dict[str, Any]:
     """Attach card_description_fallback when the catalog omits a description."""
-    if str(product.get("description") or "").strip():
+    description = str(product.get("description") or "").strip()
+    summary = _sanitize_catalog_summary(str(product.get("summary") or "").strip())
+    if description and _CATALOG_BREADCRUMB_SUMMARY_RE.match(description):
+        description = ""
+    if description:
         return product
-    summary = str(product.get("summary") or "").strip()
     if summary:
         enriched = dict(product)
         enriched["card_description_fallback"] = _truncate_card_snippet(summary)
