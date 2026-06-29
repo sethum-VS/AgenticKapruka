@@ -15,7 +15,8 @@ from lib.utils.currency import format_currency
 _PRODUCT_DETAIL = re.compile(
     r"\b(?:is that a cake|cupcakes?|"
     r"what(?:'s| is) (?:that|it)|tell me (?:more )?about|"
-    r"is (?:that|it) (?:a )?cake|ingredients?|serving size)\b",
+    r"is (?:that|it) (?:a )?cake|ingredients?|serving size|"
+    r"weight|weigh|how much (?:does .+ )?weigh)\b",
     re.I,
 )
 _PREFERENCE_SWEETNESS_RE = re.compile(
@@ -40,6 +41,11 @@ def is_product_detail_turn(user_message: str) -> bool:
     return bool(user_message.strip() and _PRODUCT_DETAIL.search(user_message))
 
 
+def is_sweetness_preference_turn(user_message: str) -> bool:
+    """True when the shopper asks about sugar level or sweetness."""
+    return bool(user_message.strip() and _PREFERENCE_SWEETNESS_RE.search(user_message))
+
+
 def is_delivery_fee_question(user_message: str) -> bool:
     """True when the customer asks about delivery cost for a known city/date."""
     return bool(_DELIVERY_FEE_QUESTION.search(user_message))
@@ -52,6 +58,59 @@ def _ordinal_phrase_from_message(user_message: str) -> str | None:
         return None
     phrase = _normalize_ordinal_phrase(match.group(1))
     return phrase if is_ordinal_phrase(phrase) else None
+
+
+_GENERIC_PRODUCT_NAME_TOKENS = frozenset(
+    {
+        "birthday",
+        "happy",
+        "cake",
+        "cakes",
+        "ribbon",
+        "loaf",
+        "with",
+        "and",
+        "the",
+        "for",
+        "gift",
+        "box",
+    },
+)
+
+
+def _match_product_by_name_mention(
+    user_message: str,
+    products: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Match when a distinctive catalog name token appears in a long detail question."""
+    from graphs.nodes.resolve_cart_product import _product_name, _tokenize_for_overlap
+
+    message_tokens = _tokenize_for_overlap(user_message)
+    if not message_tokens:
+        return None
+
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for product in products:
+        name_tokens = _tokenize_for_overlap(_product_name(product))
+        if not name_tokens:
+            continue
+        distinctive = name_tokens - _GENERIC_PRODUCT_NAME_TOKENS
+        tokens_to_match = distinctive if distinctive else name_tokens
+        overlap = tokens_to_match & message_tokens
+        if not overlap:
+            continue
+        score = len(overlap) / len(tokens_to_match)
+        if score >= 0.5:
+            scored.append((score, product))
+
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0], reverse=True)
+    top_score = scored[0][0]
+    top_matches = [product for score, product in scored if score == top_score]
+    if len(top_matches) != 1:
+        return None
+    return top_matches[0]
 
 
 def match_product_from_last_search(
@@ -79,6 +138,22 @@ def match_product_from_last_search(
             product = reference.get("product")
             if isinstance(product, dict):
                 return product
+
+    focus_phrase = (session_product_focus or "").strip()
+    if focus_phrase:
+        for candidates in (visible, search):
+            if not candidates:
+                continue
+            product, _tied, _clarify = match_products_by_phrase(focus_phrase, candidates)
+            if product is not None:
+                return product
+
+    for candidates in (visible, search):
+        if not candidates:
+            continue
+        product = _match_product_by_name_mention(user_message, candidates)
+        if product is not None:
+            return product
 
     for candidates in (visible, search):
         if not candidates:

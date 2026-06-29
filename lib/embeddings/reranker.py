@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from sentence_transformers import CrossEncoder
@@ -33,15 +34,23 @@ class CrossEncoderService:
         """Eagerly load the cross-encoder model (call from app startup)."""
         self._get_model()
 
-    def score_pairs(self, query: str, texts: list[str]) -> list[float]:
-        """Score each text against the query; higher values mean stronger relevance."""
-        if not texts:
-            return []
-
+    def _score_pairs_sync(self, query: str, texts: list[str]) -> list[float]:
         stripped_query = query.strip()
         pairs = [(stripped_query, text) for text in texts]
         raw_scores = self._get_model().predict(pairs)
         return [float(score) for score in raw_scores]
+
+    def score_pairs(self, query: str, texts: list[str]) -> list[float]:
+        """Score each text against the query; higher values mean stronger relevance."""
+        if not texts:
+            return []
+        return self._score_pairs_sync(query, texts)
+
+    async def score_pairs_async(self, query: str, texts: list[str]) -> list[float]:
+        """Non-blocking score_pairs for async graph retrieval paths."""
+        if not texts:
+            return []
+        return await asyncio.to_thread(self._score_pairs_sync, query, texts)
 
 
 _reranker: CrossEncoderService | None = None

@@ -48,6 +48,15 @@ def _occasion_node(
     )
 
 
+# MS MARCO MiniLM outputs raw logits (~-12 to +12), not 0–1 relevance scores.
+# Unit tests inject normalized scores; integration tests assert real logit scale.
+_MOCK_RERANKER_SCORES = [0.91, 0.44, 0.12]
+_RECORDED_MS_MARCO_LOGITS: dict[str, list[float]] = {
+    "birthday cake for mom in Colombo": [-9.89, -6.61, -4.04, -1.16],
+    "red roses under 5000": [-8.2, -5.1, -3.4],
+}
+
+
 class _SequenceReranker(CrossEncoderService):
     """Return predetermined scores in pair order for unit tests."""
 
@@ -58,6 +67,13 @@ class _SequenceReranker(CrossEncoderService):
     def score_pairs(self, query: str, texts: list[str]) -> list[float]:
         assert len(texts) == len(self._scores)
         return list(self._scores)
+
+
+def test_reranker_mock_scores_document_normalized_test_scale() -> None:
+    """Unit reranker mocks use 0–1 scores; production MS MARCO emits logits (see integration)."""
+    assert all(0.0 <= score <= 1.0 for score in _MOCK_RERANKER_SCORES)
+    recorded = _RECORDED_MS_MARCO_LOGITS["birthday cake for mom in Colombo"]
+    assert all(score < 0 for score in recorded), "MS MARCO logits for ontology text are typically negative"
 
 
 def test_hints_use_highest_reranker_score_not_vector_or_weight() -> None:
@@ -132,12 +148,12 @@ def test_reranker_prunes_low_scoring_traversal_nodes() -> None:
 
 
 def test_reranker_omits_hints_below_threshold() -> None:
-    """No hints when every Occasion/Category candidate scores below threshold."""
+    """No hints when reranker and vector hits are both below confidence."""
     reranker = _SequenceReranker([0.2, 0.1])
 
     context = build_graph_hybrid_context(
         "gift ideas",
-        vector_hits=[VectorSearchHit(id="category:gifts", score=0.8)],
+        vector_hits=[VectorSearchHit(id="category:gifts", score=0.5)],
         direct_occasion_hits=[VectorSearchHit(id="occasion:wedding", score=0.3)],
         display_names={"category:gifts": "Gifts"},
         traversal=TraversalResult(nodes=()),
@@ -147,6 +163,109 @@ def test_reranker_omits_hints_below_threshold() -> None:
 
     assert context.get("hints") == {}
     assert context["vector_hits"][0]["id"] == "category:gifts"
+
+
+def test_vector_fallback_hints_when_reranker_scores_low() -> None:
+    """High-confidence vector hits seed hints when reranker rejects all candidates."""
+    reranker = _SequenceReranker([0.2, 0.1])
+
+    context = build_graph_hybrid_context(
+        "gift ideas",
+        vector_hits=[VectorSearchHit(id="category:gifts", score=0.82)],
+        direct_occasion_hits=[VectorSearchHit(id="occasion:wedding", score=0.3)],
+        display_names={"category:gifts": "Gifts"},
+        traversal=TraversalResult(nodes=()),
+        reranker=reranker,
+        reranker_threshold=DEFAULT_RERANKER_THRESHOLD,
+    )
+
+    assert context["hints"]["category"] == "Gifts"
+    assert "occasion" not in context["hints"]
+
+
+def test_reranker_relative_ranking_on_ms_marco_logits() -> None:
+    """Raw MS MARCO logits still yield hints via relative top-1 ranking."""
+    traversal = TraversalResult(
+        nodes=(
+            _occasion_node(
+                occasion_id="occasion:birthday",
+                display_name="Birthday",
+                weight=1.5,
+            ),
+        ),
+    )
+    logits = [-9.89, -6.61, -4.04]
+    reranker = _SequenceReranker(logits)
+
+    context = build_graph_hybrid_context(
+        "birthday cake for mom in Colombo",
+        vector_hits=[
+            VectorSearchHit(id="category:mother", score=0.868),
+            VectorSearchHit(id="category:cakes", score=0.72),
+        ],
+        direct_occasion_hits=[],
+        display_names={"category:mother": "Mother", "category:cakes": "Cakes"},
+        traversal=traversal,
+        reranker=reranker,
+        reranker_threshold=DEFAULT_RERANKER_THRESHOLD,
+    )
+
+    assert context["hints"].get("category") == "Cakes"
+    assert context["hints"].get("occasion") == "Birthday"
+
+
+def test_reranker_strips_city_before_scoring() -> None:
+    """Location tokens must not be passed to the cross-encoder."""
+    reranker = _SequenceReranker([-4.0, -6.0])
+    captured: list[str] = []
+
+    class _CapturingReranker(_SequenceReranker):
+        def score_pairs(self, query: str, texts: list[str]) -> list[float]:
+            captured.append(query)
+            return super().score_pairs(query, texts)
+
+    rerank_and_prune_traversal(
+        "birthday cake for mom in Colombo",
+        TraversalResult(nodes=()),
+        vector_hits=[VectorSearchHit(id="category:cakes", score=0.9)],
+        direct_occasion_hits=[VectorSearchHit(id="occasion:birthday", score=0.9)],
+        display_names={"category:cakes": "Cakes"},
+        reranker=_CapturingReranker([-4.0, -6.0]),
+        threshold=DEFAULT_RERANKER_THRESHOLD,
+    )
+
+    assert captured == ["birthday cake for mom"]
+
+
+def test_vendor_occasions_excluded_from_hint_pool() -> None:
+    """Hotel/vendor occasion nodes must not enter the rerank candidate pool."""
+    traversal = TraversalResult(
+        nodes=(
+            _occasion_node(
+                occasion_id="occasion:amari-colombo",
+                display_name="Amari Colombo",
+                weight=2.0,
+            ),
+            _occasion_node(
+                occasion_id="occasion:birthday",
+                display_name="Birthday",
+                weight=1.0,
+            ),
+        ),
+    )
+    reranker = _SequenceReranker([-9.89])
+
+    _, _, occasion_hint = rerank_and_prune_traversal(
+        "birthday cake for mom",
+        traversal,
+        vector_hits=[],
+        direct_occasion_hits=[],
+        display_names={},
+        reranker=reranker,
+        threshold=DEFAULT_RERANKER_THRESHOLD,
+    )
+
+    assert occasion_hint == "Birthday"
 
 
 def test_discovery_tool_manifest_includes_check_delivery_for_city_metadata() -> None:
@@ -777,7 +896,8 @@ def test_merge_planner_search_args_tea_strips_birthday_category() -> None:
 
 
 def test_has_strong_hybrid_hints_graph_vector_hits() -> None:
-    assert has_strong_hybrid_hints({"vector_hits": [{"id": "category:cakes"}]})
+    assert not has_strong_hybrid_hints({"vector_hits": [{"id": "category:cakes"}]})
+    assert has_strong_hybrid_hints({"hints": {"occasion": "Birthday"}})
     assert not has_strong_hybrid_hints({})
 
 
@@ -798,15 +918,21 @@ def test_is_confident_discovery_turn_rejects_vague_gifts() -> None:
 
 
 def test_is_confident_discovery_turn_requires_strong_hints() -> None:
-    assert not is_confident_discovery_turn(
+    assert is_confident_discovery_turn(
         "red roses under 5000",
         {},
         currency="LKR",
     )
+    assert not is_confident_discovery_turn(
+        "show me gifts",
+        {"hints": {"category": "Birthday"}},
+        currency="LKR",
+    )
     enriched = enrich_flower_fruit_negative_hints(
         "red roses under 5000",
-        {},
+        {"vector_hits": [{"id": "category:flowers", "score": 0.8}]},
     )
+    assert "exclude_categories" in enriched.get("hints", {})
     assert is_confident_discovery_turn(
         "red roses under 5000",
         enriched,

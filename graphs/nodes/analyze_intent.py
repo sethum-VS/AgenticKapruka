@@ -355,7 +355,9 @@ def _clear_context_on_pivot(
     hybrid["occasions"] = []
 
     session_clear: dict[str, Any] = {}
-    if not is_cart_add_trigger(user_message):
+    from lib.chat.product_detail import is_product_detail_turn
+
+    if not is_cart_add_trigger(user_message) and not is_product_detail_turn(user_message):
         session_clear.update(
             {
                 "last_visible_products": None,

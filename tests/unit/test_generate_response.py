@@ -1321,6 +1321,121 @@ async def test_generate_response_persists_get_product_in_session() -> None:
     mock_client.models.generate_content.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_generate_response_weight_query_uses_fast_path() -> None:
+    """Explicit weight questions route through product-detail fast-path."""
+    mock_client = MagicMock()
+    carousel_product = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": "Fresh sponge with ribbon.",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+    }
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content="How much does the Springtime Birthday Ribbon Cake weigh?",
+            ),
+        ],
+        "intent": "discovery",
+        "tool_results": {},
+        "tool_trace": [],
+        "last_search_products": [carousel_product],
+        "last_visible_products": [carousel_product],
+        "session_resolved_product": {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "price": {"amount": 5770.0, "currency": "LKR"},
+            "attributes": {"weight": "2.77"},
+        },
+        "session_id": "sess-gen-weight-query",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "2.77 Lbs" in result["assistant_message"]
+    assert "don't have" not in result["assistant_message"].lower()
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_combined_weight_and_sweetness() -> None:
+    """Combined weight + sweetness detail turns cite catalog weight and honesty."""
+    mock_client = MagicMock()
+    carousel_product = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "summary": "Fresh sponge with ribbon.",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+    }
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content=(
+                    "The Springtime one looks nice. "
+                    "How much does it weigh, and is it less sweet?"
+                ),
+            ),
+        ],
+        "intent": "discovery",
+        "tool_results": {},
+        "tool_trace": [],
+        "last_search_products": [carousel_product],
+        "last_visible_products": [carousel_product],
+        "session_resolved_product": {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "price": {"amount": 5770.0, "currency": "LKR"},
+            "attributes": {"weight": "2.77"},
+        },
+        "session_id": "sess-gen-weight-sweetness",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    message = result["assistant_message"]
+    assert "2.77 Lbs" in message
+    assert "sweetness" in message.lower()
+    assert "don't have" not in message.lower()
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_response_llm_path_appends_sweetness_note() -> None:
+    """Sweetness preference on the LLM synthesis path gets catalog honesty."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="Here are some elegant birthday cakes for your mom.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content="birthday cake for mom in Colombo, elegant and not too sweet",
+            ),
+        ],
+        "intent": "discovery",
+        "tool_results": _SEARCH_TOOL_RESULTS,
+        "tool_trace": [
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"query": "birthday cake"},
+                "result": _SEARCH_TOOL_RESULTS[SEARCH_PRODUCTS_TOOL],
+            },
+        ],
+        "last_search_products": _SEARCH_TOOL_RESULTS[SEARCH_PRODUCTS_TOOL]["results"],
+        "last_visible_products": _SEARCH_TOOL_RESULTS[SEARCH_PRODUCTS_TOOL]["results"],
+        "session_id": "sess-gen-sweetness-llm",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert "sweetness" in result["assistant_message"].lower()
+    mock_client.models.generate_content.assert_called_once()
+
+
 def test_build_agent_tool_error_message_validation_error_hides_pydantic_loc() -> None:
     message = build_agent_tool_error_message(
         tool=CHECK_DELIVERY_TOOL,
@@ -1799,8 +1914,10 @@ async def test_generate_response_perishable_warning_surfaces_in_chat() -> None:
     result = await generate_response(state, genai_client=mock_client)
 
     assert "Rs. 350" in result["assistant_message"]
-    assert perishable_warning in result["assistant_message"]
+    assert perishable_warning not in result["assistant_message"]
+    assert result["assistant_message"].count("Rs. 350") == 1
     assert 'data-testid="delivery-date-available"' in result["response_html"]
+    assert result["response_html"].count(perishable_warning) == 1
     assert "text-amber-800" in result["response_html"]
     assert 'data-slot="delivery-status"' in result["response_html"]
 
@@ -2011,3 +2128,78 @@ async def test_generate_response_delivery_fee_skips_product_detail_early_return(
     assert "300" in result["assistant_message"]
     assert "Springtime Birthday Ribbon Cake Is A" not in result["assistant_message"]
     assert "product-card" not in (result.get("response_html") or "")
+
+
+def test_apply_perishable_delivery_honesty_warning_only_in_partial_when_dated() -> None:
+    warning = "Fresh flowers are best within 1–2 days of delivery."
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {"city": "Colombo 05", "delivery_date": "2026-07-05"},
+            "result": {
+                "city": "Colombo 05",
+                "now": "2026-06-30T10:00:00+05:30",
+                "checked_date": "2026-07-05",
+                "available": True,
+                "rate": 300.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": warning,
+            },
+        },
+    ]
+    reply, delivery_html = _apply_perishable_delivery_honesty(
+        "Yes, we can deliver to Colombo 05 on Saturday, 5 July 2026. Delivery fee is Rs. 300.",
+        tool_trace,
+    )
+    assert warning not in reply
+    assert delivery_html is not None
+    assert warning in delivery_html
+    assert delivery_html.count(warning) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_response_skips_date_clarifier_when_carousel_deferred() -> None:
+    """City-scoped cake discovery shows carousel without a redundant delivery-date gate."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.parsed = AssistantReply(
+        message="Here are some elegant birthday cakes for Colombo.",
+    )
+    mock_response.text = mock_response.parsed.model_dump_json()
+    mock_client.models.generate_content.return_value = mock_response
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content=(
+                    "birthday cake for mom in Colombo, elegant and not too sweet"
+                ),
+            ),
+        ],
+        "intent": "discovery",
+        "currency": "LKR",
+        "agent_loop_exit_reason": "finish",
+        "agent_loop_iterations": 0,
+        "session_product_focus": "cake",
+        "session_occasion": "birthday",
+        "session_recipient_hint": "mom",
+        "intent_metadata": {"target_city": "Colombo"},
+        "agent_clarifying_question": delivery_date_clarifying_question(),
+        "tool_trace": [
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": {"q": "birthday cake"},
+                "result": {
+                    "results": [_product("cake00ka001685", "Springtime Birthday Ribbon Cake")],
+                },
+            },
+        ],
+        "session_id": "sess-discovery-date-skip",
+    }
+
+    result = await generate_response(state, genai_client=mock_client)
+
+    assert delivery_date_clarifying_question() not in result["assistant_message"]
+    assert "sweetness" in result["assistant_message"].lower()
+    assert 'data-testid="product-carousel"' in _combined_response_html(result)

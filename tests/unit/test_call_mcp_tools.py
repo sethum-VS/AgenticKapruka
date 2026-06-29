@@ -646,3 +646,28 @@ def test_enrich_get_product_unresolved_returns_error() -> None:
     _enriched, error = enrich_get_product_args({"q": "mystery item"}, state)
     assert error is not None
     assert error.get("error") == "product_id_unresolved"
+
+
+def test_enrich_get_product_replaces_numeric_hallucinated_id_from_carousel() -> None:
+    """Planner numeric product_id should resolve to carousel match on detail turns."""
+    from langchain_core.messages import HumanMessage
+
+    carousel = [
+        {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "summary": "Pastel ribbon cake.",
+        },
+    ]
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content="How much does the Springtime Birthday Ribbon Cake weigh?",
+            ),
+        ],
+        "last_search_products": carousel,
+        "last_visible_products": carousel,
+    }
+    enriched, error = enrich_get_product_args({"product_id": "12345"}, state)
+    assert error is None
+    assert enriched["product_id"] == "CAKE00KA001685"

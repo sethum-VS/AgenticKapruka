@@ -1701,3 +1701,208 @@ async def test_agent_loop_confident_discovery_skips_planner() -> None:
     assert len(result["tool_trace"]) == 1
     assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
     mock_service.search_products.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_budgeted_roses_skips_planner() -> None:
+    """Budgeted roses discovery uses deterministic search args without Gemini."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [HumanMessage(content="red roses under 5000")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:flowers", "score": 0.82}],
+        },
+        "intent_metadata": {"budget_max": 5000.0, "budget_currency": "LKR"},
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on budgeted roses"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result.get("agent_loop_iterations") == 0
+    assert len(result["tool_trace"]) == 1
+    search_args = result["tool_trace"][0]["args"]
+    assert search_args.get("q") == "red roses"
+    assert search_args.get("max_price") == 5000.0
+    mock_service.search_products.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_product_detail_fast_path_fetches_get_product() -> None:
+    """Weight/detail follow-ups should call kapruka_get_product without the planner."""
+    mock_service = _mock_kapruka_service()
+    get_payload = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+        "attributes": {"weight": "2.77"},
+    }
+    mock_service.get_product.return_value = get_payload
+    carousel = [
+        {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "summary": "Pastel ribbon cake.",
+        },
+        {
+            "id": "CAKE00KA001827",
+            "name": "Happy Birthday Symphony Ribbon Cake",
+            "summary": "Celebration centerpiece.",
+        },
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [
+            HumanMessage(
+                content=(
+                    "The Springtime one looks nice. "
+                    "How much does it weigh, and is it less sweet?"
+                ),
+            ),
+        ],
+        "last_search_products": carousel,
+        "last_visible_products": carousel,
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on product detail"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result.get("agent_loop_iterations") == 0
+    assert any(entry["name"] == GET_PRODUCT_TOOL for entry in result["tool_trace"])
+    mock_service.get_product.assert_awaited_once()
+    assert result["tool_trace"][-1]["result"]["attributes"]["weight"] == "2.77"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_product_detail_fast_path_uses_session_resolved_without_carousel() -> None:
+    """Weight follow-ups can use persisted session_resolved_product when carousel is empty."""
+    mock_service = _mock_kapruka_service()
+    get_payload = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+        "attributes": {"weight": "2.77"},
+    }
+    mock_service.get_product.return_value = get_payload
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [
+            HumanMessage(content="How much does the Springtime Birthday Ribbon Cake weigh?"),
+        ],
+        "session_resolved_product": {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "price": {"amount": 5770.0, "currency": "LKR"},
+        },
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on product detail"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert any(entry["name"] == GET_PRODUCT_TOOL for entry in result["tool_trace"])
+    mock_service.get_product.assert_awaited_once()
+    assert result["session_resolved_product"]["attributes"]["weight"] == "2.77"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_skips_confident_discovery_on_product_detail_turn() -> None:
+    """Product-detail turns must not re-run discovery search instead of get_product."""
+    mock_service = _mock_kapruka_service()
+    carousel = [
+        {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "summary": "Pastel ribbon cake.",
+        },
+    ]
+    get_payload = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "attributes": {"weight": "2.77"},
+    }
+    mock_service.get_product.return_value = get_payload
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "hybrid_context": {
+            "hints": {"occasion": "birthday", "category": "Birthday"},
+        },
+        "messages": [
+            HumanMessage(content="How much does the Springtime Birthday Ribbon Cake weigh?"),
+        ],
+        "last_search_products": carousel,
+        "last_visible_products": carousel,
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on product detail"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_service.search_products.assert_not_awaited()
+    mock_service.get_product.assert_awaited_once()
+    assert result["tool_trace"][-1]["name"] == GET_PRODUCT_TOOL
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_vector_hits_only_runs_planner() -> None:
+    """Vector hits without usable graph hints must not skip the planner."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [HumanMessage(content="something nice for mom")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:gifts", "score": 0.82}],
+        },
+    }
+    planner_step = AgentPlannerStep(
+        action="call_tool",
+        tool_name=SEARCH_PRODUCTS_TOOL,
+        tool_args={"q": "gift for mom"},
+        refined_intent="discovery",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        return_value=planner_step,
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_called()
+    assert result.get("agent_loop_iterations", 0) >= 1

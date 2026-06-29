@@ -28,6 +28,7 @@
       class="btn-cta flex w-full items-center justify-center gap-2 py-3"
       hx-post="/chat/new"
       hx-swap="none"
+      hx-on::after-request="if(event.detail.successful){htmx.ajax('GET','/cart/panel',{target:'#cart-panel',swap:'outerHTML'})}"
       data-testid="new-chat-button"
     >
       <span class="material-symbols-outlined material-symbols-filled text-[20px]" aria-hidden="true">add</span>

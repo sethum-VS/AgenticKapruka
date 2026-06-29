@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -104,6 +105,14 @@ def normalize_planner_tool_args(name: str, args: dict[str, Any]) -> dict[str, An
     return normalized
 
 
+_NUMERIC_ONLY_PRODUCT_ID = re.compile(r"^\d+$")
+
+
+def _looks_like_invalid_product_id(product_id: str) -> bool:
+    """True for planner hallucinations such as bare numeric ids."""
+    return bool(_NUMERIC_ONLY_PRODUCT_ID.match(product_id.strip()))
+
+
 def enrich_get_product_args(
     args: dict[str, Any],
     state: AgentState,
@@ -112,7 +121,12 @@ def enrich_get_product_args(
     enriched = dict(args)
     product_id = enriched.get("product_id")
     if isinstance(product_id, str) and product_id.strip():
-        return enriched, None
+        pid = product_id.strip()
+        has_carousel = bool(state.get("last_search_products") or state.get("last_visible_products"))
+        if _looks_like_invalid_product_id(pid) and has_carousel:
+            enriched.pop("product_id", None)
+        elif not _looks_like_invalid_product_id(pid):
+            return enriched, None
 
     last_search = [
         item for item in (state.get("last_search_products") or []) if isinstance(item, dict)
@@ -133,6 +147,29 @@ def enrich_get_product_args(
     last_visible = [
         item for item in (state.get("last_visible_products") or []) if isinstance(item, dict)
     ]
+
+    from graphs.nodes.analyze_intent import _extract_latest_user_message
+    from lib.chat.product_detail import is_product_detail_turn, match_product_from_last_search
+
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if is_product_detail_turn(user_message):
+        matched = match_product_from_last_search(
+            user_message,
+            last_search or None,
+            last_visible_products=last_visible or None,
+            session_product_focus=state.get("session_product_focus"),
+        )
+        if matched is not None and matched.get("id") is not None:
+            resolved = {**enriched, "product_id": str(matched["id"])}
+            for key in name_keys:
+                resolved.pop(key, None)
+            return resolved, None
+        session_resolved = state.get("session_resolved_product")
+        if isinstance(session_resolved, dict) and session_resolved.get("id") is not None:
+            resolved = {**enriched, "product_id": str(session_resolved["id"])}
+            for key in name_keys:
+                resolved.pop(key, None)
+            return resolved, None
 
     if phrase:
         ordinal_phrase = _normalize_ordinal_phrase(phrase)

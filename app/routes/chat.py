@@ -177,7 +177,8 @@ async def chat_stream(
 async def chat_new(request: Request, redis_client: RedisDep) -> Response:
     """Rotate chat thread and clear conversation context; cart is cleared."""
     prior_thread_id, new_thread_id, signed_cookie = rotate_chat_thread(request)
-    if prior_thread_id:
+    await clear_cart(redis_client, new_thread_id)
+    if prior_thread_id and prior_thread_id != new_thread_id:
         await clear_cart(redis_client, prior_thread_id)
     currency = await get_session_currency(redis_client, new_thread_id)
     content = _chat_new_empty_state_html() + render_cart_partial_oob(

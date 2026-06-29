@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import statistics
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -43,7 +44,34 @@ RETURN DISTINCT c.id AS id
 
 # Minimum vector-search score before a direct occasion hit seeds category traversal.
 VECTOR_CONFIDENCE_THRESHOLD = 0.65
+# Legacy absolute threshold for mocked 0–1 scores in unit tests; production uses relative ranking.
 DEFAULT_RERANKER_THRESHOLD = 0.45
+# Minimum gap between top-1 and top-2 reranker scores before emitting a hint (logit scale).
+MIN_RERANK_HINT_MARGIN = 0.5
+
+_RECIPIENT_CATEGORY_SLUGS = frozenset(
+    {
+        "mother",
+        "father",
+        "fathersday",
+        "mothersday",
+        "momtobe",
+        "dad",
+        "parents",
+        "wife",
+        "husband",
+        "girlfriend",
+        "boyfriend",
+        "grandmother",
+        "grandfather",
+        "newadditions",
+        "personalized-gifts",
+    }
+)
+_VENDOR_OCCASION_RE = re.compile(
+    r"(?:\bhotel\b|\bresort\b|\binn\b|chocolatier|bakery|kapruka-|gerard-|amari)",
+    re.IGNORECASE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +138,82 @@ class _RerankTarget:
     in_traversal: bool
 
 
+def _category_slug(node_id: str) -> str:
+    return node_id.rsplit(":", maxsplit=1)[-1].lower()
+
+
+def _is_recipient_category(node_id: str) -> bool:
+    return _category_slug(node_id) in _RECIPIENT_CATEGORY_SLUGS
+
+
+def _is_vendor_or_hotel_occasion(node_id: str, display_name: str) -> bool:
+    slug = _category_slug(node_id)
+    return bool(_VENDOR_OCCASION_RE.search(f"{slug} {display_name}"))
+
+
+def _product_nouns_in_query(query: str) -> list[str]:
+    lowered = query.lower()
+    found: list[str] = []
+    for token in _PRODUCT_TOKEN_PRIORITY:
+        if re.search(rf"\b{re.escape(token)}\b", lowered):
+            found.append(token)
+    return found
+
+
+def _adjust_rerank_score(
+    query: str,
+    target: _RerankTarget,
+    score: float,
+    *,
+    vector_hit_scores: dict[str, float],
+) -> float:
+    """Boost product-aligned nodes; demote recipient categories and vendor occasions."""
+    adjusted = score
+    product_nouns = _product_nouns_in_query(query)
+
+    if target.kind == "occasion" and _is_vendor_or_hotel_occasion(
+        target.node_id,
+        target.display_name,
+    ):
+        return score - 10.0
+
+    if target.kind == "category" and _is_recipient_category(target.node_id) and product_nouns:
+        adjusted -= 3.0
+
+    if target.kind == "category" and product_nouns:
+        slug = _category_slug(target.node_id)
+        for noun in product_nouns:
+            mapped = _CATEGORY_SEARCH_TERMS.get(noun, noun.rstrip("s"))
+            if mapped in slug or noun.rstrip("s") in slug or slug.startswith(noun.rstrip("s")):
+                adjusted += 2.0
+                break
+
+    vector_score = vector_hit_scores.get(target.node_id)
+    if vector_score is not None and not _is_recipient_category(target.node_id):
+        adjusted += vector_score
+
+    return adjusted
+
+
+def _relative_survival_threshold(scores: list[float]) -> float:
+    """Score floor for keeping traversal nodes; adapts to MS MARCO logit scale."""
+    if not scores:
+        return float("inf")
+    if len(scores) == 1:
+        return scores[0] - 1.0
+    median = statistics.median(scores)
+    top = max(scores)
+    margin = max((top - median) * 0.2, MIN_RERANK_HINT_MARGIN * 0.5)
+    return median + margin
+
+
+def _hint_passes_threshold(scored_values: list[float], *, threshold: float) -> bool:
+    """True when scores look like normalized 0–1 mocks (unit tests) vs raw logits."""
+    if not scored_values:
+        return False
+    return max(scored_values) <= 1.0 and min(scored_values) >= 0.0
+
+
 def _build_rerank_targets(
     *,
     traversal: TraversalResult,
@@ -152,6 +256,8 @@ def _build_rerank_targets(
             in_traversal=True,
         )
     for node in traversal.occasions:
+        if _is_vendor_or_hotel_occasion(node.id, node.display_name):
+            continue
         _add(
             kind="occasion",
             node_id=node.id,
@@ -168,10 +274,13 @@ def _build_rerank_targets(
             in_traversal=False,
         )
     for hit in direct_occasion_hits:
+        display = _occasion_display_name(hit.id, traversal.occasions)
+        if _is_vendor_or_hotel_occasion(hit.id, display):
+            continue
         _add(
             kind="occasion",
             node_id=hit.id,
-            display_name=_occasion_display_name(hit.id, traversal.occasions),
+            display_name=display,
             description=None,
             in_traversal=False,
         )
@@ -198,6 +307,7 @@ def rerank_and_prune_traversal(
     if not targets:
         return traversal, None, None
 
+    rerank_query = strip_location_from_search_query(query)
     texts = [
         build_embedding_text(
             display_name=target.display_name,
@@ -205,11 +315,35 @@ def rerank_and_prune_traversal(
         )
         for target in targets
     ]
-    scores = reranker.score_pairs(query, texts)
-    scored = list(zip(targets, scores, strict=True))
+    raw_scores = reranker.score_pairs(rerank_query, texts)
+    vector_hit_scores = {hit.id: hit.score for hit in vector_hits}
+    vector_hit_scores.update({hit.id: hit.score for hit in direct_occasion_hits})
+    adjusted_scores = [
+        _adjust_rerank_score(
+            rerank_query,
+            target,
+            score,
+            vector_hit_scores=vector_hit_scores,
+        )
+        for target, score in zip(targets, raw_scores, strict=True)
+    ]
+    scored = list(zip(targets, adjusted_scores, strict=True))
+    raw_scored = list(zip(targets, raw_scores, strict=True))
+
+    use_absolute = _hint_passes_threshold(raw_scores, threshold=threshold)
+    if use_absolute:
+        survival_floor = threshold
+        prune_scored = raw_scored
+        hint_scored = raw_scored
+    else:
+        survival_floor = _relative_survival_threshold(adjusted_scores)
+        prune_scored = scored
+        hint_scored = scored
 
     surviving_ids = {
-        target.node_id for target, score in scored if score >= threshold and target.in_traversal
+        target.node_id
+        for target, score in prune_scored
+        if score >= survival_floor and target.in_traversal
     }
     pruned_nodes = tuple(
         node
@@ -218,25 +352,124 @@ def rerank_and_prune_traversal(
     )
     pruned = TraversalResult(nodes=pruned_nodes)
 
-    category_hint = _best_hint_by_rerank_score(scored, kind="category", threshold=threshold)
-    occasion_hint = _best_hint_by_rerank_score(scored, kind="occasion", threshold=threshold)
+    category_hint = _best_hint_by_rerank_score(
+        hint_scored,
+        query=rerank_query,
+        kind="category",
+        threshold=threshold,
+        use_absolute=use_absolute,
+    )
+    occasion_hint = _best_hint_by_rerank_score(
+        hint_scored,
+        query=rerank_query,
+        kind="occasion",
+        threshold=threshold,
+        use_absolute=use_absolute,
+    )
     return pruned, category_hint, occasion_hint
 
 
 def _best_hint_by_rerank_score(
     scored: list[tuple[_RerankTarget, float]],
     *,
+    query: str,
     kind: Literal["category", "occasion"],
     threshold: float,
+    use_absolute: bool,
 ) -> str | None:
-    passing = [
+    candidates = [
         (score, target.display_name)
         for target, score in scored
-        if target.kind == kind and score >= threshold
+        if target.kind == kind
+        and not (
+            target.kind == "occasion"
+            and _is_vendor_or_hotel_occasion(target.node_id, target.display_name)
+        )
     ]
-    if not passing:
+    if not candidates:
         return None
-    return max(passing, key=lambda item: item[0])[1]
+
+    if use_absolute:
+        passing = [(score, name) for score, name in candidates if score >= threshold]
+        if not passing:
+            return None
+        return max(passing, key=lambda item: item[0])[1]
+
+    ranked = sorted(candidates, key=lambda item: item[0], reverse=True)
+    top_score, top_name = ranked[0]
+    if len(ranked) == 1:
+        return top_name
+    second_score = ranked[1][0]
+    if top_score - second_score < MIN_RERANK_HINT_MARGIN:
+        return None
+    if kind == "category" and _product_nouns_in_query(query):
+        top_target = next(t for t, s in scored if t.display_name == top_name and t.kind == kind)
+        if _is_recipient_category(top_target.node_id):
+            return None
+    return top_name
+
+
+def _best_vector_category_hint(
+    query: str,
+    vector_hits: list[VectorSearchHit],
+    display_names: dict[str, str],
+) -> str | None:
+    """Pick a category hint from vector hits when reranker yields none."""
+    eligible = [hit for hit in vector_hits if hit.score >= VECTOR_CONFIDENCE_THRESHOLD]
+    if not eligible:
+        return None
+
+    product_nouns = _product_nouns_in_query(query)
+
+    def _effective_score(hit: VectorSearchHit) -> float:
+        score = hit.score
+        if _is_recipient_category(hit.id) and product_nouns:
+            score -= 0.35
+        slug = _category_slug(hit.id)
+        for noun in product_nouns:
+            mapped = _CATEGORY_SEARCH_TERMS.get(noun, noun.rstrip("s"))
+            if mapped in slug or noun.rstrip("s") in slug:
+                score += 0.25
+                break
+        return score
+
+    best = max(eligible, key=_effective_score)
+    if _is_recipient_category(best.id) and product_nouns:
+        product_aligned = [
+            hit
+            for hit in eligible
+            if not _is_recipient_category(hit.id)
+            and any(
+                noun.rstrip("s") in _category_slug(hit.id)
+                or _CATEGORY_SEARCH_TERMS.get(noun, "") in _category_slug(hit.id)
+                for noun in product_nouns
+            )
+        ]
+        if product_aligned:
+            best = max(product_aligned, key=lambda hit: hit.score)
+        elif _effective_score(best) < VECTOR_CONFIDENCE_THRESHOLD:
+            return None
+    return str(display_names.get(best.id, best.id))
+
+
+def _best_vector_occasion_hint(
+    query: str,
+    occasion_hits: list[VectorSearchHit],
+    traversal: TraversalResult,
+) -> str | None:
+    """Pick an occasion hint from vector hits when reranker yields none."""
+    eligible: list[VectorSearchHit] = []
+    for hit in occasion_hits:
+        if hit.score < VECTOR_CONFIDENCE_THRESHOLD:
+            continue
+        display = _occasion_display_name(hit.id, traversal.occasions)
+        if _is_vendor_or_hotel_occasion(hit.id, display):
+            continue
+        eligible.append(hit)
+    if not eligible:
+        return None
+    best = max(eligible, key=lambda hit: hit.score)
+    return _occasion_display_name(best.id, traversal.occasions)
 
 
 def build_graph_hybrid_context(
@@ -269,6 +502,8 @@ def build_graph_hybrid_context(
             threshold=reranker_threshold,
         )
 
+    reranker_produced_hints = bool(category_hint or occasion_hint)
+
     ranked_hits = [
         {
             "id": hit.id,
@@ -282,8 +517,19 @@ def build_graph_hybrid_context(
     hints: dict[str, str] = {}
     if category_hint:
         hints["category"] = category_hint
+    elif not reranker_produced_hints and vector_hits:
+        fallback_category = _best_vector_category_hint(query, vector_hits, display_names)
+        if fallback_category:
+            category_hint = fallback_category
+            hints["category"] = fallback_category
+
     if occasion_hint:
         hints["occasion"] = occasion_hint
+    elif not reranker_produced_hints and occasion_hits:
+        fallback_occasion = _best_vector_occasion_hint(query, occasion_hits, traversal)
+        if fallback_occasion:
+            occasion_hint = fallback_occasion
+            hints["occasion"] = fallback_occasion
 
     return {
         "vector_hits": ranked_hits,
@@ -1012,13 +1258,25 @@ def strip_location_from_search_query(
     return cleaned or stripped
 
 
+def _has_neo4j_retrieval_signal(hybrid_context: dict[str, Any] | None) -> bool:
+    """True when Neo4j retrieval populated graph fields (including vector hits)."""
+    if not hybrid_context:
+        return False
+    return bool(
+        hybrid_context.get("vector_hits")
+        or hybrid_context.get("categories")
+        or hybrid_context.get("occasions")
+        or hybrid_context.get("direct_occasion_hits")
+    )
+
+
 def enrich_flower_fruit_negative_hints(
     query: str,
     hybrid_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Add puja/religious exclude hints when GraphRAG is up and query is flower/fruit."""
+    """Add puja/religious exclude hints when GraphRAG ran and query is flower/fruit."""
     context = dict(hybrid_context or {})
-    if not is_flower_fruit_intent(query) or not has_graph_hybrid_context(context):
+    if not is_flower_fruit_intent(query) or not _has_neo4j_retrieval_signal(context):
         return context
     hints = dict(context.get("hints") or {})
     hints["exclude_categories"] = ", ".join(PUJA_NEGATIVE_CATEGORY_HINTS)
@@ -1271,6 +1529,25 @@ def has_strong_hybrid_hints(hybrid_context: dict[str, Any] | None) -> bool:
     return isinstance(exclude, str) and bool(exclude.strip())
 
 
+def _is_budgeted_flower_discovery(
+    user_message: str,
+    search_args: dict[str, Any],
+) -> bool:
+    """True when max_price + flower/roses intent yields deterministic search args."""
+    if not is_flower_fruit_intent(user_message):
+        return False
+    max_price = search_args.get("max_price")
+    if not isinstance(max_price, (int, float)) or max_price <= 0:
+        return False
+    query = str(search_args.get("q") or "").strip().lower()
+    if not query:
+        return False
+    return bool(
+        re.search(r"\b(?:rose|roses|bouquet|flower|floral)\b", query, re.I)
+        or _SPECIFIC_DISCOVERY_RE.search(user_message)
+    )
+
+
 def is_confident_discovery_turn(
     user_message: str,
     hybrid_context: dict[str, Any] | None,
@@ -1301,6 +1578,8 @@ def is_confident_discovery_turn(
     query = str(args.get("q") or "").strip()
     if not query or _is_meta_catalog_query(query):
         return False
+    if _is_budgeted_flower_discovery(stripped, args):
+        return True
     return has_strong_hybrid_hints(hybrid_context)
 
 

@@ -264,6 +264,14 @@ async def retrieve_hybrid_context(
         meta = dict(intent_metadata or state.get("intent_metadata") or {})
         meta["graph_degraded"] = True
         updates["intent_metadata"] = cast(IntentMetadata, meta)
+    elif graph_context:
+        graph_hints = graph_context.get("hints") or {}
+        if graph_context.get("vector_hits") and not graph_hints:
+            logger.debug(
+                "retrieve_hybrid_context: rerank_prune_empty_hints query=%r vector_hits=%d",
+                user_message[:80],
+                len(graph_context.get("vector_hits") or []),
+            )
     currency_hint = preferences.get("currency")
     if currency_hint and currency_hint in _VALID_CURRENCIES and state.get("currency") is None:
         updates["currency"] = currency_hint

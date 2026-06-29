@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from lib.chat.product_detail import (
     enrich_tool_results_with_session_product,
+    is_product_detail_turn,
+    is_sweetness_preference_turn,
     match_product_from_last_search,
     merge_with_session_resolved,
     normalize_resolved_product,
@@ -118,3 +122,47 @@ def test_summarize_product_from_carousel_includes_preference_note() -> None:
     )
     assert "2.77" in summary
     assert "sweetness" in summary.lower()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "How much does the Springtime Birthday Ribbon Cake weigh?",
+        "The Springtime one looks nice. How much does it weigh, and is it less sweet?",
+        "what is the weight of that cake?",
+    ],
+)
+def test_is_product_detail_turn_matches_weight_phrasing(message: str) -> None:
+    assert is_product_detail_turn(message)
+
+
+def test_is_sweetness_preference_turn() -> None:
+    assert is_sweetness_preference_turn("elegant, not too sweet")
+    assert not is_sweetness_preference_turn("birthday cake for mom")
+
+
+def test_match_product_from_last_search_name_mention_in_long_detail_question() -> None:
+    """Long weight+sweetness follow-ups still resolve the named carousel item."""
+    carousel = [
+        {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "summary": "Pastel ribbon cake.",
+        },
+        {
+            "id": "CAKE00KA001827",
+            "name": "Happy Birthday Symphony Ribbon Cake",
+            "summary": "Celebration centerpiece.",
+        },
+    ]
+    message = (
+        "The Springtime one looks nice. "
+        "How much does it weigh, and is it less sweet than typical birthday cakes?"
+    )
+    matched = match_product_from_last_search(
+        message,
+        carousel,
+        last_visible_products=carousel,
+    )
+    assert matched is not None
+    assert matched["id"] == "CAKE00KA001685"

@@ -45,9 +45,11 @@ from lib.chat.product_detail import (
     enrich_tool_results_with_session_product,
     is_delivery_fee_question,
     is_product_detail_turn,
+    is_sweetness_preference_turn,
     is_valid_product_detail_payload,
     match_product_from_last_search,
     normalize_resolved_product,
+    product_preference_note,
     resolve_product_detail,
     summarize_product_from_carousel,
 )
@@ -55,7 +57,11 @@ from lib.chat.product_honesty import (
     artificial_floral_note_for_picks,
     reply_already_discloses_artificial_floral,
 )
-from lib.chat.query_preprocessor import extract_target_city, is_delivery_context_relevant_turn
+from lib.chat.query_preprocessor import (
+    extract_target_city,
+    is_delivery_context_relevant_turn,
+    should_defer_delivery_date,
+)
 from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.search_broadening import build_empty_search_reply
 from lib.chat.status_copy import PUTTING_TOGETHER_RECOMMENDATIONS
@@ -637,13 +643,12 @@ def _apply_perishable_delivery_honesty(
     if isinstance(warning, str) and warning.strip():
         warning = warning.strip()
         dated_delivery = not _is_city_only_check_delivery(invocation)
-        should_append_warning = warning not in updated_reply
-        if should_append_warning:
-            updated_reply = f"{updated_reply}\n\n{warning}".strip()
-        if delivery_html is None and (
-            dated_delivery or (warning and _is_city_only_check_delivery(invocation))
-        ):
-            delivery_html = render_delivery_date_status(result=delivery_output)
+        # Warning lives in delivery_status_html when that partial renders — avoid triplication.
+        if delivery_html is None:
+            if warning not in updated_reply:
+                updated_reply = f"{updated_reply}\n\n{warning}".strip()
+            if dated_delivery or (warning and _is_city_only_check_delivery(invocation)):
+                delivery_html = render_delivery_date_status(result=delivery_output)
 
     return updated_reply, delivery_html
 
@@ -1286,6 +1291,113 @@ def _apply_artificial_floral_honesty(
     if reply_already_discloses_artificial_floral(reply_text):
         return reply_text
     return f"{note}\n\n{reply_text}".strip()
+
+
+def _product_for_sweetness_note(
+    state: AgentState,
+    *,
+    user_message: str,
+    visible_products: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Pick the best catalog product for a sweetness-preference honesty note."""
+    matched = match_product_from_last_search(
+        user_message,
+        state.get("last_search_products"),
+        last_visible_products=state.get("last_visible_products"),
+        session_product_focus=state.get("session_product_focus"),
+    )
+    get_payload = (state.get("tool_results") or {}).get(GET_PRODUCT_TOOL)
+    if not is_valid_product_detail_payload(get_payload):
+        get_payload = None
+    product, _session_update = resolve_product_detail(
+        get_payload=get_payload,
+        matched=matched,
+        session_resolved=state.get("session_resolved_product"),
+    )
+    if product is not None:
+        return product
+    if visible_products:
+        return visible_products[0]
+    last_search = state.get("last_search_products") or []
+    if isinstance(last_search, list) and last_search:
+        first = last_search[0]
+        if isinstance(first, dict):
+            return first
+    return None
+
+
+def _discovery_sweetness_honesty_note(user_message: str) -> str | None:
+    """Generic sweetness guidance on discovery openers before a product is picked."""
+    if not is_sweetness_preference_turn(user_message):
+        return None
+    return (
+        "Kapruka does not list exact sweetness on every cake. "
+        "Ribbon cakes are typically buttercream-based; if low sugar matters, "
+        "call Kapruka support at +94-11-7551111 before ordering."
+    )
+
+
+def _should_skip_delivery_date_clarifier_with_carousel(
+    state: AgentState,
+    user_message: str,
+    clarifier: str,
+    *,
+    has_carousel: bool,
+) -> bool:
+    """Skip date gate copy when discovery already surfaced a carousel for this city."""
+    if not has_carousel:
+        return False
+    if clarifier.strip() != delivery_date_clarifying_question().strip():
+        return False
+    return should_defer_delivery_date(state, user_message)
+
+
+def _maybe_prepend_clarifier(
+    reply_text: str,
+    clarifier: str | None,
+    *,
+    state: AgentState,
+    user_message: str,
+    has_carousel: bool,
+) -> str:
+    if not isinstance(clarifier, str) or not clarifier.strip():
+        return reply_text
+    question = clarifier.strip()
+    if _should_skip_delivery_date_clarifier_with_carousel(
+        state,
+        user_message,
+        question,
+        has_carousel=has_carousel,
+    ):
+        return reply_text
+    if question.lower() in reply_text.lower():
+        return reply_text
+    return f"{question}\n\n{reply_text.strip()}"
+
+
+def _apply_sweetness_preference_note(
+    reply_text: str,
+    *,
+    user_message: str,
+    state: AgentState,
+    visible_products: list[dict[str, Any]] | None = None,
+) -> str:
+    """Append catalog honesty when shoppers ask about sweetness on the LLM path."""
+    if not is_sweetness_preference_turn(user_message):
+        return reply_text
+    product = _product_for_sweetness_note(
+        state,
+        user_message=user_message,
+        visible_products=visible_products,
+    )
+    note = product_preference_note(user_message, product) if product is not None else None
+    if note is None:
+        note = _discovery_sweetness_honesty_note(user_message)
+    if note is None:
+        return reply_text
+    if note.lower() in reply_text.lower():
+        return reply_text
+    return f"{reply_text.rstrip()}\n\n{note}"
 
 
 def _build_discovery_template_reply(
@@ -2000,8 +2112,28 @@ async def generate_response(
         fee_reply = _delivery_fee_reply_from_state(state, user_message)
         if fee_reply:
             tool_trace = state.get("tool_trace")
+            invocation = _last_check_delivery_invocation(tool_trace)
+            prose = fee_reply
+            if invocation is not None and not _is_city_only_check_delivery(invocation):
+                delivery = invocation.get("result")
+                if isinstance(delivery, dict) and delivery.get("available"):
+                    city = _canonical_city_from_check_delivery_invocation(invocation)
+                    checked_date = delivery.get("checked_date")
+                    rate = delivery.get("rate")
+                    delivery_currency = delivery.get("currency") or "LKR"
+                    if (
+                        city
+                        and isinstance(checked_date, str)
+                        and isinstance(rate, (int, float))
+                    ):
+                        prose = _build_verified_dated_delivery_reply(
+                            city=city,
+                            checked_date=checked_date,
+                            rate=float(rate),
+                            currency=str(delivery_currency),
+                        )
             fee_reply, delivery_status_html = _apply_perishable_delivery_honesty(
-                fee_reply,
+                prose,
                 tool_trace,
                 user_message=user_message,
                 session_product_focus=session_product_focus,
@@ -2172,12 +2304,13 @@ async def generate_response(
                 currency=currency,
             )
             clarifying = state.get("agent_clarifying_question")
-            if (
-                isinstance(clarifying, str)
-                and clarifying.strip()
-                and clarifying.strip().lower() not in reply_text.lower()
-            ):
-                reply_text = f"{clarifying.strip()}\n\n{reply_text.strip()}"
+            reply_text = _maybe_prepend_clarifier(
+                reply_text,
+                clarifying if isinstance(clarifying, str) else None,
+                state=state,
+                user_message=user_message,
+                has_carousel=bool(visible_products or products_html),
+            )
             tool_trace = state.get("tool_trace")
             reply_text = delivery_claim_guard(
                 reply_text,
@@ -2194,6 +2327,12 @@ async def generate_response(
                 user_message=user_message,
                 session_product_focus=session_product_focus,
                 delivery_context_relevant=delivery_context_relevant,
+            )
+            reply_text = _apply_sweetness_preference_note(
+                reply_text,
+                user_message=user_message,
+                state=state,
+                visible_products=visible_products,
             )
             return _assistant_response_fields(
                 reply_text,
@@ -2289,13 +2428,13 @@ async def generate_response(
     )
     reply_text = _prepend_situational_empathy(reply_text, intent_metadata)
     clarifying = state.get("agent_clarifying_question")
-    if (
-        isinstance(clarifying, str)
-        and clarifying.strip()
-        and (visible_products or products_html)
-        and clarifying.strip().lower() not in reply_text.lower()
-    ):
-        reply_text = f"{clarifying.strip()}\n\n{reply_text.strip()}"
+    reply_text = _maybe_prepend_clarifier(
+        reply_text,
+        clarifying if isinstance(clarifying, str) else None,
+        state=state,
+        user_message=user_message,
+        has_carousel=bool(visible_products or products_html),
+    )
     tool_trace = state.get("tool_trace")
     reply_text = delivery_claim_guard(
         reply_text,
@@ -2326,6 +2465,12 @@ async def generate_response(
         visible_products,
         user_message=user_message,
     )
+    reply_text = _apply_sweetness_preference_note(
+        reply_text,
+        user_message=user_message,
+        state=state,
+        visible_products=visible_products,
+    )
     reply_text, delivery_status_html = _apply_perishable_delivery_honesty(
         reply_text,
         tool_trace,
@@ -2335,19 +2480,25 @@ async def generate_response(
     )
 
     if pending_clarifier and has_carousel_products:
-        context_clarifier = build_context_aware_clarifier(
+        if not _should_skip_delivery_date_clarifier_with_carousel(
+            state,
+            user_message,
             pending_clarifier,
-            session_occasion=state.get("session_occasion"),
-            session_recipient_hint=state.get("session_recipient_hint"),
-            session_flavor_hint=state.get("session_flavor_hint"),
-            session_budget_max=budget_max,
-            session_delivery_date=state.get("session_delivery_date")
-            or state.get("delivery_date"),
-            session_delivery_city=state.get("session_delivery_city_canonical")
-            or state.get("delivery_city_canonical"),
-        )
-        if context_clarifier.lower() not in reply_text.lower():
-            reply_text = f"{reply_text.rstrip()}\n\n{context_clarifier}"
+            has_carousel=True,
+        ):
+            context_clarifier = build_context_aware_clarifier(
+                pending_clarifier,
+                session_occasion=state.get("session_occasion"),
+                session_recipient_hint=state.get("session_recipient_hint"),
+                session_flavor_hint=state.get("session_flavor_hint"),
+                session_budget_max=budget_max,
+                session_delivery_date=state.get("session_delivery_date")
+                or state.get("delivery_date"),
+                session_delivery_city=state.get("session_delivery_city_canonical")
+                or state.get("delivery_city_canonical"),
+            )
+            if context_clarifier.lower() not in reply_text.lower():
+                reply_text = f"{reply_text.rstrip()}\n\n{context_clarifier}"
 
     if delivery_only:
         products_html = None

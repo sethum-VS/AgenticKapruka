@@ -44,6 +44,13 @@ from lib.chat.product_curation import (
     is_cake_accessory,
     is_flower_fruit_intent,
 )
+from lib.chat.product_detail import (
+    is_delivery_fee_question,
+    is_product_detail_turn,
+    is_valid_product_detail_payload,
+    match_product_from_last_search,
+    normalize_resolved_product,
+)
 from lib.chat.query_preprocessor import (
     _has_delivery_intent,
     _has_perishable_gift_intent,
@@ -1412,6 +1419,8 @@ def _confident_discovery_fast_path_blocked(
         return True
     if _should_run_situational_flowers_search(state, user_message, already_ran=False):
         return True
+    if is_product_detail_turn(user_message):
+        return True
     return False
 
 
@@ -1506,6 +1515,69 @@ async def _try_confident_discovery_fast_path(
     return updates
 
 
+async def _try_product_detail_fast_path(
+    state: AgentState,
+    *,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> dict[str, Any] | None:
+    """Fetch kapruka_get_product when the shopper asks about a prior carousel item."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if not is_product_detail_turn(user_message) or is_delivery_fee_question(user_message):
+        return None
+
+    for invocation in reversed(tool_trace):
+        if invocation.get("name") != GET_PRODUCT_TOOL:
+            continue
+        if is_valid_product_detail_payload(invocation.get("result")):
+            return _fast_path_agent_loop_updates(
+                tool_trace,
+                tool_call_count=int(state.get("tool_call_count") or 0),
+            )
+        break
+
+    matched = match_product_from_last_search(
+        user_message,
+        state.get("last_search_products"),
+        last_visible_products=state.get("last_visible_products"),
+        session_product_focus=state.get("session_product_focus"),
+    )
+    if matched is None:
+        session_resolved = state.get("session_resolved_product")
+        if isinstance(session_resolved, dict) and session_resolved.get("id"):
+            matched = session_resolved
+    product_id = matched.get("id") if isinstance(matched, dict) else None
+    if not product_id:
+        return None
+
+    args = {"product_id": str(product_id), "currency": currency}
+    if _is_duplicate_invocation(tool_trace, GET_PRODUCT_TOOL, args):
+        return None
+
+    logger.debug(
+        "agent_loop: product-detail fast-path — kapruka_get_product for %s",
+        product_id,
+    )
+    _emit_status(_status_message_for_tool(GET_PRODUCT_TOOL))
+    result = await _invoke_tool_with_rate_limit_retry(
+        GET_PRODUCT_TOOL,
+        args,
+        kapruka_service=kapruka_service,
+        client_ip=rate_limit_key,
+        currency=currency,
+    )
+    tool_trace.append({"name": GET_PRODUCT_TOOL, "args": args, "result": result})
+    updates = _fast_path_agent_loop_updates(
+        tool_trace,
+        tool_call_count=int(state.get("tool_call_count") or 0) + 1,
+    )
+    if is_valid_product_detail_payload(result):
+        updates["session_resolved_product"] = normalize_resolved_product(result)
+    return updates
+
+
 async def _try_agent_loop_fast_path(
     state: AgentState,
     *,
@@ -1559,6 +1631,16 @@ async def _try_agent_loop_fast_path(
                 tool_call_count=base_tool_count + added_calls,
                 session_delivery_date_update=session_delivery_date_update,
             )
+
+    product_detail_fast_path = await _try_product_detail_fast_path(
+        state,
+        tool_trace=tool_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
+    if product_detail_fast_path is not None:
+        return product_detail_fast_path
 
     discovery_fast_path = await _try_confident_discovery_fast_path(
         state,

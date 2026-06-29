@@ -161,8 +161,10 @@ def test_apply_puja_curation_filters_or_demotes_by_graph_flag() -> None:
 
 
 def test_has_graph_hybrid_context_detects_neo4j_fields() -> None:
-    assert has_graph_hybrid_context({"vector_hits": [{"id": "category:flowers"}]})
-    assert not has_graph_hybrid_context({"hints": {"category": "Flowers"}})
+    assert has_graph_hybrid_context({"categories": [{"id": "category:flowers"}]})
+    assert has_graph_hybrid_context({"hints": {"category": "Flowers"}})
+    assert has_graph_hybrid_context({"hints": {"exclude_categories": "Puja"}})
+    assert not has_graph_hybrid_context({"vector_hits": [{"id": "category:flowers"}]})
     assert not has_graph_hybrid_context(None)
 
 
@@ -651,3 +653,19 @@ def test_enrich_product_card_description_strips_catalog_breadcrumbs() -> None:
     fallback = str(enriched["card_description_fallback"])
     assert fallback.startswith("The Springtime")
     assert "Kaprukacakes" not in fallback
+
+
+def test_enrich_product_card_description_rejects_category_marketing_crumbs() -> None:
+    product = {
+        "id": "cake2",
+        "name": "Happy Birthday Symphony Ribbon Cake",
+        "description": (
+            "Birthday Kapruka Cakes Celebrate Life s Special Moments with our curated "
+            "selection of celebration cakes."
+        ),
+    }
+    enriched = enrich_product_card_description(product)
+    fallback = str(enriched["card_description_fallback"])
+    assert "Celebrate Life" not in fallback
+    assert enriched.get("description") == ""
+    assert "celebration cake" in fallback.lower()

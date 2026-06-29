@@ -17,6 +17,8 @@ from app.templating import SUPPORTED_CURRENCY_CODES, _create_templates, get_temp
 from graphs.nodes.generate_response import render_assistant_html
 from graphs.shopping_graph import ShoppingGraphDeps
 from lib.chat.page_context import cart_template_context, currency_template_context
+from lib.chat.session import SESSION_COOKIE_NAME, _sign_thread_id
+from lib.redis.cart import add_item, get_cart
 from lib.redis.client import RedisClient
 
 
@@ -97,6 +99,7 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'data-testid="header-currency"' in html
     assert 'data-testid="new-chat-button"' in html
     assert 'hx-post="/chat/new"' in html
+    assert "htmx.ajax('GET','/cart/panel'" in html
     assert 'hx-post="/session/currency"' in html
     assert 'hx-swap="none"' in html
     for code in SUPPORTED_CURRENCY_CODES:
@@ -293,3 +296,41 @@ async def test_chat_index_returns_200_html_with_empty_state(chat_index_env: Redi
     assert 'defer src="/static/js/lazy-image.js"' in html
     assert 'data-testid="header-currency"' in html
     assert '<option value="LKR" selected>LKR</option>' in html
+
+
+@pytest.mark.asyncio
+async def test_chat_new_clears_cart_and_oob_empty_panel(chat_index_env: RedisClient) -> None:
+    """POST /chat/new rotates session and clears Redis cart for the new thread."""
+    old_thread = "thread-cart-clear-test"
+    await add_item(
+        chat_index_env,
+        old_thread,
+        product_id="cake00ka001827",
+        name="Happy Birthday Symphony Ribbon Cake",
+        price_amount=6500.0,
+        price_currency="LKR",
+        quantity=1,
+    )
+    application = create_app()
+    application.state.redis = chat_index_env
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/chat/new",
+            headers={"HX-Request": "true"},
+            cookies={SESSION_COOKIE_NAME: _sign_thread_id(old_thread)},
+        )
+
+    assert response.status_code == 200
+    assert 'id="cart-panel" hx-swap-oob="outerHTML"' in response.text
+    assert 'data-item-count="0"' in response.text
+    set_cookie = response.headers.get("set-cookie", "")
+    assert SESSION_COOKIE_NAME in set_cookie
+    new_cookie = response.cookies[SESSION_COOKIE_NAME]
+    from lib.chat.session import verify_signed_session_cookie
+
+    new_thread = verify_signed_session_cookie(new_cookie)
+    assert new_thread is not None
+    assert new_thread != old_thread
+    assert await get_cart(chat_index_env, old_thread) == []
+    assert await get_cart(chat_index_env, new_thread) == []

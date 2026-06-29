@@ -146,14 +146,19 @@ def is_flower_fruit_intent(query: str) -> bool:
 
 
 def has_graph_hybrid_context(hybrid_context: dict[str, Any] | None) -> bool:
-    """True when Neo4j GraphRAG fields are present in hybrid_context."""
+    """True when GraphRAG produced usable hints or pruned traversal nodes.
+
+    Vector hits alone are insufficient — they do not steer MCP category filters
+    when the cross-encoder yields no passing occasion/category hints.
+    """
     if not hybrid_context:
         return False
-    return bool(
-        hybrid_context.get("vector_hits")
-        or hybrid_context.get("categories")
-        or hybrid_context.get("occasions"),
-    )
+    hints = hybrid_context.get("hints") or {}
+    for key in ("occasion", "category", "exclude_categories"):
+        value = hints.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    return bool(hybrid_context.get("categories") or hybrid_context.get("occasions"))
 
 
 def product_price_amount(product: dict[str, Any]) -> float | None:
@@ -1004,6 +1009,22 @@ _CATALOG_BREADCRUMB_SUMMARY_RE = re.compile(
     r"^(?:specialGifts|cakes|flowers|chocolates|gift)\s*-\s*",
     re.I,
 )
+_CATEGORY_MARKETING_CRUMB_RE = re.compile(
+    r"\b(?:kapruka\s*cakes?|celebrate\s+life|special\s+moments)\b",
+    re.I,
+)
+
+
+def _looks_like_category_marketing_crumb(text: str) -> bool:
+    """True when MCP summary is breadcrumb/marketing copy without product detail."""
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return False
+    if " The " in cleaned:
+        return False
+    if len(cleaned.split()) < 6:
+        return False
+    return bool(_CATEGORY_MARKETING_CRUMB_RE.search(cleaned))
 
 
 def _sanitize_catalog_summary(text: str) -> str:
@@ -1018,6 +1039,8 @@ def _sanitize_catalog_summary(text: str) -> str:
         parts = cleaned.split(" ", 3)
         if len(parts) >= 4:
             cleaned = parts[3]
+    if _looks_like_category_marketing_crumb(cleaned):
+        return ""
     return cleaned.strip()
 
 
@@ -1071,15 +1094,15 @@ def enrich_product_card_description(
     session_delivery_city: str | None = None,
 ) -> dict[str, Any]:
     """Attach card_description_fallback when the catalog omits a description."""
-    description = str(product.get("description") or "").strip()
+    raw_description = str(product.get("description") or "").strip()
+    description = _sanitize_catalog_summary(raw_description)
     summary = _sanitize_catalog_summary(str(product.get("summary") or "").strip())
-    if description and _CATALOG_BREADCRUMB_SUMMARY_RE.match(description):
-        description = ""
-    if description:
-        return product
-    if summary:
+    snippet = description or summary
+    if snippet:
         enriched = dict(product)
-        enriched["card_description_fallback"] = _truncate_card_snippet(summary)
+        enriched["card_description_fallback"] = _truncate_card_snippet(snippet)
+        if raw_description and raw_description != snippet:
+            enriched["description"] = ""
         return enriched
     enriched = dict(product)
     enriched["card_description_fallback"] = _build_card_description_fallback(
@@ -1088,6 +1111,8 @@ def enrich_product_card_description(
         session_recipient_hint=session_recipient_hint,
         session_delivery_city=session_delivery_city,
     )
+    if raw_description:
+        enriched["description"] = ""
     return enriched
 
 
