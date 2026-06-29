@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from google import genai
 from google.genai import types
@@ -259,7 +259,10 @@ def should_invoke_master_flow(
     ):
         return True, "checkout_active_with_discovery_intent"
 
-    if is_delivery_only_inquiry(user_message, intent_metadata=intent_metadata):
+    if is_delivery_only_inquiry(
+        user_message,
+        intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
+    ):
         if _has_stale_discovery_context(state):
             return True, "delivery_only_with_stale_carousel"
         planned = peek_route_after_analyze_intent(state)

@@ -239,6 +239,14 @@ def _score_delivery_dimension(
     return 0.0
 
 
+def _meta_delivery_date(meta: IntentMetadata) -> str | None:
+    for key in ("session_delivery_date", "delivery_date"):
+        value = meta.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def is_delivery_only_inquiry(
     message: str,
     *,
@@ -259,7 +267,7 @@ def is_delivery_only_inquiry(
     delivery_score = _score_delivery_dimension(
         stripped,
         intent_metadata=meta,
-        session_delivery_date=meta.get("session_delivery_date") or meta.get("delivery_date"),
+        session_delivery_date=_meta_delivery_date(meta),
     )
     if delivery_score < 1.0:
         return False
@@ -290,12 +298,18 @@ def _score_budget_dimension(
     if is_budgeted_gift_ideas_message(stripped):
         return 1.0
     budget_meta = intent_metadata.get("budget_max")
-    if isinstance(budget_meta, (int, float)) and budget_meta > 0:
-        if not _is_extra_vague_gift_query(stripped):
-            return 1.0
-    if isinstance(session_budget_max, (int, float)) and session_budget_max > 0:
-        if not _is_extra_vague_gift_query(stripped):
-            return 1.0
+    if (
+        isinstance(budget_meta, (int, float))
+        and budget_meta > 0
+        and not _is_extra_vague_gift_query(stripped)
+    ):
+        return 1.0
+    if (
+        isinstance(session_budget_max, (int, float))
+        and session_budget_max > 0
+        and not _is_extra_vague_gift_query(stripped)
+    ):
+        return 1.0
     if extract_max_price(stripped) is not None:
         return 0.5
     return 0.0
@@ -414,7 +428,7 @@ def score_request_specificity(
     delivery_score = _score_delivery_dimension(
         stripped,
         intent_metadata=meta,
-        session_delivery_date=meta.get("session_delivery_date") or meta.get("delivery_date"),
+        session_delivery_date=_meta_delivery_date(meta),
     )
     if meta.get("target_city") and (meta.get("session_delivery_date") or meta.get("delivery_date")):
         score = min(100.0, score + 5.0)

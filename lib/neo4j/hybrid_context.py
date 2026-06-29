@@ -1599,7 +1599,11 @@ def _birthday_planner_q_needs_override(planner_q: str, user_message: str) -> boo
         return stripped.lower() != canonical.lower()
     # Birthday + chocolate intent but planner didn't include "cake" in the query → override
     # e.g. planner used "chocolate birthday gift" but should be "chocolate birthday cake"
-    return bool(_BIRTHDAY_OCCASION_RE.search(user_message) and _CHOCOLATE_FLAVOR_RE.search(user_message) and "cake" not in stripped.lower())
+    return bool(
+        _BIRTHDAY_OCCASION_RE.search(user_message)
+        and _CHOCOLATE_FLAVOR_RE.search(user_message)
+        and "cake" not in stripped.lower()
+    )
 
 
 def enrich_message_with_session_slots(
@@ -1686,7 +1690,8 @@ def merge_planner_search_args(
     )
     needs_override = _birthday_planner_q_needs_override(planner_q, discovery_message)
     logger.debug(
-        "merge_planner_search_args: planner_q=%r birthday_scoped=%s needs_override=%s canonical_q=%r",
+        "merge_planner_search_args: planner_q=%r birthday_scoped=%s "
+        "needs_override=%s canonical_q=%r",
         planner_q,
         birthday_scoped,
         needs_override,
@@ -1697,18 +1702,21 @@ def merge_planner_search_args(
 
     target_city = intent_metadata.get("target_city") if intent_metadata else None
     merged_q = str(merged.get("q") or "")
-    if target_city and merged_q and target_city.lower() in merged_q.lower():
-        if canonical.get("q"):
-            merged["q"] = canonical["q"]
+    if target_city and merged_q and target_city.lower() in merged_q.lower() and canonical.get("q"):
+        merged["q"] = canonical["q"]
 
     for key in ("category", "max_price", "sort", "currency"):
         if key in canonical:
             merged[key] = canonical[key]
 
-    if re.search(r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b", user_message, re.I) or str(merged.get("category") or "").strip().lower() == "birthday" and re.search(
-        r"\btea\b",
-        str(merged.get("q") or ""),
-        re.I,
+    non_food_category = str(merged.get("category") or "").strip().lower() == "birthday"
+    if re.search(r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b", user_message, re.I) or (
+        non_food_category
+        and re.search(
+            r"\btea\b",
+            str(merged.get("q") or ""),
+            re.I,
+        )
     ):
         merged.pop("category", None)
 

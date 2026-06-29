@@ -199,9 +199,9 @@ def enrich_get_product_args(
                     threshold=threshold,
                 )
                 if matched is not None:
-                    pid = matched.get("id")
-                    if pid is not None:
-                        resolved = {**enriched, "product_id": str(pid)}
+                    matched_id = matched.get("id")
+                    if matched_id is not None:
+                        resolved = {**enriched, "product_id": str(matched_id)}
                         for key in name_keys:
                             resolved.pop(key, None)
                         return resolved, None

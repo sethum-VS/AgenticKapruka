@@ -838,7 +838,7 @@ def test_merge_planner_search_args_roses_galle_strips_city() -> None:
 
 # P0-1 regression: mom-birthday + chocolate + budget must search "chocolate birthday cake"
 def test_build_discovery_search_args_mom_birthday_chocolate_budget_uses_chocolate_cake_q() -> None:
-    """P0-1: 'birthday gift for mom ... loves chocolate budget 8000' must not return Happy Birthday Mom q."""
+    """P0-1: mom birthday + chocolate + budget must use chocolate birthday cake q."""
     args = build_discovery_search_args(
         "birthday gift for mom Colombo loves chocolate budget 8000",
         {},
@@ -877,7 +877,7 @@ def test_build_discovery_search_args_mom_birthday_cake_uses_birthday_cake_q() ->
 
 
 def test_merge_planner_search_args_birthday_chocolate_gift_overrides_to_cake() -> None:
-    """P0-1 regression: planner uses 'chocolate birthday gift' but must be overridden to 'chocolate birthday cake'."""
+    """P0-1: planner 'chocolate birthday gift' must override to chocolate birthday cake."""
     from lib.neo4j.hybrid_context import merge_planner_search_args
 
     merged = merge_planner_search_args(

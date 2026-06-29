@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, TypeGuard
 
 from lib.chat.product_reference import (
     _normalize_ordinal_phrase,
@@ -198,7 +198,7 @@ def _product_ids_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return bool(left_id and right_id and left_id.upper() == right_id.upper())
 
 
-def is_valid_product_detail_payload(payload: Any) -> bool:
+def is_valid_product_detail_payload(payload: Any) -> TypeGuard[dict[str, Any]]:
     """True when payload looks like a successful kapruka_get_product result."""
     return isinstance(payload, dict) and not payload.get("error") and bool(payload.get("name"))
 
@@ -225,9 +225,12 @@ def merge_with_session_resolved(
     """Overlay persisted MCP detail onto a carousel product when ids match."""
     if not session_resolved:
         return product
-    if product.get("id") and session_resolved.get("id"):
-        if not _product_ids_match(product, session_resolved):
-            return product
+    if (
+        product.get("id")
+        and session_resolved.get("id")
+        and not _product_ids_match(product, session_resolved)
+    ):
+        return product
     merged = dict(product)
     for key in ("description", "summary", "price", "in_stock", "stock_level", "url"):
         if not merged.get(key) and session_resolved.get(key):

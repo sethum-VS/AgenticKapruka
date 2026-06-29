@@ -234,6 +234,8 @@ async def resolve_cart_product(
     )
     search_dict = search_output.model_dump(mode="json")
     cold_products = _search_result_products(search_dict)
+    budget_raw = state.get("budget_max")
+    budget_max = float(budget_raw) if isinstance(budget_raw, (int, float)) else None
     ranked_products = resolve_product_intent_for_cart(
         user_message,
         cold_products,
@@ -241,7 +243,7 @@ async def resolve_cart_product(
         session_product_focus=state.get("session_product_focus"),
         hybrid_context=state.get("hybrid_context"),
         currency=currency,
-        budget_max=state.get("budget_max"),
+        budget_max=budget_max,
     )
     product, tied, clarify = match_products_by_phrase(search_query, ranked_products)
     if clarify:

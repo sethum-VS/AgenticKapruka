@@ -588,7 +588,11 @@ def apply_gift_curation(
     demoted: list[dict[str, Any]] = []
     for product in products:
         blob = _product_text_blob(product)
-        if not user_wants_voucher and _GIFT_VOUCHER_RE.search(blob) or _GIFT_DEMOTE_RE.search(blob) or _PRODUCE_DENYLIST.search(blob):
+        if not user_wants_voucher and (
+            _GIFT_VOUCHER_RE.search(blob)
+            or _GIFT_DEMOTE_RE.search(blob)
+            or _PRODUCE_DENYLIST.search(blob)
+        ):
             demoted.append(product)
         elif _GIFT_PROMOTE_RE.search(blob) or (
             session_product_focus != "chocolate" and _GIFT_PROMOTE_WITH_BOUQUET_RE.search(blob)

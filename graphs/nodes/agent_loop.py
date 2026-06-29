@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
 from google import genai
@@ -27,6 +27,7 @@ from lib.chat.intent_heuristics import (
     is_budget_refinement_message,
     is_budgeted_gift_ideas_message,
 )
+from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.product_curation import (
     apply_anniversary_curation,
     apply_birthday_cake_curation,
@@ -422,7 +423,7 @@ def _search_has_products(result: Any) -> bool:
 def _persist_session_search_query(
     raw_q: str,
     *,
-    intent_metadata: dict[str, Any] | None = None,
+    intent_metadata: IntentMetadata | None = None,
 ) -> str:
     """Strip delivery cities before persisting session search topic."""
     stripped = strip_location_from_search_query(raw_q, intent_metadata)
@@ -670,7 +671,7 @@ async def _invoke_tool_with_rate_limit_retry(
             tool_args,
             kapruka_service=kapruka_service,
             client_ip=client_ip,
-            currency=currency,
+            currency=currency or "LKR",
         )
         if not _is_rate_limit_result(result):
             return result
@@ -724,11 +725,12 @@ def _curate_search_trace_result(
         else None,
         topic_pivot=topic_pivot,
     )
+    session_budget = state.get("session_budget_max")
     if (
         not strict_budget
         and is_flower_fruit_intent(user_message)
-        and isinstance(state.get("session_budget_max"), (int, float))
-        and state.get("session_budget_max", 0) > 0
+        and isinstance(session_budget, (int, float))
+        and session_budget > 0
     ):
         strict_budget = True
     curated = apply_anniversary_curation(
@@ -1485,7 +1487,7 @@ async def _try_confident_discovery_fast_path(
     if isinstance(search_q_arg, str) and search_q_arg.strip():
         session_search_query_update = _persist_session_search_query(
             search_q_arg,
-            intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+            intent_metadata=intent_meta,
         )
 
     base_tool_count = int(state.get("tool_call_count") or 0)
@@ -1593,7 +1595,10 @@ async def _try_agent_loop_fast_path(
             tool_call_count=base_tool_count,
         )
 
-    if is_delivery_only_inquiry(user_message, intent_metadata=intent_metadata):
+    if is_delivery_only_inquiry(
+        user_message,
+        intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
+    ):
         if _trace_has_check_delivery(tool_trace):
             logger.debug(
                 "agent_loop: delivery-only fast-path — check_delivery already in trace",
@@ -1841,14 +1846,14 @@ async def agent_loop(
             if isinstance(search_q_arg, str) and search_q_arg.strip():
                 session_search_query_update = _persist_session_search_query(
                     search_q_arg,
-                    intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+                    intent_metadata=intent_meta,
                 )
             else:
                 search_q = _search_query_from_result(result)
                 if search_q:
                     session_search_query_update = _persist_session_search_query(
                         search_q,
-                        intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+                        intent_metadata=intent_meta,
                     )
             if _search_has_products(result):
                 raw_results = result.get("results")
@@ -1970,9 +1975,7 @@ async def agent_loop(
             if isinstance(search_q_arg, str) and search_q_arg.strip():
                 session_search_query_update = _persist_session_search_query(
                     search_q_arg,
-                    intent_metadata=state.get("intent_metadata")
-                    if isinstance(state.get("intent_metadata"), dict)
-                    else None,
+                    intent_metadata=state.get("intent_metadata"),
                 )
             tool_trace.append(
                 {"name": tool_name, "args": enriched_args, "result": result},
@@ -2135,8 +2138,8 @@ async def agent_loop(
                 if isinstance(session_city, str) and session_city.strip():
                     canonical_city = session_city.strip()
             if not (isinstance(enriched_args.get("city"), str) and enriched_args["city"].strip()):
-                intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
-                target_city = intent_metadata.get("target_city")
+                delivery_meta = dict(state.get("intent_metadata") or {})
+                target_city = delivery_meta.get("target_city")
                 if isinstance(target_city, str) and target_city.strip():
                     enriched_args["city"] = target_city.strip()
             if isinstance(canonical_city, str) and canonical_city.strip():
@@ -2218,18 +2221,17 @@ async def agent_loop(
             result = _curate_search_trace_result(result, state=state)
             search_q_arg = enriched_args.get("q")
             intent_meta = state.get("intent_metadata")
-            meta_dict = intent_meta if isinstance(intent_meta, dict) else None
             if isinstance(search_q_arg, str) and search_q_arg.strip():
                 session_search_query_update = _persist_session_search_query(
                     search_q_arg,
-                    intent_metadata=meta_dict,
+                    intent_metadata=intent_meta,
                 )
             else:
                 search_q = _search_query_from_result(result)
                 if search_q:
                     session_search_query_update = _persist_session_search_query(
                         search_q,
-                        intent_metadata=meta_dict,
+                        intent_metadata=intent_meta,
                     )
             if _search_has_products(result):
                 raw_results = result.get("results")
@@ -2282,7 +2284,7 @@ async def agent_loop(
                             if retry_q:
                                 session_search_query_update = _persist_session_search_query(
                                     retry_q,
-                                    intent_metadata=meta_dict,
+                                    intent_metadata=intent_meta,
                                 )
             if _should_run_dual_gift_search(
                 state,

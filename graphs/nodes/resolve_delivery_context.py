@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from google import genai
 
@@ -36,7 +36,10 @@ def route_after_resolve_delivery_context(state: AgentState) -> RouteAfterResolve
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if contains_product_id(user_message):
         return "call_mcp_tools"
-    if is_delivery_only_inquiry(user_message, intent_metadata=intent_metadata):
+    if is_delivery_only_inquiry(
+        user_message,
+        intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
+    ):
         return "generate_response"
     return "agent_loop"
 

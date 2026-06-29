@@ -255,7 +255,7 @@ def _suppress_delivery_tool_results(
     return filtered
 
 
-def _rate_limit_banner_html(agent_tool_error: dict[str, str]) -> str | None:
+def _rate_limit_banner_html(agent_tool_error: dict[str, Any]) -> str | None:
     error_code = agent_tool_error.get("error")
     if error_code not in ("429", "rate_limit_exceeded"):
         return None
@@ -1073,11 +1073,11 @@ def _carousel_strict_budget(
         return False
     from lib.chat.intent_heuristics import has_explicit_budget_constraint
 
-    pivot_meta = (state or {}).get("intent_metadata") or {}
+    pivot_meta = state.get("intent_metadata") if state else None
     topic_pivot = bool(
         isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"),
     )
-    session_budget = (state or {}).get("session_budget_max")
+    session_budget = state.get("session_budget_max") if state else None
     return has_explicit_budget_constraint(
         user_message,
         session_budget if isinstance(session_budget, (int, float)) else None,
@@ -2090,11 +2090,11 @@ async def generate_response(
     delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
     last_search_products = list(state.get("last_search_products") or [])
     last_visible_products = list(state.get("last_visible_products") or [])
-    pivot_meta = state.get("intent_metadata") or {}
+    pivot_meta = state.get("intent_metadata")
     topic_pivot = bool(pivot_meta.get("topic_pivot")) if isinstance(pivot_meta, dict) else False
     delivery_only = is_delivery_only_inquiry(
         user_message,
-        intent_metadata=cast(IntentMetadata, pivot_meta) if isinstance(pivot_meta, dict) else None,
+        intent_metadata=pivot_meta,
     )
     if delivery_only or is_delivery_fee_question(user_message):
         fee_reply = _delivery_fee_reply_from_state(state, user_message)
@@ -2361,7 +2361,6 @@ async def generate_response(
             user_message,
             is_budget_refinement=is_budget_refinement_message(user_message),
         )
-    intent_metadata = state.get("intent_metadata")
     intent = state.get("intent")
     session_delivery_city = state.get("session_delivery_city_canonical") or state.get(
         "delivery_city_canonical",
@@ -2373,7 +2372,7 @@ async def generate_response(
             model=model,
             user_prompt=user_prompt,
             zep_memory_facts=zep_memory_facts,
-            intent_metadata=intent_metadata,
+            intent_metadata=pivot_meta,
             intent=intent,
             delivery_context_relevant=delivery_context_relevant,
             session_occasion=state.get("session_occasion"),
@@ -2404,17 +2403,17 @@ async def generate_response(
 
     reply_text = normalize_catalog_text(reply_text)
     # Prepend Sunday-ambiguity clarification before other post-processing
-    if isinstance(intent_metadata, dict) and intent_metadata.get("delivery_date_ambiguous"):
-        clarification = intent_metadata.get("delivery_date_clarification") or ""
+    if isinstance(pivot_meta, dict) and pivot_meta.get("delivery_date_ambiguous"):
+        clarification = pivot_meta.get("delivery_date_clarification") or ""
         if clarification and clarification.lower() not in reply_text.lower():
             reply_text = f"{clarification}\n\n{reply_text.strip()}"
     reply_text = _prepend_budget_confirmation(
         reply_text,
-        intent_metadata,
+        pivot_meta,
         budget_max=budget_max,
         currency=currency,
     )
-    reply_text = _prepend_situational_empathy(reply_text, intent_metadata)
+    reply_text = _prepend_situational_empathy(reply_text, pivot_meta)
     clarifying = state.get("agent_clarifying_question")
     reply_text = _maybe_prepend_clarifier(
         reply_text,
@@ -2467,26 +2466,28 @@ async def generate_response(
         delivery_context_relevant=delivery_context_relevant,
     )
 
-    if pending_clarifier and has_carousel_products:
-        if not _should_skip_delivery_date_clarifier_with_carousel(
+    if (
+        pending_clarifier
+        and has_carousel_products
+        and not _should_skip_delivery_date_clarifier_with_carousel(
             state,
             user_message,
             pending_clarifier,
             has_carousel=True,
-        ):
-            context_clarifier = build_context_aware_clarifier(
-                pending_clarifier,
-                session_occasion=state.get("session_occasion"),
-                session_recipient_hint=state.get("session_recipient_hint"),
-                session_flavor_hint=state.get("session_flavor_hint"),
-                session_budget_max=budget_max,
-                session_delivery_date=state.get("session_delivery_date")
-                or state.get("delivery_date"),
-                session_delivery_city=state.get("session_delivery_city_canonical")
-                or state.get("delivery_city_canonical"),
-            )
-            if context_clarifier.lower() not in reply_text.lower():
-                reply_text = f"{reply_text.rstrip()}\n\n{context_clarifier}"
+        )
+    ):
+        context_clarifier = build_context_aware_clarifier(
+            pending_clarifier,
+            session_occasion=state.get("session_occasion"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            session_flavor_hint=state.get("session_flavor_hint"),
+            session_budget_max=budget_max,
+            session_delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
+            session_delivery_city=state.get("session_delivery_city_canonical")
+            or state.get("delivery_city_canonical"),
+        )
+        if context_clarifier.lower() not in reply_text.lower():
+            reply_text = f"{reply_text.rstrip()}\n\n{context_clarifier}"
 
     if delivery_only:
         products_html = None
@@ -2507,11 +2508,11 @@ async def generate_response(
     if topic_pivot:
         updates["last_visible_products"] = visible_products or None
         updates["last_search_products"] = visible_products or None
-    if isinstance(intent_metadata, dict) and (
-        intent_metadata.get("budget_confirmation_pending")
-        or intent_metadata.get("delivery_date_ambiguous")
+    if isinstance(pivot_meta, dict) and (
+        pivot_meta.get("budget_confirmation_pending")
+        or pivot_meta.get("delivery_date_ambiguous")
     ):
-        cleared = dict(intent_metadata)
+        cleared = dict(pivot_meta)
         cleared["budget_confirmation_pending"] = False
         cleared["delivery_date_ambiguous"] = False
         updates["intent_metadata"] = cast(IntentMetadata, cleared)

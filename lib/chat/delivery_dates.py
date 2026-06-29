@@ -193,12 +193,12 @@ def _date_from_raw_value(raw: str, *, today: date) -> str | None:
             return None
         return candidate
 
-    parsed = parse_relative_delivery_date(raw, today=today)
-    if parsed is None:
+    relative = parse_relative_delivery_date(raw, today=today)
+    if relative is None:
         return None
-    if parsed < today:
+    if relative < today:
         return None
-    return parsed.isoformat()
+    return relative.isoformat()
 
 
 def normalize_delivery_date(

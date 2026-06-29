@@ -129,15 +129,15 @@ async def test_cached_read_does_not_retry_not_found() -> None:
         patch("lib.kapruka.service.get_cached", new_callable=AsyncMock, return_value=None),
         patch("lib.kapruka.service.set_cached", new_callable=AsyncMock),
         patch("lib.kapruka.service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        pytest.raises(KaprukaNotFoundError),
     ):
-        with pytest.raises(KaprukaNotFoundError):
-            await service._cached_read(
-                client_ip="127.0.0.1",
-                tool_name="kapruka_get_product",
-                cache_args={"product_id": "missing"},
-                fetch=fetch,
-                to_cache=lambda value: value.model_dump_json(),
-                from_cache=lambda text: SearchProductsOutput.model_validate_json(text),
-            )
+        await service._cached_read(
+            client_ip="127.0.0.1",
+            tool_name="kapruka_get_product",
+            cache_args={"product_id": "missing"},
+            fetch=fetch,
+            to_cache=lambda value: value.model_dump_json(),
+            from_cache=lambda text: SearchProductsOutput.model_validate_json(text),
+        )
 
     mock_sleep.assert_not_awaited()
