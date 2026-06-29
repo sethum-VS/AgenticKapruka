@@ -6,7 +6,7 @@ Complete list of what shoppers can do in AgenticKapruka. Use this for QA test pl
 
 | Intent | Trigger examples | System behavior |
 | --- | --- | --- |
-| `discovery` | "birthday cake for mom", "roses under 5000", "anniversary flowers" | Specificity gate → HybridRAG → agent loop → curated carousel |
+| `discovery` | "birthday cake for mom", "roses under 5000", "anniversary flowers" | Specificity gate → flow supervisor (on conflicts) → HybridRAG → agent loop → curated carousel |
 | `cart` | "add the first one to cart", "put that in my cart" | Resolves carousel reference → adds line item |
 | `checkout` | "checkout", "proceed to order", "buy this" | Seven-step checkout sub-graph |
 | `tracking` | "where is order KA-123", "track my delivery" | MCP order status lookup |
@@ -29,6 +29,19 @@ Bypass paths (search without clarifying):
 - Budget refinement on a prior carousel ("show cheaper options")
 - Bare category pivots ("show me cakes") when session context exists
 - Proceed-to-checkout phrasing with items already in cart
+
+## Flow-state supervisor
+
+When the shopper's message conflicts with the active session chapter, a Flash supervisor (`master_flow`) may run before catalog search. It is trigger-gated — most turns skip it entirely.
+
+| Trigger | Customer experience |
+| --- | --- |
+| Delivery-only question with carousel still visible | Delivery answer without a fresh irrelevant product search |
+| Checkout active but message is discovery | Checkout pauses or exits (explicit cancel phrases clear checkout) |
+| Awaiting clarification but reply off-topic | Targeted clarifying question instead of blind search |
+| Long session with budget/recipient drift | Stale carousel context cleared before next discovery search |
+
+Configurable via `MASTER_FLOW_ENABLED`, `MASTER_FLOW_LONG_SESSION_TURNS`, and `MASTER_FLOW_CONFIDENCE_THRESHOLD`. Debug traces log `master_flow_decision` and skip reasons.
 
 ## Product discovery
 
@@ -98,6 +111,8 @@ Navigation rules:
 - Steps must be completed in order
 - Back navigation to previous steps is allowed
 - Forward skips are rejected
+- Side questions during checkout pause the flow; "proceed to checkout" resumes
+- Explicit exit phrases (`cancel checkout`, `find something else`, `never mind`) abandon checkout and return to shopping
 
 ## Order tracking
 

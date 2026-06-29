@@ -23,6 +23,8 @@ FastAPI (routes, Jinja2 templates, middleware)
         ├── LangGraph Shopping Graph (per chat turn)
         │       ├── load_zep_memory
         │       ├── analyze_intent (guards, specificity gate, pivots)
+        │       ├── master_flow (flow-state supervisor on conflict triggers)
+        │       ├── route_after_master_flow (lib/chat/routing.py)
         │       ├── retrieve_hybrid_context (Neo4j + Zep)
         │       ├── resolve_delivery_context (city/date preflight)
         │       ├── agent_loop (bounded ReAct planner + curation)
@@ -52,6 +54,24 @@ A single monolithic agent loop would let the LLM freely navigate checkout — ri
 Before HybridRAG and the agent loop run, `lib/chat/request_specificity.py` scores discovery messages on product type, occasion, and budget dimensions. Low scores produce a clarifying question via `generate_response` without MCP calls — cheaper and less confusing than searching the entire catalog for "gift ideas."
 
 Heuristic guards (budgeted gift chips, product IDs, topic pivots, proceed-to-checkout) bypass the scorer when context is already actionable.
+
+## Flow-state supervisor (master_flow)
+
+After `analyze_intent`, `lib/chat/master_flow.py` runs a lightweight Flash supervisor when deterministic triggers detect a mismatch between the shopper's message and the active conversation "chapter" (checkout in progress, awaiting delivery date, awaiting clarification, carousel context, delivery resolution, or free discovery).
+
+Pure-Python gates (`should_invoke_master_flow`) fire on conflicts such as:
+
+- Awaiting delivery date but the message does not parse as a date
+- Awaiting a specificity dimension but the reply does not address it
+- Checkout active while intent classifies as discovery
+- Delivery-only inquiries that would incorrectly re-search a stale carousel
+- Topic pivots or budget drift in long sessions (configurable turn threshold)
+
+When invoked, Flash returns structured alignment (`proceed`, `clarify`, `pivot`, `redirect`, `checkout_exit`) with optional session patches, context resets, and checkout pause/exit. Patches apply only above `MASTER_FLOW_CONFIDENCE_THRESHOLD` (default 0.75). LLM failure is fail-open — the graph proceeds without patches.
+
+Post-supervisor routing lives in `lib/chat/routing.py` (`route_after_master_flow`). A `master_clarifying_question` short-circuits to `generate_response` without HybridRAG or MCP search.
+
+Toggle with `MASTER_FLOW_ENABLED` (default true). Trace fields appear in debug logs via `lib/debug/trace.py`.
 
 ## Bounded agent loop
 

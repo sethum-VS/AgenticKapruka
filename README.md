@@ -54,6 +54,7 @@ graph TD
         ShoppingGraph[Shopping Graph]
         CheckoutGraph[Checkout Sub-Graph]
         IntentNode[analyze_intent]
+        MasterFlow[master_flow]
         HybridRAG[retrieve_hybrid_context]
         MCPTools[call_mcp_tools]
         Generate[generate_response]
@@ -80,9 +81,10 @@ graph TD
     Routes --> Templates
     Routes --> ShoppingGraph
     ShoppingGraph --> IntentNode
-    IntentNode -->|discovery| HybridRAG
-    IntentNode -->|checkout| CheckoutGraph
-    IntentNode -->|tracking| MCPTools
+    IntentNode --> MasterFlow
+    MasterFlow -->|discovery| HybridRAG
+    MasterFlow -->|checkout| CheckoutGraph
+    MasterFlow -->|tracking| MCPTools
     HybridRAG --> MCPTools
     CheckoutGraph --> Generate
     MCPTools --> Generate
@@ -120,6 +122,8 @@ Keyword guards and Gemini 2.5 Flash classify every message into one of five inte
 - **general** — greetings, thanks, off-topic, impossible catalog requests, support FAQ
 
 Before search runs, a **request specificity scorer** (`lib/chat/request_specificity.py`) gates vague gift queries. Scores below the proceed threshold produce a clarifying question (product type, occasion, or budget) instead of a blind catalog search. Budgeted gift-idea chips and explicit product IDs bypass the gate.
+
+After intent classification, a **flow-state supervisor** (`lib/chat/master_flow.py`, `graphs/nodes/master_flow.py`) runs on conflict triggers — for example, delivery-only questions with a stale carousel, checkout vs discovery mismatch, or long-session budget drift. It may reset discovery context, pause or exit checkout, or emit a clarifying question before HybridRAG runs. Post-supervisor routing is centralized in `lib/chat/routing.py`.
 
 Routing is deterministic after classification: checkout enters the checkout sub-graph; cart resolves carousel references then executes the add; tracking skips graph retrieval and goes straight to MCP tools; support FAQ and off-topic turns short-circuit to curated reply copy.
 
@@ -290,6 +294,7 @@ graphs/
 ├── model_router.py         # Flash vs Pro model selection
 └── nodes/
     ├── analyze_intent.py           # Routing guards, specificity gate, topic pivots
+    ├── master_flow.py              # Flow-state supervisor (conflict triggers)
     ├── retrieve_hybrid_context.py  # Neo4j + Zep hybrid context
     ├── resolve_delivery_context.py # City/date preflight before agent loop
     ├── agent_loop.py               # Bounded ReAct planner + curation
@@ -308,7 +313,8 @@ lib/
 ├── zep/                    # Memory threads, preferences, facts
 ├── checkout/               # Payment, delivery, recipient, chat parsing
 ├── chat/                   # SSE streaming, session rotation, specificity,
-│                           # product curation, support FAQ, off-topic guards
+│                           # master_flow, routing, product curation,
+│                           # support FAQ, off-topic guards
 ├── analytics/              # NetworkX Louvain recommendation worker
 └── genai/                  # Vertex AI Gemini client factory
 ```

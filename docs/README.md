@@ -24,6 +24,8 @@ You want to use the assistant or verify flows end to end.
 | [Find and order gifts](howto-find-and-order-gifts.md) | How-to | You want to test product discovery |
 | [Complete checkout](howto-complete-checkout.md) | How-to | You want to test the purchase flow |
 | [Track delivery](howto-track-delivery.md) | How-to | You want to test order tracking |
+| [Chat QA report (2026-06-28)](chat-qa-report-20260628.md) | Reference | You want browse-matrix QA findings for the latest local session |
+| [Chat QA report (2026-06-27)](chat-qa-report-20260627.md) | Reference | You want prior QA baseline and regression notes |
 
 ### Engineers and operators
 

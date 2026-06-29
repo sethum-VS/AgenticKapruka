@@ -46,11 +46,12 @@ The customer types a message. The reply streams via Server-Sent Events (SSE) —
 
 1. Routing guards classify intent (`discovery`, `cart`, `checkout`, `tracking`, or `general`)
 2. For vague gift queries, a **specificity scorer** may ask a clarifying question instead of searching
-3. HybridRAG embeds the query and matches Neo4j gift-category ontology
-4. Delivery city/date may be resolved or clarified before perishable searches
-5. A bounded **agent loop** (up to 3 planner iterations) calls Kapruka MCP tools
-6. **Product curation** filters rank results (birthday cakes, chocolate focus, recipient, budget band, gift-noise removal)
-7. Gemini writes a conversational summary; products render in a 2-column carousel grid
+3. On conflict triggers (stale carousel during delivery-only questions, checkout vs discovery mismatch, long-session budget drift), a **flow supervisor** may reset context, pause checkout, or ask a targeted clarifier before search runs
+4. HybridRAG embeds the query and matches Neo4j gift-category ontology
+5. Delivery city/date may be resolved or clarified before perishable searches
+6. A bounded **agent loop** (up to 3 planner iterations) calls Kapruka MCP tools
+7. **Product curation** filters rank results (birthday cakes, chocolate focus, recipient, budget band, gift-noise removal)
+8. Gemini writes a conversational summary; products render in a 2-column carousel grid
 
 **What the customer sees:** A natural-language reply plus product cards with images, prices in their currency, and stock badges.
 
@@ -92,6 +93,8 @@ When the customer says "checkout" or "proceed to order," intent switches to `che
 
 Customers cannot skip steps. If they try to jump ahead, the system holds them at the current step.
 
+During checkout, side questions (for example, "what's the delivery fee?") can **pause** the flow — the assistant answers, then the customer can say "proceed to checkout" to resume. Explicit exit phrases ("cancel checkout", "find something else", "never mind") clear checkout state and return to discovery.
+
 **Payment** happens on Kapruka's secure checkout page via the link returned at finalize — AgenticKapruka does not handle card data.
 
 ## Phase 5: Return visits
@@ -125,6 +128,9 @@ At any point, the customer can ask "Where is my order?" or provide an order numb
 | Missing Neo4j or Zep | App degrades gracefully — MCP search still runs, less curation |
 | Off-topic message | Classified as `general`; redirect to shopping |
 | Carousel reference with no context | Asks customer to pick from the last carousel |
+| Delivery-only question with stale carousel | Flow supervisor clears carousel context; answers delivery without irrelevant product search |
+| Long session budget/recipient drift | Flow supervisor may reset discovery context before a fresh search |
+| Side question during checkout | Checkout pauses; customer resumes with proceed-to-checkout phrasing |
 
 ## Related docs
 
