@@ -1092,7 +1092,8 @@ def _format_planner_query_rewrite_hints(
         ann_hint = (
             "Anniversary occasion: prefer kapruka_search_products with q=\"anniversary flowers\" "
             "or q=\"anniversary gift hamper\"; avoid greeting cards, watch boxes, storage boxes, "
-            "and gift vouchers."
+            "and gift vouchers. Do not set category=\"Flowers\" — anniversary flower gifts "
+            "include cake+rose combos catalogued under Cakes."
         )
         if graph_context_available:
             ann_hint += " Graph exclude_categories lists cards/vouchers to skip."

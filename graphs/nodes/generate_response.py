@@ -1211,13 +1211,15 @@ def _build_cart_assistant_message(action: dict[str, Any]) -> str | None:
     status = action.get("status")
     if status == "clarify":
         question = action.get("clarifying_question")
-        return str(question).strip() if isinstance(question, str) and question.strip() else None
+        if isinstance(question, str) and question.strip():
+            return normalize_catalog_text(question.strip())
+        return None
     if status == "error":
         message = action.get("message")
         return str(message).strip() if isinstance(message, str) and message.strip() else None
     if status != "added":
         return None
-    name = str(action.get("product_name") or "item")
+    name = normalize_catalog_text(str(action.get("product_name") or "item"))
     quantity = action.get("quantity")
     if action.get("merged") and isinstance(quantity, int):
         return f"Updated your cart — {name} is now quantity {quantity}."

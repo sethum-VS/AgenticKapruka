@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lib.chat.product_detail import (
+    build_product_detail_reply,
     enrich_tool_results_with_session_product,
     is_product_detail_turn,
     is_sweetness_preference_turn,
@@ -34,7 +35,7 @@ def test_match_product_from_last_search_ordinal_first_cake() -> None:
     assert matched["id"] == "cake-001"
 
 
-def test_summarize_product_from_carousel_includes_id_and_weight() -> None:
+def test_summarize_product_from_carousel_includes_weight_not_id() -> None:
     product = {
         "id": "CAKE00KA001685",
         "name": "Springtime Birthday Ribbon Cake",
@@ -43,9 +44,32 @@ def test_summarize_product_from_carousel_includes_id_and_weight() -> None:
         "attributes": {"weight": "2.77"},
     }
     summary = summarize_product_from_carousel(product)
-    assert "CAKE00KA001685" in summary
+    assert "CAKE00KA001685" not in summary
+    assert "ID:" not in summary
     assert "2.77 Lbs" in summary
     assert "Rs. 5,770" in summary
+
+
+def test_build_product_detail_reply_strips_catalog_breadcrumb() -> None:
+    product = {
+        "id": "CAKE00KA001423",
+        "name": "Happy Birthday Comic Ribbon Cake",
+        "description": (
+            "CAKE00KA001423 Weight: 2.20 Lbs (1.0 KG) Kapruka Cakes Cakes "
+            "The Happy Birthday Comic Ribbon Cake Is A Delightful Treat That "
+            "Brings A Touch Of Fun To Any Celebration."
+        ),
+        "price": {"amount": 4160.0, "currency": "LKR"},
+        "attributes": {"weight": "2.20"},
+    }
+    reply = build_product_detail_reply(product)
+    assert "CAKE00KA001423" not in reply
+    assert "Kapruka Cakes Cakes" not in reply
+    assert "Happy Birthday Comic Ribbon Cake." in reply
+    assert "Weight: 2.20 Lbs." in reply
+    assert "delightful treat" in reply.lower()
+    assert "Is A Delightful" not in reply
+    assert "Rs. 4,160" in reply
 
 
 def test_resolve_product_detail_uses_session_when_carousel_lacks_weight() -> None:

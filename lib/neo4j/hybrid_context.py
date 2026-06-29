@@ -1473,6 +1473,9 @@ def build_discovery_search_args(
 
     if anniversary_occasion:
         args["q"] = _anniversary_biased_search_q(query)
+        if re.search(r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b", query, re.I):
+            # Anniversary flower gifts include cake+rose combos catalogued under Cakes.
+            args.pop("category", None)
 
     if re.search(r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b", query, re.I):
         args.pop("category", None)
@@ -1715,6 +1718,13 @@ def merge_planner_search_args(
     elif str(merged.get("category") or "").strip().lower() == "birthday" and re.search(
         r"\btea\b",
         str(merged.get("q") or ""),
+        re.I,
+    ):
+        merged.pop("category", None)
+
+    if is_anniversary_occasion_intent(user_message, hybrid_context) and re.search(
+        r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b",
+        user_message,
         re.I,
     ):
         merged.pop("category", None)

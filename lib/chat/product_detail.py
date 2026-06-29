@@ -295,34 +295,41 @@ def product_preference_note(user_message: str, product: dict[str, Any]) -> str |
     )
 
 
+def build_product_detail_reply(
+    product: dict[str, Any],
+    *,
+    user_message: str | None = None,
+) -> str:
+    """Customer-facing product detail: name, weight, clean description, price."""
+    from lib.chat.product_curation import _sanitize_catalog_summary
+
+    name = str(product.get("name") or "that item")
+    parts = [f"{name}."]
+    weight = product_weight(product)
+    if weight:
+        parts.append(f"Weight: {_format_weight_display(weight)}.")
+    raw_text = str(product.get("description") or product.get("summary") or "").strip()
+    if raw_text:
+        cleaned = _sanitize_catalog_summary(raw_text)
+        if cleaned:
+            parts.append(cleaned if cleaned.endswith((".", "!", "?")) else f"{cleaned}.")
+    raw_price = product.get("price")
+    if isinstance(raw_price, dict):
+        amount = raw_price.get("amount")
+        currency = raw_price.get("currency") or "LKR"
+        if isinstance(amount, (int, float)):
+            parts.append(f"Price: {format_currency(float(amount), str(currency))}.")
+    if user_message:
+        preference = product_preference_note(user_message, product)
+        if preference:
+            parts.append(preference)
+    return " ".join(parts).strip()
+
+
 def summarize_product_from_carousel(
     product: dict[str, Any],
     *,
     user_message: str | None = None,
 ) -> str:
     """Short natural-language summary from a cached search or detail product dict."""
-    name = str(product.get("name") or "that item")
-    summary = str(product.get("summary") or product.get("description") or "").strip()
-    raw_price = product.get("price")
-    price_line = ""
-    if isinstance(raw_price, dict):
-        amount = raw_price.get("amount")
-        currency = raw_price.get("currency") or "LKR"
-        if isinstance(amount, (int, float)):
-            price_line = f" Price: {format_currency(float(amount), str(currency))}."
-    parts = [f"{name}."]
-    product_id = product.get("id")
-    if product_id:
-        parts.append(f"ID: {product_id}.")
-    weight = product_weight(product)
-    if weight:
-        parts.append(f"Weight: {_format_weight_display(weight)}.")
-    if summary:
-        parts.append(summary)
-    if price_line:
-        parts.append(price_line.strip())
-    if user_message:
-        preference = product_preference_note(user_message, product)
-        if preference:
-            parts.append(preference)
-    return " ".join(parts).strip()
+    return build_product_detail_reply(product, user_message=user_message)

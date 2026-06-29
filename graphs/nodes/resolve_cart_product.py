@@ -8,16 +8,18 @@ from typing import Any
 
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
+from lib.chat.product_curation import _sanitize_product_name
 from lib.chat.intent_heuristics import extract_cart_product_phrase
 from lib.chat.product_reference import (
     _normalize_ordinal_phrase,
     is_deictic_phrase,
     is_ordinal_phrase,
+    resolve_product_intent_for_cart,
     resolve_product_reference,
 )
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
-from lib.utils.text import normalize_for_product_match
+from lib.utils.text import normalize_catalog_text, normalize_for_product_match
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,7 @@ _OVERLAP_THRESHOLD = 0.6
 _BORDERLINE_OVERLAP_THRESHOLD = 0.4
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.I)
 _STOP_WORDS = frozenset({"the", "a", "an", "to", "my", "please", "add", "put", "in", "into"})
+_ARTICLE_PREFIX = re.compile(r"^(?:a|an|the)\s+", re.I)
 
 
 def _tokenize_for_overlap(text: str) -> set[str]:
@@ -46,7 +49,9 @@ def phrase_product_overlap_score(phrase: str, product_name: str) -> float:
 
 def _product_name(product: dict[str, Any]) -> str:
     name = product.get("name")
-    return str(name) if name is not None else ""
+    if name is None:
+        return ""
+    return normalize_catalog_text(str(name))
 
 
 def match_products_by_phrase(
@@ -81,7 +86,12 @@ def match_products_by_phrase(
     if len(top_matches) == 1:
         return top_matches[0], [], None
 
-    names = ", ".join(f"'{_product_name(product)}'" for product in top_matches[:3])
+    order = {id(product): index for index, product in enumerate(products)}
+    top_matches.sort(key=lambda product: order.get(id(product), len(products)))
+
+    names = ", ".join(
+        f"'{_sanitize_product_name(_product_name(product))}'" for product in top_matches[:3]
+    )
     question = f"I found a few matches for {phrase!r}. Which one should I add — {names}?"
     return None, top_matches, question
 
@@ -92,7 +102,12 @@ def _search_result_products(result: Any) -> list[dict[str, Any]]:
     raw_results = result.get("results")
     if not isinstance(raw_results, list):
         return []
-    return [item for item in raw_results if isinstance(item, dict)]
+    products = [item for item in raw_results if isinstance(item, dict)]
+    for product in products:
+        name = product.get("name")
+        if isinstance(name, str):
+            product["name"] = normalize_catalog_text(name)
+    return products
 
 
 async def resolve_cart_product(
@@ -212,15 +227,25 @@ async def resolve_cart_product(
         }
 
     currency = state.get("currency") or "LKR"
+    search_query = _ARTICLE_PREFIX.sub("", phrase.strip())
     search_output = await kapruka_service.search_products(
         client_ip or "127.0.0.1",
-        q=phrase,
+        q=search_query,
         currency=currency,
         limit=10,
     )
     search_dict = search_output.model_dump(mode="json")
     cold_products = _search_result_products(search_dict)
-    product, tied, clarify = match_products_by_phrase(phrase, cold_products)
+    ranked_products = resolve_product_intent_for_cart(
+        user_message,
+        cold_products,
+        search_phrase=search_query,
+        session_product_focus=state.get("session_product_focus"),
+        hybrid_context=state.get("hybrid_context"),
+        currency=currency,
+        budget_max=state.get("budget_max"),
+    )
+    product, tied, clarify = match_products_by_phrase(search_query, ranked_products)
     if clarify:
         return {
             "cart_action_result": {
@@ -229,7 +254,7 @@ async def resolve_cart_product(
                 "clarifying_question": clarify,
                 "candidates": tied,
             },
-            "last_search_products": cold_products,
+            "last_search_products": ranked_products,
             "tool_results": {SEARCH_PRODUCTS_TOOL: search_dict},
         }
     if product is not None:
@@ -239,7 +264,7 @@ async def resolve_cart_product(
                 "product": product,
                 "phrase": phrase,
             },
-            "last_search_products": cold_products,
+            "last_search_products": ranked_products,
             "tool_results": {SEARCH_PRODUCTS_TOOL: search_dict},
         }
 
@@ -252,6 +277,6 @@ async def resolve_cart_product(
                 "Try a different name or search for gifts first."
             ),
         },
-        "last_search_products": cold_products,
+        "last_search_products": ranked_products,
         "tool_results": {SEARCH_PRODUCTS_TOOL: search_dict},
     }

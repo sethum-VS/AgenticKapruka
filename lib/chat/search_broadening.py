@@ -8,14 +8,24 @@ from typing import Any, Literal
 from lib.chat.intent_metadata import IntentMetadata
 from lib.neo4j.hybrid_context import strip_location_from_search_query
 
-BroadenStep = Literal["gift_voucher_fallback", "simplify_q", "strip_city", "drop_max_price"]
+BroadenStep = Literal[
+    "strip_occasion_category",
+    "gift_voucher_fallback",
+    "simplify_q",
+    "strip_city",
+    "drop_max_price",
+]
 
 BROADEN_LADDER: tuple[BroadenStep, ...] = (
+    "strip_occasion_category",
     "simplify_q",
     "strip_city",
     "gift_voucher_fallback",
     "drop_max_price",
 )
+
+_ANNIVERSARY_RE = re.compile(r"\banniversary\b", re.I)
+_FLOWER_TERMS_RE = re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b", re.I)
 
 _GIFT_IN_Q = re.compile(r"\bgifts?\b", re.I)
 
@@ -31,6 +41,11 @@ def _normalize_q(q: str) -> str:
     return re.sub(r"\s{2,}", " ", q).strip(" ,.-")
 
 
+def is_cross_category_anniversary_flowers_query(q: str) -> bool:
+    """True when q pairs anniversary with flowers — catalog hits span Cakes/Combos."""
+    return bool(_ANNIVERSARY_RE.search(q) and _FLOWER_TERMS_RE.search(q))
+
+
 def broaden_search_args(
     args: dict[str, Any],
     step: BroadenStep,
@@ -44,6 +59,15 @@ def broaden_search_args(
     q = str(args.get("q") or "").strip()
     if not q:
         return None
+
+    if step == "strip_occasion_category":
+        if not args.get("category"):
+            return None
+        if not is_cross_category_anniversary_flowers_query(q):
+            return None
+        updated = dict(args)
+        updated.pop("category", None)
+        return updated
 
     if step == "gift_voucher_fallback":
         if re.search(r"\btea\b", q, re.I):

@@ -83,6 +83,29 @@ def test_match_products_by_phrase_single_winner() -> None:
     assert question is None
 
 
+def test_match_products_by_phrase_tie_normalizes_mojibake_apostrophe() -> None:
+    """Cart disambiguation must not show UTF-8 mojibake for smart apostrophes."""
+    mojibake = {
+        **_BLUSH_ROSES,
+        "id": "gift-mens",
+        "name": "Power Drive Menâ€™s Gift Box For Him",
+    }
+    other = {
+        **_BLUSH_ROSES,
+        "id": "gift-dad",
+        "name": "Java I Love Dad 10 Piece Chocolate Box",
+    }
+    product, tied, question = match_products_by_phrase(
+        "chocolate gift box",
+        [mojibake, other],
+    )
+    assert product is None
+    assert len(tied) == 2
+    assert question is not None
+    assert "â€™" not in question
+    assert "Men's" in question
+
+
 def test_match_products_by_phrase_tie_returns_clarifying_question() -> None:
     twin_a = {**_BLUSH_ROSES, "id": "a", "name": "Blush Roses Deluxe Combo"}
     twin_b = {**_BLUSH_ROSES, "id": "b", "name": "Blush Roses Premium Combo"}

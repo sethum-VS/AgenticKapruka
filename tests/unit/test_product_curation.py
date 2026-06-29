@@ -27,6 +27,7 @@ from lib.chat.product_curation import (
     product_matches_puja_denylist,
     product_price_amount,
     refine_last_search_by_budget,
+    rerank_products_by_query,
     sort_and_filter_by_budget,
 )
 
@@ -669,3 +670,67 @@ def test_enrich_product_card_description_rejects_category_marketing_crumbs() -> 
     assert "Celebrate Life" not in fallback
     assert enriched.get("description") == ""
     assert "celebration cake" in fallback.lower()
+
+
+def test_enrich_product_card_description_sentence_cases_title_case_summary() -> None:
+    product = {
+        "id": "cake1",
+        "name": "Happy Birthday Comic Ribbon Cake",
+        "summary": (
+            "The Happy Birthday Comic Ribbon Cake Is A Delightful Treat That "
+            "Brings A Touch Of Fun To Any Celebration."
+        ),
+    }
+    enriched = enrich_product_card_description(product)
+    fallback = str(enriched["card_description_fallback"])
+    assert fallback.startswith("The happy birthday comic ribbon cake is")
+    assert "Is A Delightful" not in fallback
+
+
+def test_enrich_product_card_description_sanitizes_product_name() -> None:
+    product = {
+        "id": "rose1",
+        "name": "love Me Tender ` Nine Red Rose Bouquet ( Red Rose Bouquet",
+        "summary": "Fresh roses.",
+    }
+    enriched = enrich_product_card_description(product)
+    assert "`" not in enriched["name"]
+    assert "(" not in enriched["name"]
+    assert "Nine Red Rose Bouquet" in enriched["name"]
+
+
+class _SequenceReranker:
+    def __init__(self, scores: list[float]) -> None:
+        self._scores = scores
+
+    def score_pairs(self, query: str, texts: list[str]) -> list[float]:
+        _ = query
+        return list(self._scores[: len(texts)])
+
+
+def test_rerank_products_by_query_orders_by_score() -> None:
+    products = [
+        _product("mens", 5000.0, name="Power Drive Men's Gift Box For Him"),
+        _product("choc", 3230.0, name="Sweet Indulgence Chocolate Gift Box"),
+    ]
+    reranked = rerank_products_by_query(
+        "chocolate gift box",
+        products,
+        reranker=_SequenceReranker([0.2, 0.9]),
+    )
+    assert reranked[0]["id"] == "choc"
+
+
+def test_curate_carousel_demotes_mens_gift_box_for_chocolate_query() -> None:
+    products = [
+        _product("mens", 5000.0, name="Power Drive Men's Gift Box For Him"),
+        _product("choc", 3230.0, name="Sweet Indulgence Chocolate Gift Box"),
+        _product("dad", 2500.0, name="Java I Love Dad 10 Piece Chocolate Box"),
+    ]
+    curated = curate_carousel_products(
+        products,
+        query="chocolate gift box",
+        budget_max=None,
+        currency="LKR",
+    )
+    assert curated[0]["id"] == "choc"

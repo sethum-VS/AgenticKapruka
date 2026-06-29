@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from lib.embeddings.reranker import CrossEncoderService
 
 _NEAR_BUDGET_FACTOR = 1.10
 _HIDE_BUDGET_FACTOR = 2.0
@@ -1010,9 +1013,15 @@ _CATALOG_BREADCRUMB_SUMMARY_RE = re.compile(
     re.I,
 )
 _CATEGORY_MARKETING_CRUMB_RE = re.compile(
-    r"\b(?:kapruka\s*cakes?|celebrate\s+life|special\s+moments)\b",
+    r"\b(?:kapruka\s*cakes?(?:\s+cakes)?|celebrate\s+life|special\s+moments)\b",
     re.I,
 )
+_PRODUCT_ID_WEIGHT_PREFIX_RE = re.compile(
+    r"^(?:[A-Za-z]*\d*[A-Z]{2,}\d+[A-Za-z0-9]*)\s+Weight:\s*[\d.]+\s*"
+    r"(?:Lbs|Kg|KG)?(?:\s*\([^)]*\))?\s*",
+    re.I,
+)
+_STRAY_OPEN_PAREN_RE = re.compile(r"\(\s+(?=[^)]*$)")
 
 
 def _looks_like_category_marketing_crumb(text: str) -> bool:
@@ -1027,6 +1036,31 @@ def _looks_like_category_marketing_crumb(text: str) -> bool:
     return bool(_CATEGORY_MARKETING_CRUMB_RE.search(cleaned))
 
 
+def _looks_like_title_case(text: str) -> bool:
+    """True when most words after the first are capitalized (MCP Title Case dumps)."""
+    words = text.split()
+    if len(words) < 3:
+        return False
+    mid_caps = sum(
+        1 for word in words[1:] if word and word[0].isupper() and word not in {"I"}
+    )
+    return mid_caps / (len(words) - 1) >= 0.5
+
+
+def _to_sentence_case(text: str) -> str:
+    """Normalize Title Case catalog copy to sentence case."""
+    if not text or not _looks_like_title_case(text):
+        return text
+    sentences: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        stripped = sentence.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        sentences.append(lowered[0].upper() + lowered[1:] if lowered else stripped)
+    return " ".join(sentences)
+
+
 def _sanitize_catalog_summary(text: str) -> str:
     """Strip MCP category breadcrumbs and product-id prefixes from card copy."""
     cleaned = " ".join(text.split())
@@ -1039,9 +1073,44 @@ def _sanitize_catalog_summary(text: str) -> str:
         parts = cleaned.split(" ", 3)
         if len(parts) >= 4:
             cleaned = parts[3]
+    cleaned = _PRODUCT_ID_WEIGHT_PREFIX_RE.sub("", cleaned).strip()
+    cleaned = re.sub(
+        r"^(?:Kapruka Cakes Cakes|Kapruka Cakes)\s+",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
     if _looks_like_category_marketing_crumb(cleaned):
         return ""
-    return cleaned.strip()
+    return _to_sentence_case(cleaned.strip())
+
+
+def _sanitize_product_name(name: str) -> str:
+    """Normalize catalog product names for carousel display."""
+    from lib.utils.text import normalize_catalog_text
+
+    cleaned = normalize_catalog_text(name).replace("`", "")
+    cleaned = _STRAY_OPEN_PAREN_RE.sub("", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def rerank_products_by_query(
+    query: str,
+    products: list[dict[str, Any]],
+    *,
+    reranker: CrossEncoderService | None = None,
+) -> list[dict[str, Any]]:
+    """Reorder products by cross-encoder relevance to the shopper query."""
+    stripped_query = query.strip()
+    if not stripped_query or len(products) < 2:
+        return list(products)
+    from lib.embeddings.reranker import get_reranker
+
+    encoder = reranker or get_reranker()
+    texts = [_product_text_blob(product) for product in products]
+    scores = encoder.score_pairs(stripped_query, texts)
+    ranked = sorted(zip(scores, products, strict=False), key=lambda item: item[0], reverse=True)
+    return [product for _, product in ranked]
 
 
 def _truncate_card_snippet(text: str) -> str:
@@ -1094,17 +1163,19 @@ def enrich_product_card_description(
     session_delivery_city: str | None = None,
 ) -> dict[str, Any]:
     """Attach card_description_fallback when the catalog omits a description."""
+    enriched = dict(product)
+    raw_name = str(product.get("name") or "").strip()
+    if raw_name:
+        enriched["name"] = _sanitize_product_name(raw_name)
     raw_description = str(product.get("description") or "").strip()
     description = _sanitize_catalog_summary(raw_description)
     summary = _sanitize_catalog_summary(str(product.get("summary") or "").strip())
     snippet = description or summary
     if snippet:
-        enriched = dict(product)
         enriched["card_description_fallback"] = _truncate_card_snippet(snippet)
         if raw_description and raw_description != snippet:
             enriched["description"] = ""
         return enriched
-    enriched = dict(product)
     enriched["card_description_fallback"] = _build_card_description_fallback(
         product,
         session_occasion=session_occasion,

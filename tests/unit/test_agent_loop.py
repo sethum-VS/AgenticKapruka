@@ -865,6 +865,67 @@ async def test_agent_loop_check_delivery_past_date_without_message_asks_user() -
 
 
 @pytest.mark.asyncio
+async def test_agent_loop_anniversary_flowers_drops_flowers_category_before_search() -> None:
+    """Anniversary flower browse must not filter MCP by Flowers category."""
+    mock_service = _mock_kapruka_service()
+    hit = SearchProductsOutput(
+        results=[
+            ProductResult(
+                id="CAKE00KA002059",
+                name="Happy Anniversary Pure Love Ribbon Cake With Fresh White Roses",
+                summary="Anniversary cake with roses.",
+                price=Money(amount=12600.0, currency="LKR"),
+                compare_at_price=None,
+                in_stock=True,
+                stock_level="low",
+                image_url="https://example.com/anniversary.jpg",
+                category=CategoryRef(id="cat_cakes", name="Cakes", slug="cakes"),
+                rating=None,
+                ships_internationally=True,
+                url="https://www.kapruka.com/anniversary-cake",
+            ),
+        ],
+        next_cursor=None,
+        applied_filters={"q": "anniversary flowers", "limit": 10, "in_stock_only": False},
+    )
+    mock_service.search_products.return_value = hit
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "anniversary flowers", "category": "Flowers"},
+            rationale="search anniversary flowers",
+        ),
+        AgentPlannerStep(
+            action="finish",
+            rationale="done",
+        ),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="what flowers do you have for anniversary?")],
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert mock_service.search_products.call_count == 1
+    search_call = mock_service.search_products.await_args
+    assert search_call is not None
+    assert search_call.kwargs["q"] == "anniversary flowers"
+    assert search_call.kwargs.get("category") is None
+    assert result["last_search_products"] is not None
+    assert result["agent_loop_exit_reason"] == "finish"
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_empty_search_runs_one_broaden_retry() -> None:
     """Empty kapruka_search_products triggers a single broaden retry per turn."""
     mock_service = _mock_kapruka_service()

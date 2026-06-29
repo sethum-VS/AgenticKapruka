@@ -757,6 +757,33 @@ def test_build_discovery_search_args_anniversary_bias() -> None:
     assert "anniversary" in args["q"].lower()
 
 
+def test_build_discovery_search_args_anniversary_flowers_drops_category_filter() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "what flowers do you have for anniversary?",
+        {"hints": {"category": "Flowers", "occasion": "Anniversary"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "anniversary flowers"
+    assert "category" not in args
+
+
+def test_merge_planner_search_args_anniversary_flowers_drops_flowers_category() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "anniversary flowers", "category": "Flowers"},
+        user_message="what flowers do you have for anniversary?",
+        hybrid_context={"hints": {"category": "Flowers", "occasion": "Anniversary"}},
+        currency="LKR",
+    )
+
+    assert merged["q"] == "anniversary flowers"
+    assert "category" not in merged
+
+
 def test_build_discovery_search_args_topic_pivot_bare_cakes_literal() -> None:
     from lib.neo4j.hybrid_context import build_discovery_search_args
 

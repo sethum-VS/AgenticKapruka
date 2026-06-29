@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Literal, TypedDict
 
+from lib.utils.text import normalize_catalog_text
+
 _ORDINAL_INDEX: dict[str, int] = {
     "first": 0,
     "1st": 0,
@@ -87,11 +89,17 @@ def _ordinal_index(phrase: str) -> int | None:
 
 def _product_name(product: dict[str, Any]) -> str:
     name = product.get("name")
-    return str(name) if name is not None else "item"
+    if name is None:
+        return "item"
+    return normalize_catalog_text(str(name))
 
 
 def _numbered_clarify(products: list[dict[str, Any]], *, max_items: int = 5) -> str:
-    names = [_product_name(product) for product in products[:max_items]]
+    from lib.chat.product_curation import _sanitize_product_name
+
+    names = [
+        _sanitize_product_name(_product_name(product)) for product in products[:max_items]
+    ]
     numbered = ", ".join(f"{index}) {name}" for index, name in enumerate(names, start=1))
     return f"Which one would you like me to add — {numbered}?"
 
@@ -181,3 +189,33 @@ def resolve_product_reference(
         "clarifying_question": _numbered_clarify(products),
         "candidates": products[:5],
     }
+
+
+def resolve_product_intent_for_cart(
+    user_message: str,
+    products: list[dict[str, Any]],
+    *,
+    search_phrase: str | None = None,
+    session_product_focus: str | None = None,
+    hybrid_context: dict[str, Any] | None = None,
+    currency: str = "LKR",
+    budget_max: float | None = None,
+    reranker: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Apply discovery curation and reranker scoring to cold-start cart search hits."""
+    from lib.chat.intent_heuristics import extract_cart_product_phrase
+    from lib.chat.product_curation import curate_carousel_products, rerank_products_by_query
+
+    query = (search_phrase or extract_cart_product_phrase(user_message) or user_message).strip()
+    query = re.sub(r"^(?:a|an|the)\s+", "", query, flags=re.I)
+    if not products or not query:
+        return list(products)
+    curated = curate_carousel_products(
+        products,
+        query=query,
+        budget_max=budget_max,
+        currency=currency,
+        session_product_focus=session_product_focus,
+        hybrid_context=hybrid_context,
+    )
+    return rerank_products_by_query(query, curated, reranker=reranker)
