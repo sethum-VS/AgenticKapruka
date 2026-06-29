@@ -2509,8 +2509,7 @@ async def generate_response(
         updates["last_visible_products"] = visible_products or None
         updates["last_search_products"] = visible_products or None
     if isinstance(pivot_meta, dict) and (
-        pivot_meta.get("budget_confirmation_pending")
-        or pivot_meta.get("delivery_date_ambiguous")
+        pivot_meta.get("budget_confirmation_pending") or pivot_meta.get("delivery_date_ambiguous")
     ):
         cleared = dict(pivot_meta)
         cleared["budget_confirmation_pending"] = False
