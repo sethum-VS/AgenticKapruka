@@ -34,6 +34,14 @@ def peek_route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeInten
 def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
     """Conditional edge after analyze_intent: checkout sub-graph or HybridRAG skip."""
     intent_metadata: IntentMetadata | dict[str, object] = state.get("intent_metadata") or {}
+    if intent_metadata.get("is_off_topic"):
+        trace_route_decision(
+            from_node="analyze_intent",
+            target="generate_response",
+            intent=state.get("intent"),
+            reason="off-topic or impossible catalog redirect",
+        )
+        return "generate_response"
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if is_delivery_only_inquiry(
         user_message,

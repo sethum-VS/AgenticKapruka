@@ -16,7 +16,8 @@ from graphs.state import AgentState, Intent
 from lib.chat.delivery_dates import normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import FLASH_MODEL
-from lib.chat.off_topic import is_off_topic_message
+from lib.chat.intent_heuristics import classify_routing_guard
+from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
 from lib.chat.request_specificity import (
     ClarificationDimension,
     is_delivery_only_inquiry,
@@ -233,6 +234,10 @@ def should_invoke_master_flow(
 
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
+    if classify_routing_guard(user_message) is not None:
+        return False, "routing_guard_fast_path"
+    if is_off_topic_message(user_message) or is_impossible_catalog_request(user_message):
+        return False, "off_topic_fast_path"
     intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
     active_flow = infer_active_flow(state)
 

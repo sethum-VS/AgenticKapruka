@@ -135,6 +135,8 @@ def should_bypass_specificity_scorer(
         return True
     if is_off_topic_message(stripped) or is_impossible_catalog_request(stripped):
         return True
+    if is_bare_category_pivot(stripped) is not None:
+        return True
     if contains_product_id(stripped):
         return True
     return bool(is_ambiguous_weekday_phrase(stripped))
@@ -148,6 +150,10 @@ _GENERIC_WANTS_SOMETHING_RE = re.compile(
 )
 _BARE_GIFT_NEED_RE = re.compile(
     r"\bi\s+(?:need|want)\s+(?:a\s+)?(?:gift|present)\b",
+    re.I,
+)
+_IN_STOCK_REFINEMENT_RE = re.compile(
+    r"\b(?:what(?:'s| is)\s+(?:in stock|available)|show me what(?:'s| is)\s+(?:in stock|available))\b",
     re.I,
 )
 
@@ -454,6 +460,13 @@ def score_request_specificity(
     if dimension_scores.get("product", 0.0) >= 1.0 and delivery_score >= 1.0:
         band = "proceed"
     if is_delivery_only_inquiry(stripped, intent_metadata=meta):
+        band = "proceed"
+    if is_bare_category_pivot(stripped) is not None:
+        band = "proceed"
+    if (
+        _IN_STOCK_REFINEMENT_RE.search(stripped)
+        and (session_product_focus or session_recipient_hint or session_budget_max)
+    ):
         band = "proceed"
     if is_budgeted_gift_ideas_message(stripped):
         band = "proceed"

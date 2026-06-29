@@ -32,7 +32,7 @@ from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.intent_heuristics import build_guest_checkout_reply, is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
-from lib.chat.off_topic import impossible_request_subject, off_topic_topic
+from lib.chat.off_topic import impossible_request_subject, is_impossible_catalog_request, off_topic_topic
 from lib.chat.product_curation import (
     carousel_focus_guard,
     curate_carousel_products,
@@ -1565,7 +1565,7 @@ def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> st
         )
     if step == "delivery_city":
         return (
-            "Which Kapruka delivery city should we send this to? "
+            "Let's continue checkout — which Kapruka delivery city should we send this to? "
             "For example: Colombo 03, Kandy, or Galle."
         )
     if step == "delivery_date":
@@ -1718,8 +1718,15 @@ async def generate_response(
             "assistant_message": welcome,
         }
 
+    if is_impossible_catalog_request(user_message):
+        reply = build_impossible_product_redirect(impossible_request_subject(user_message))
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+
     off_topic_meta = dict(state.get("intent_metadata") or {})
-    if state.get("intent") == "general" and off_topic_meta.get("is_off_topic"):
+    if off_topic_meta.get("is_off_topic"):
         redirect_kind = off_topic_meta.get("redirect_kind")
         if redirect_kind == "impossible_product":
             reply = build_impossible_product_redirect(impossible_request_subject(user_message))

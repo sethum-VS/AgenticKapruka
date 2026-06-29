@@ -53,6 +53,7 @@ from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initi
 from graphs.state import AgentState, Intent, ToolInvocation
 from lib.chat.delivery_dates import normalize_delivery_date
 from lib.chat.intent_heuristics import is_budgeted_gift_ideas_message
+from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.query_preprocessor import QueryPreprocessor
 from lib.kapruka.product_id import extract_product_id
 from lib.kapruka.service import KaprukaService
@@ -328,6 +329,12 @@ def _infer_e2e_planner_tools(message: str) -> list[str]:
         tools.append(LIST_CITIES_TOOL)
 
     metadata = QueryPreprocessor().process(message)
+    if metadata.get("requires_delivery_validation") and is_delivery_only_inquiry(
+        message,
+        intent_metadata=metadata,
+    ):
+        return [CHECK_DELIVERY_TOOL]
+
     if metadata.get("requires_delivery_validation"):
         tools.append(CHECK_DELIVERY_TOOL)
 

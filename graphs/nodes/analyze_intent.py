@@ -651,7 +651,13 @@ async def analyze_intent(
     guard_intent = _classify_routing_guard(user_message)
     if guard_intent is not None:
         logger.info("analyze_intent: guard routed message as %s", guard_intent)
-        return _with_budget({"intent": guard_intent, "intent_metadata": intent_metadata})
+        return _with_budget(
+            {
+                "intent": guard_intent,
+                "intent_metadata": intent_metadata,
+                "session_awaiting_clarification_dimension": None,
+            },
+        )
 
     if is_order_intent_message(user_message) and await _session_cart_has_items(
         state,

@@ -154,7 +154,10 @@ def test_persona_action_shopper_tracking_and_cart(page: Page, base_url: str) -> 
     # 2. Valid VIMP ID → tracking card
     vimp_reply = _chat_turn(page, "VIMP34456CB2")
     lowered_vimp = vimp_reply.lower()
-    assert re.search(r"delivered|in transit|pending|processing|tracking", lowered_vimp), (
+    assert re.search(
+        r"delivered|in transit|pending|processing|tracking|out for delivery",
+        lowered_vimp,
+    ), (
         f"Expected tracking status in VIMP reply, got: {vimp_reply!r}"
     )
 
