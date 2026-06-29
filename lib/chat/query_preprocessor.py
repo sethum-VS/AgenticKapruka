@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Literal, Mapping
+from collections.abc import Mapping
+from typing import Literal
 
 from lib.chat.delivery_dates import normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
@@ -35,19 +36,16 @@ _TRANSACTIONAL_APOLOGY = re.compile(
     re.I,
 )
 
-_SITUATIONAL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    _EMOTIONAL_PATTERNS
-    + (
-        re.compile(
-            r"\b(missing (?:her|him|them)|lonely|stressed|anxious|nervous)\b",
-            re.I,
-        ),
-        re.compile(r"\b(girlfriend|boyfriend|ex-|divorce|separated)\b", re.I),
-        re.compile(
-            r"\b(valentine(?:'?s)?|anniversary surprise|romantic surprise|surprise my partner)\b",
-            re.I,
-        ),
-    )
+_SITUATIONAL_PATTERNS: tuple[re.Pattern[str], ...] = _EMOTIONAL_PATTERNS + (
+    re.compile(
+        r"\b(missing (?:her|him|them)|lonely|stressed|anxious|nervous)\b",
+        re.I,
+    ),
+    re.compile(r"\b(girlfriend|boyfriend|ex-|divorce|separated)\b", re.I),
+    re.compile(
+        r"\b(valentine(?:'?s)?|anniversary surprise|romantic surprise|surprise my partner)\b",
+        re.I,
+    ),
 )
 
 # Sinhala script or common Tanglish tokens.
@@ -204,9 +202,7 @@ def should_defer_delivery_date(
     if normalize_delivery_date({}, user_message) is not None:
         return False
     intent_metadata = state.get("intent_metadata")
-    metadata: dict[str, object] = (
-        dict(intent_metadata) if isinstance(intent_metadata, dict) else {}
-    )
+    metadata: dict[str, object] = dict(intent_metadata) if isinstance(intent_metadata, dict) else {}
     target_city = metadata.get("target_city") or extract_target_city(user_message)
     if not (isinstance(target_city, str) and target_city.strip()):
         return False
@@ -231,9 +227,7 @@ def is_delivery_context_relevant_turn(
 
     stripped = user_message.strip()
     intent_metadata = state.get("intent_metadata")
-    metadata: dict[str, object] = (
-        dict(intent_metadata) if isinstance(intent_metadata, dict) else {}
-    )
+    metadata: dict[str, object] = dict(intent_metadata) if isinstance(intent_metadata, dict) else {}
     if metadata.get("requires_delivery_validation"):
         return True
     if metadata.get("target_city"):

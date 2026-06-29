@@ -183,9 +183,7 @@ async def test_galle_roses_two_turn_clarify_and_carousel(
 
     assert turn1.get("agent_clarifying_question")
     search_calls = [
-        inv
-        for inv in (turn1.get("tool_trace") or [])
-        if inv["name"] == SEARCH_PRODUCTS_TOOL
+        inv for inv in (turn1.get("tool_trace") or []) if inv["name"] == SEARCH_PRODUCTS_TOOL
     ]
     assert search_calls, "turn 1 should still search despite occasion clarify"
     turn1_q = str(search_calls[0]["args"].get("q") or "")

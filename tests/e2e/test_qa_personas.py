@@ -49,8 +49,7 @@ def test_persona_clueless_gift_giver_budget_and_delivery(
     assert "snack" not in carousel_text.lower()
     assert "bar" not in carousel_text.lower() or "birthday" in carousel_text.lower()
     assert any(
-        keyword in carousel_text.lower()
-        for keyword in ("cake", "bento", "cheers", "chocolate")
+        keyword in carousel_text.lower() for keyword in ("cake", "bento", "cheers", "chocolate")
     )
 
     tools = fetch_mcp_tools(page, base_url)

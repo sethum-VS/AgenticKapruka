@@ -9,12 +9,12 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from graphs.nodes.resolve_cart_product import match_products_by_phrase
+from graphs.state import AgentState
 from lib.chat.product_reference import (
     _normalize_ordinal_phrase,
     is_ordinal_phrase,
     resolve_product_reference,
 )
-from graphs.state import AgentState
 from lib.kapruka.errors import KaprukaError, KaprukaRateLimitError
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL

@@ -7,9 +7,7 @@ from typing import Literal
 
 SupportTopic = Literal["returns", "quality", "cancellation", "general_support"]
 
-KAPRUKA_RETURNS_POLICY_URL = (
-    "https://www.kapruka.com/contactUs/shippingPolicyDelivery.jsp"
-)
+KAPRUKA_RETURNS_POLICY_URL = "https://www.kapruka.com/contactUs/shippingPolicyDelivery.jsp"
 KAPRUKA_SUPPORT_PHONE = "+94-11-7551111"
 
 _RETURN_REFUND_RE = re.compile(
@@ -55,8 +53,7 @@ def is_support_question(message: str) -> bool:
     if _RETURN_REFUND_RE.search(stripped) and _SUPPORT_CONTEXT_RE.search(stripped):
         return True
     return bool(
-        _RETURN_REFUND_RE.search(stripped)
-        and re.search(r"\b(?:if|when|how)\b", stripped, re.I)
+        _RETURN_REFUND_RE.search(stripped) and re.search(r"\b(?:if|when|how)\b", stripped, re.I)
     )
 
 
@@ -80,8 +77,8 @@ def build_support_faq_reply(message: str) -> str:
 
     quality_block = (
         "For perishable gifts such as fresh flowers or cakes, contact Kapruka support "
-        f"as soon as possible with your order number and clear photos of the issue. "
-        f"Quality concerns are typically reviewed within a short window after delivery."
+        "as soon as possible with your order number and clear photos of the issue. "
+        "Quality concerns are typically reviewed within a short window after delivery."
     )
     returns_block = (
         "Kapruka handles returns and refunds through their support team — eligibility "
@@ -101,9 +98,7 @@ def build_support_faq_reply(message: str) -> str:
     elif topic == "returns":
         lead = returns_block
     else:
-        lead = (
-            f"{returns_block} {quality_block}"
-        )
+        lead = f"{returns_block} {quality_block}"
 
     return (
         f"{lead}\n\n"

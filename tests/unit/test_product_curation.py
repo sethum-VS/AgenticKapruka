@@ -13,10 +13,10 @@ from lib.chat.product_curation import (
     demote_non_chocolate_for_chocolate_focus,
     demote_non_floral_for_flower_intent,
     demote_off_focus_products,
-    ensure_flower_price_tier_diversity,
     demote_puja_products,
     enrich_carousel_product_descriptions,
     enrich_product_card_description,
+    ensure_flower_price_tier_diversity,
     filter_gift_noise_products,
     filter_puja_products,
     has_graph_hybrid_context,
@@ -277,9 +277,7 @@ def test_refine_last_search_by_budget_returns_none_without_focus_match() -> None
 
 
 def test_carousel_focus_guard_detects_off_topic_drift() -> None:
-    greeting_cards = [
-        _product(f"card{i}", 1000.0 + i, name=f"Greeting Card {i}") for i in range(5)
-    ]
+    greeting_cards = [_product(f"card{i}", 1000.0 + i, name=f"Greeting Card {i}") for i in range(5)]
     assert not carousel_focus_guard(greeting_cards, "chocolate")
     mixed = [
         _product("choc1", 4500.0, name="Chocolate Truffles"),

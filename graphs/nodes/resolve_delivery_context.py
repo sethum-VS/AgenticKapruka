@@ -13,12 +13,12 @@ from lib.chat.address_resolution import resolve_shipment_address
 from lib.chat.city_resolution import _is_bare_colombo, resolve_delivery_city
 from lib.chat.delivery_dates import is_delivery_date_only_message, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
-from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.query_preprocessor import (
     _has_delivery_intent,
     _has_perishable_gift_intent,
     extract_target_city,
 )
+from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.kapruka.product_id import contains_product_id
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
@@ -105,9 +105,7 @@ def _city_ready_for_delivery_preflight(
         "delivery_city_canonical",
     )
     return (
-        isinstance(canonical, str)
-        and bool(canonical.strip())
-        and status not in ("ambiguous", None)
+        isinstance(canonical, str) and bool(canonical.strip()) and status not in ("ambiguous", None)
     )
 
 
@@ -257,12 +255,16 @@ async def resolve_delivery_context(
         if resolution_status == "resolved" and base.get("session_delivery_city_confirmed"):
             intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
             canonical = base.get("delivery_city_canonical")
-            if canonical and delivery_date and _should_run_dated_delivery_preflight(
-                state,
-                user_message,
-                intent_metadata,
-                delivery_date=delivery_date,
-                city_confirmed=bool(base.get("session_delivery_city_confirmed")),
+            if (
+                canonical
+                and delivery_date
+                and _should_run_dated_delivery_preflight(
+                    state,
+                    user_message,
+                    intent_metadata,
+                    delivery_date=delivery_date,
+                    city_confirmed=bool(base.get("session_delivery_city_confirmed")),
+                )
             ):
                 preflight = await _preflight_check_delivery(
                     kapruka_service=kapruka_service,
@@ -331,12 +333,16 @@ async def resolve_delivery_context(
         }
         intent_metadata = state.get("intent_metadata") or {}
         canonical = resolution.canonical
-        if canonical and delivery_date and _should_run_dated_delivery_preflight(
-            state,
-            user_message,
-            intent_metadata,
-            delivery_date=delivery_date,
-            city_confirmed=True,
+        if (
+            canonical
+            and delivery_date
+            and _should_run_dated_delivery_preflight(
+                state,
+                user_message,
+                intent_metadata,
+                delivery_date=delivery_date,
+                city_confirmed=True,
+            )
         ):
             preflight = await _preflight_check_delivery(
                 kapruka_service=kapruka_service,

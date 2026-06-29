@@ -107,6 +107,7 @@ async def test_run_checkout_graph_ignores_duplicate_proceed_at_delivery_city(
 ) -> None:
     """Second cart-drawer proceed must not treat the phrase as a city name."""
     from langchain_core.messages import HumanMessage
+
     from lib.chat.intent_heuristics import PROCEED_CHECKOUT_MESSAGE
     from lib.redis.checkout import save_checkout_session
 

@@ -143,7 +143,7 @@ async def cart_add(
                 icing_text=icing_text,
             )
         raise HTTPException(status_code=502, detail=exc.message) from exc
-    except Exception as exc:
+    except Exception:
         logger.warning("cart_add get_product failed for %s", product_id, exc_info=True)
         if _is_htmx_request(request):
             return await _cart_add_error_response(

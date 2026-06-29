@@ -7,7 +7,7 @@ import pytest
 from starlette.requests import Request
 
 from lib.chat.session import SESSION_COOKIE_NAME, _sign_thread_id, rotate_chat_thread
-from lib.redis.cart import StoredCartItem, add_item, clear_cart, get_cart
+from lib.redis.cart import add_item, clear_cart, get_cart
 from lib.redis.client import RedisClient
 
 

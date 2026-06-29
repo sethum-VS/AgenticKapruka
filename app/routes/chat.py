@@ -44,6 +44,7 @@ router = APIRouter()
 
 RedisDep = Annotated[RedisClient, Depends(get_redis)]
 
+
 def _chat_new_empty_state_html() -> str:
     """OOB swap HTML that restores the welcome empty state after new session."""
     templates = get_templates()

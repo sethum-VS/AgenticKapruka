@@ -89,9 +89,7 @@ _FOR_HIM_RE = re.compile(
     re.I,
 )
 _TITLE_LEADING_DAD_RE = re.compile(r"^Dad\b", re.I)
-_FOR_HER_RE = re.compile(
-    r"\b(?:for her|for mom|mother'?s?|women'?s?|ladies|girlfriend)\b", re.I
-)
+_FOR_HER_RE = re.compile(r"\b(?:for her|for mom|mother'?s?|women'?s?|ladies|girlfriend)\b", re.I)
 _NON_FLORAL_FLOWER_DENYLIST = re.compile(
     r"\b(?:air freshener|freshener|fragrance|deodorizer|room spray|scented)\b",
     re.I,
@@ -411,16 +409,12 @@ def demote_off_focus_products(
     if not session_product_focus or not products:
         return list(products)
     matching = [
-        product
-        for product in products
-        if product_matches_focus(product, session_product_focus)
+        product for product in products if product_matches_focus(product, session_product_focus)
     ]
     if not matching:
         return list(products)
     demoted = [
-        product
-        for product in products
-        if not product_matches_focus(product, session_product_focus)
+        product for product in products if not product_matches_focus(product, session_product_focus)
     ]
     return matching + demoted
 
@@ -490,10 +484,9 @@ def demote_non_chocolate_for_chocolate_focus(
     demoted: list[dict[str, Any]] = []
     for product in products:
         blob = _product_text_blob(product)
-        if (
-            _FLORAL_FOR_CHOCOLATE_DENYLIST.search(blob)
-            and not _FOCUS_TOKEN_PATTERNS["chocolate"].search(blob)
-        ):
+        if _FLORAL_FOR_CHOCOLATE_DENYLIST.search(blob) and not _FOCUS_TOKEN_PATTERNS[
+            "chocolate"
+        ].search(blob):
             demoted.append(product)
         else:
             preferred.append(product)
@@ -595,13 +588,10 @@ def apply_gift_curation(
     demoted: list[dict[str, Any]] = []
     for product in products:
         blob = _product_text_blob(product)
-        if not user_wants_voucher and _GIFT_VOUCHER_RE.search(blob):
-            demoted.append(product)
-        elif _GIFT_DEMOTE_RE.search(blob) or _PRODUCE_DENYLIST.search(blob):
+        if not user_wants_voucher and _GIFT_VOUCHER_RE.search(blob) or _GIFT_DEMOTE_RE.search(blob) or _PRODUCE_DENYLIST.search(blob):
             demoted.append(product)
         elif _GIFT_PROMOTE_RE.search(blob) or (
-            session_product_focus != "chocolate"
-            and _GIFT_PROMOTE_WITH_BOUQUET_RE.search(blob)
+            session_product_focus != "chocolate" and _GIFT_PROMOTE_WITH_BOUQUET_RE.search(blob)
         ):
             promoted.append(product)
         else:
@@ -624,11 +614,7 @@ def filter_gift_noise_products(
         if _GIFT_DEMOTE_RE.search(blob) or _PRODUCE_DENYLIST.search(blob):
             continue
         price = product_price_amount(product)
-        if (
-            price is not None
-            and price < 500
-            and _LOW_TICKET_SNACK_RE.search(blob)
-        ):
+        if price is not None and price < 500 and _LOW_TICKET_SNACK_RE.search(blob):
             continue
         filtered.append(product)
     return filtered
@@ -710,9 +696,7 @@ def filter_excluded_category_hints(
     if not exclude.strip():
         return list(products)
     filtered = [
-        product
-        for product in products
-        if not _product_matches_excluded_category(product, exclude)
+        product for product in products if not _product_matches_excluded_category(product, exclude)
     ]
     if len(filtered) >= 3:
         return filtered
@@ -831,11 +815,7 @@ def sort_and_filter_by_budget(
         return list(products)
 
     target_currency = currency.strip().upper() if currency.strip() else "LKR"
-    scoped = [
-        product
-        for product in products
-        if _product_currency(product) == target_currency
-    ]
+    scoped = [product for product in products if _product_currency(product) == target_currency]
     if not scoped:
         scoped = list(products)
 
@@ -973,11 +953,7 @@ def curate_carousel_products(
         sorted_items = _budget_sort(items)
         if budget_max is None:
             sorted_items = boost_carousel_relevance(sorted_items, query)
-        if (
-            budget_max is not None
-            and budget_max > 0
-            and is_flower_fruit_intent(query)
-        ):
+        if budget_max is not None and budget_max > 0 and is_flower_fruit_intent(query):
             sorted_items = ensure_flower_price_tier_diversity(sorted_items, budget_max)
         return sorted_items
 
@@ -1041,9 +1017,7 @@ def _looks_like_title_case(text: str) -> bool:
     words = text.split()
     if len(words) < 3:
         return False
-    mid_caps = sum(
-        1 for word in words[1:] if word and word[0].isupper() and word not in {"I"}
-    )
+    mid_caps = sum(1 for word in words[1:] if word and word[0].isupper() and word not in {"I"})
     return mid_caps / (len(words) - 1) >= 0.5
 
 

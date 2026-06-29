@@ -56,7 +56,7 @@ def test_chat_sse_js_hides_loading_indicator_on_deactivate() -> None:
     """Deactivate clears loading text and hides the indicator instead of resetting Sending…."""
     source = CHAT_SSE_JS.read_text()
 
-    assert "span.textContent = \"\"" in source
+    assert 'span.textContent = ""' in source
     assert "indicator.hidden = false" in source
 
 

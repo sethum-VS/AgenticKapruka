@@ -164,9 +164,7 @@ async def _resolve_city_candidate(
             return updates
 
         numbered = resolution.candidates or [resolution.canonical]
-        options = "\n".join(
-            f"{idx}. {name}" for idx, name in enumerate(numbered[:5], start=1)
-        )
+        options = "\n".join(f"{idx}. {name}" for idx, name in enumerate(numbered[:5], start=1))
         updates.update(
             {
                 "delivery_context_ready": False,

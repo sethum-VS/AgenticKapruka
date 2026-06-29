@@ -12,9 +12,9 @@ from graphs.nodes.call_mcp_tools import select_tool_calls
 from graphs.nodes.retrieve_hybrid_context import (
     _fetch_graph_hybrid_context,
     retrieve_hybrid_context,
-    route_after_analyze_intent,
 )
 from graphs.state import AgentState, Intent
+from lib.chat.routing import route_after_analyze_intent
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import VECTOR_CONFIDENCE_THRESHOLD
 from lib.neo4j.traverse import TraversalResult
@@ -218,9 +218,7 @@ def test_route_after_analyze_intent_delivery_only_routes_preflight() -> None:
     state: AgentState = {
         "messages": [
             HumanMessage(
-                content=(
-                    "Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"
-                ),
+                content=("Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"),
             ),
         ],
         "intent": "discovery",
@@ -240,9 +238,7 @@ def test_route_after_analyze_intent_specificity_clarify_skips_hybrid_context() -
         "messages": [HumanMessage(content="I want to buy something nice")],
         "intent": "discovery",
         "specificity_band": "clarify",
-        "agent_clarifying_question": (
-            "What type of gift — flowers, cake, voucher, or hamper?"
-        ),
+        "agent_clarifying_question": ("What type of gift — flowers, cake, voucher, or hamper?"),
         "session_id": "sess-route-specificity",
     }
     assert route_after_analyze_intent(state) == "generate_response"
@@ -544,6 +540,7 @@ async def test_retrieve_hybrid_context_skips_past_occasion_on_topic_pivot() -> N
     hints = result["hybrid_context"].get("hints") or {}
     assert "occasion" not in hints or hints.get("occasion") != "anniversary"
 
+
 @pytest.mark.asyncio
 async def test_retrieve_hybrid_context_parallelizes_zep_and_graph() -> None:
     """Zep preference fetch runs concurrently with Neo4j graph retrieval."""
@@ -613,7 +610,6 @@ async def test_retrieve_hybrid_context_wires_anniversary_hints() -> None:
     hints = updates["hybrid_context"].get("hints") or {}
     exclude = str(hints.get("exclude_categories") or "")
     assert exclude, "Expected anniversary exclude_categories hint"
-    assert any(
-        kw in exclude.lower()
-        for kw in ("greeting", "card", "voucher")
-    ), f"Expected greeting/voucher in exclude_categories: {exclude!r}"
+    assert any(kw in exclude.lower() for kw in ("greeting", "card", "voucher")), (
+        f"Expected greeting/voucher in exclude_categories: {exclude!r}"
+    )

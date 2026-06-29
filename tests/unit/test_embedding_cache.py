@@ -8,7 +8,6 @@ import fakeredis.aioredis
 import pytest
 
 from lib.embeddings.embedding_cache import (
-    EMBEDDING_CACHE_TTL,
     embedding_cache_key,
     get_cached_embedding,
     set_cached_embedding,

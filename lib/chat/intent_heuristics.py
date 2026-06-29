@@ -95,6 +95,7 @@ def build_guest_checkout_reply(*, cart_has_items: bool = True) -> str:
         "to place a guest order."
     )
 
+
 _VAGUE_GIFT_RE = re.compile(
     r"\b(?:gift ideas|present ideas|what should i gift)\b",
     re.I,
@@ -147,9 +148,7 @@ def is_natural_budget_gift_message(message: str) -> bool:
         return True
     if _PRODUCT_CATEGORY_TOKENS.search(stripped):
         return False
-    return bool(
-        _BUDGET_GIFT_RECIPIENT_RE.search(stripped) or _VAGUE_GIFT_RE.search(stripped)
-    )
+    return bool(_BUDGET_GIFT_RECIPIENT_RE.search(stripped) or _VAGUE_GIFT_RE.search(stripped))
 
 
 def is_cart_add_trigger(message: str) -> bool:

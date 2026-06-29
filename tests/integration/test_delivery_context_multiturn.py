@@ -195,7 +195,10 @@ async def test_kandy_cake_deliver_tomorrow_multiturn_check_delivery(
     assert check_calls, "turn 3 must invoke kapruka_check_delivery"
     assert check_calls[-1]["args"]["city"] == "Kandy"
     assert check_calls[-1]["args"]["delivery_date"] == "2026-06-13"
-    assert turn3.get("delivery_date") == "2026-06-13" or turn3.get("session_delivery_date") == "2026-06-13"
+    assert (
+        turn3.get("delivery_date") == "2026-06-13"
+        or turn3.get("session_delivery_date") == "2026-06-13"
+    )
 
     mock_service.check_delivery.assert_awaited()
     assert mock_service.check_delivery.await_count >= 2

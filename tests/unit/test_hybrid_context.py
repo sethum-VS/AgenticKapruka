@@ -73,7 +73,9 @@ def test_reranker_mock_scores_document_normalized_test_scale() -> None:
     """Unit reranker mocks use 0–1 scores; production MS MARCO emits logits (see integration)."""
     assert all(0.0 <= score <= 1.0 for score in _MOCK_RERANKER_SCORES)
     recorded = _RECORDED_MS_MARCO_LOGITS["birthday cake for mom in Colombo"]
-    assert all(score < 0 for score in recorded), "MS MARCO logits for ontology text are typically negative"
+    assert all(score < 0 for score in recorded), (
+        "MS MARCO logits for ontology text are typically negative"
+    )
 
 
 def test_hints_use_highest_reranker_score_not_vector_or_weight() -> None:
@@ -216,7 +218,7 @@ def test_reranker_relative_ranking_on_ms_marco_logits() -> None:
 
 def test_reranker_strips_city_before_scoring() -> None:
     """Location tokens must not be passed to the cross-encoder."""
-    reranker = _SequenceReranker([-4.0, -6.0])
+    _SequenceReranker([-4.0, -6.0])
     captured: list[str] = []
 
     class _CapturingReranker(_SequenceReranker):
@@ -842,12 +844,16 @@ def test_build_discovery_search_args_mom_birthday_chocolate_budget_uses_chocolat
         {},
         currency="LKR",
     )
-    assert "chocolate birthday cake" in args["q"].lower(), f"Expected chocolate birthday cake, got {args['q']!r}"
+    assert "chocolate birthday cake" in args["q"].lower(), (
+        f"Expected chocolate birthday cake, got {args['q']!r}"
+    )
     assert args.get("category") == "Birthday"
     assert args["max_price"] == 8000.0
 
 
-def test_build_discovery_search_args_mom_birthday_no_product_falls_back_to_happy_birthday_mom() -> None:
+def test_build_discovery_search_args_mom_birthday_no_product_falls_back_to_happy_birthday_mom() -> (
+    None
+):
     """P0-1: bare 'birthday gift for mom' with no product focus keeps Happy Birthday Mom."""
     args = build_discovery_search_args(
         "birthday gift for mom Colombo budget 8000",
@@ -877,7 +883,10 @@ def test_merge_planner_search_args_birthday_chocolate_gift_overrides_to_cake() -
     merged = merge_planner_search_args(
         {"q": "chocolate birthday gift", "delivery_city": "Colombo"},
         user_message="birthday gift for mom Colombo loves chocolate budget 8000",
-        hybrid_context={"hints": {"exclude_categories": "Flower, Flowers, Bouquet, Floral"}, "product_count": 0},
+        hybrid_context={
+            "hints": {"exclude_categories": "Flower, Flowers, Bouquet, Floral"},
+            "product_count": 0,
+        },
         currency="LKR",
         intent_metadata={"budget_max": 8000.0, "budget_currency": "LKR"},
     )

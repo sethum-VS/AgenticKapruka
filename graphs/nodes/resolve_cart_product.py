@@ -8,8 +8,8 @@ from typing import Any
 
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
-from lib.chat.product_curation import _sanitize_product_name
 from lib.chat.intent_heuristics import extract_cart_product_phrase
+from lib.chat.product_curation import _sanitize_product_name
 from lib.chat.product_reference import (
     _normalize_ordinal_phrase,
     is_deictic_phrase,
@@ -208,9 +208,7 @@ async def resolve_cart_product(
             "cart_action_result": {
                 "status": "clarify",
                 "product": None,
-                "clarifying_question": (
-                    "Search for a gift first, then say 'add that to my cart'."
-                ),
+                "clarifying_question": ("Search for a gift first, then say 'add that to my cart'."),
             },
         }
 

@@ -302,9 +302,7 @@ async def test_execute_cart_action_preflight_when_delivery_fee_asked() -> None:
         "session_delivery_city_canonical": "Colombo 03",
         "messages": [
             HumanMessage(
-                content=(
-                    "Add the Amma cake please. What's the delivery fee to Colombo?"
-                ),
+                content=("Add the Amma cake please. What's the delivery fee to Colombo?"),
             ),
         ],
         "cart_action_result": {

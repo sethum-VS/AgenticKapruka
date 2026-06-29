@@ -27,7 +27,6 @@ from lib.chat.intent_heuristics import (
     is_budget_refinement_message,
     is_budgeted_gift_ideas_message,
 )
-from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.product_curation import (
     apply_anniversary_curation,
     apply_birthday_cake_curation,
@@ -52,16 +51,14 @@ from lib.chat.product_detail import (
     normalize_resolved_product,
 )
 from lib.chat.query_preprocessor import (
-    _has_delivery_intent,
     _has_perishable_gift_intent,
-    extract_target_city,
     is_delivery_context_relevant_turn,
     should_defer_delivery_date,
 )
 from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.search_broadening import apply_first_broaden
-from lib.chat.support_faq import is_support_question
 from lib.chat.status_copy import SEARCHING_CATALOG, long_search_status_message
+from lib.chat.support_faq import is_support_question
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.fallback import generate_content_with_fallback
 from lib.kapruka.service import KaprukaService
@@ -611,11 +608,7 @@ def _should_run_situational_flowers_search(
 
 def _situational_flowers_search_args(user_message: str) -> dict[str, Any]:
     """Build iteration-0 search args for situational flower/apology turns."""
-    query = (
-        "apology flowers"
-        if _APOLOGY_PATTERN.search(user_message)
-        else "roses bouquet"
-    )
+    query = "apology flowers" if _APOLOGY_PATTERN.search(user_message) else "roses bouquet"
     return {"q": query, "category": "Flowers"}
 
 
@@ -710,14 +703,16 @@ def _curate_search_trace_result(
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     session_flavor_hint = state.get("session_flavor_hint")
     if not isinstance(session_flavor_hint, str) or not session_flavor_hint.strip():
-        meta_flavor = intent_metadata.get("session_flavor_hint") if isinstance(
-            intent_metadata,
-            dict,
-        ) else None
-        session_flavor_hint = (
-            meta_flavor.strip()
-            if isinstance(meta_flavor, str) and meta_flavor.strip()
+        meta_flavor = (
+            intent_metadata.get("session_flavor_hint")
+            if isinstance(
+                intent_metadata,
+                dict,
+            )
             else None
+        )
+        session_flavor_hint = (
+            meta_flavor.strip() if isinstance(meta_flavor, str) and meta_flavor.strip() else None
         )
     topic_pivot = bool(
         isinstance(intent_metadata, dict) and intent_metadata.get("topic_pivot"),
@@ -785,11 +780,7 @@ def _curate_search_trace_result(
     curated = filter_gift_noise_products(curated, strict=strict_budget)
     budget_max = state.get("session_budget_max")
     currency = state.get("currency") or state.get("session_budget_currency") or "LKR"
-    if (
-        not topic_pivot
-        and isinstance(budget_max, (int, float))
-        and budget_max > 0
-    ):
+    if not topic_pivot and isinstance(budget_max, (int, float)) and budget_max > 0:
         from lib.chat.product_curation import sort_and_filter_by_budget
 
         curated = sort_and_filter_by_budget(
@@ -1020,7 +1011,7 @@ def _format_planner_query_rewrite_hints(
         )
     if session_product_focus == "cake" and _FLORAL_DESIGN.search(user_message):
         hints.append(
-            'Session shopping focus is cake: prefer kapruka_search_products with '
+            "Session shopping focus is cake: prefer kapruka_search_products with "
             'q="floral birthday cake" and category="Birthday" rather than jewelry or apparel.'
         )
     if message_count > 1 and _SHORT_CATEGORY_REPLY.match(user_message.strip()) and not topic_pivot:
@@ -1084,15 +1075,14 @@ def _format_planner_query_rewrite_hints(
         if graph_context_available:
             puja_avoid += " Graph exclude_categories hint lists puja/religious categories to skip."
         hints.append(puja_avoid)
-    _is_anniversary = (
-        re.search(r"\banniversary\b", user_message, re.I)
-        or (isinstance(session_occasion, str) and "anniversary" in session_occasion.lower())
+    _is_anniversary = re.search(r"\banniversary\b", user_message, re.I) or (
+        isinstance(session_occasion, str) and "anniversary" in session_occasion.lower()
     )
     if _is_anniversary:
         ann_hint = (
-            "Anniversary occasion: prefer kapruka_search_products with q=\"anniversary flowers\" "
-            "or q=\"anniversary gift hamper\"; avoid greeting cards, watch boxes, storage boxes, "
-            "and gift vouchers. Do not set category=\"Flowers\" — anniversary flower gifts "
+            'Anniversary occasion: prefer kapruka_search_products with q="anniversary flowers" '
+            'or q="anniversary gift hamper"; avoid greeting cards, watch boxes, storage boxes, '
+            'and gift vouchers. Do not set category="Flowers" — anniversary flower gifts '
             "include cake+rose combos catalogued under Cakes."
         )
         if graph_context_available:
@@ -1409,20 +1399,15 @@ def _confident_discovery_fast_path_blocked(
         return True
     if _should_run_budgeted_gift_ideas_search(state, user_message, already_ran=False):
         return True
-    if (
-        is_budget_refinement_message(user_message)
-        and (
-            state.get("session_search_query")
-            or state.get("session_product_focus")
-            or state.get("last_search_products")
-        )
+    if is_budget_refinement_message(user_message) and (
+        state.get("session_search_query")
+        or state.get("session_product_focus")
+        or state.get("last_search_products")
     ):
         return True
     if _should_run_situational_flowers_search(state, user_message, already_ran=False):
         return True
-    if is_product_detail_turn(user_message):
-        return True
-    return False
+    return bool(is_product_detail_turn(user_message))
 
 
 async def _try_confident_discovery_fast_path(
@@ -1724,13 +1709,10 @@ async def agent_loop(
         if iteration >= iteration_limit:
             break
 
-        if (
-            iteration == 0
-            and _should_run_budgeted_gift_ideas_search(
-                state,
-                user_message,
-                already_ran=budgeted_gift_ideas_search_applied,
-            )
+        if iteration == 0 and _should_run_budgeted_gift_ideas_search(
+            state,
+            user_message,
+            already_ran=budgeted_gift_ideas_search_applied,
         ):
             budgeted_gift_ideas_search_applied = True
             tool_name = SEARCH_PRODUCTS_TOOL
@@ -1806,9 +1788,7 @@ async def agent_loop(
                 agent_loop_done = True
                 break
             budget_searches = [
-                entry
-                for entry in tool_trace[budget_trace_start:]
-                if entry.get("name") == tool_name
+                entry for entry in tool_trace[budget_trace_start:] if entry.get("name") == tool_name
             ]
             if budget_searches and all(
                 _is_rate_limit_result(entry.get("result")) for entry in budget_searches
@@ -1872,13 +1852,15 @@ async def agent_loop(
                     )
             if _search_has_products(result):
                 raw_results = result.get("results")
-                products = [
-                    item for item in (raw_results or []) if isinstance(item, dict)
-                ]
+                products = [item for item in (raw_results or []) if isinstance(item, dict)]
                 session_focus = state.get("session_product_focus")
-                if session_focus and products and not carousel_focus_guard(
-                    products,
-                    session_focus if isinstance(session_focus, str) else None,
+                if (
+                    session_focus
+                    and products
+                    and not carousel_focus_guard(
+                        products,
+                        session_focus if isinstance(session_focus, str) else None,
+                    )
                 ):
                     demoted = demote_off_focus_products(
                         products,
@@ -2011,10 +1993,7 @@ async def agent_loop(
 
         if iteration > 0 or not budget_refinement_search_applied:
             intent_metadata = state.get("intent_metadata") or {}
-            has_budget = bool(
-                state.get("session_budget_max")
-                or intent_metadata.get("budget_max")
-            )
+            has_budget = bool(state.get("session_budget_max") or intent_metadata.get("budget_max"))
             _emit_status(
                 long_search_status_message(iteration=iteration, has_budget=has_budget),
             )
@@ -2254,14 +2233,17 @@ async def agent_loop(
                     )
             if _search_has_products(result):
                 raw_results = result.get("results")
-                products = [
-                    item for item in (raw_results or []) if isinstance(item, dict)
-                ]
-                if products and _accessory_ratio(products) > 0.5 and not bool(
-                    (state.get("intent_metadata") or {}).get("topic_pivot"),
-                ) and (
-                    is_broad_cakes_query(user_message)
-                    or is_broad_cakes_query(str(enriched_args.get("q") or ""))
+                products = [item for item in (raw_results or []) if isinstance(item, dict)]
+                if (
+                    products
+                    and _accessory_ratio(products) > 0.5
+                    and not bool(
+                        (state.get("intent_metadata") or {}).get("topic_pivot"),
+                    )
+                    and (
+                        is_broad_cakes_query(user_message)
+                        or is_broad_cakes_query(str(enriched_args.get("q") or ""))
+                    )
                 ):
                     retry_args = {
                         **enriched_args,

@@ -108,8 +108,16 @@ def test_resolve_product_intent_for_cart_promotes_chocolate_gift_box() -> None:
             return [0.2 if "Men's" in text else 0.9 for text in texts]
 
     products = [
-        {"id": "mens", "name": "Power Drive Men's Gift Box For Him", "price": {"amount": 5000, "currency": "LKR"}},
-        {"id": "choc", "name": "Sweet Indulgence Chocolate Gift Box", "price": {"amount": 3230, "currency": "LKR"}},
+        {
+            "id": "mens",
+            "name": "Power Drive Men's Gift Box For Him",
+            "price": {"amount": 5000, "currency": "LKR"},
+        },
+        {
+            "id": "choc",
+            "name": "Sweet Indulgence Chocolate Gift Box",
+            "price": {"amount": 3230, "currency": "LKR"},
+        },
     ]
     ranked = resolve_product_intent_for_cart(
         "I want to add a chocolate gift box to my cart",

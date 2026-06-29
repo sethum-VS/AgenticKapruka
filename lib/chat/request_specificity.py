@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Mapping
+from typing import Literal
 
 from google import genai
 from google.genai import types
@@ -67,9 +68,7 @@ _PRODUCT_QUESTION = (
     "What type of gift — flowers, cake, voucher, or hamper? "
     "For example: 'birthday cake for mom under Rs 5,000'."
 )
-_OCCASION_QUESTION = (
-    "Who is it for, and is there an occasion (birthday, anniversary)?"
-)
+_OCCASION_QUESTION = "Who is it for, and is there an occasion (birthday, anniversary)?"
 _BUDGET_QUESTION = "Do you have a budget in mind (e.g. under Rs 5,000)?"
 _EMPTY_MESSAGE_QUESTION = "What are you looking for today?"
 
@@ -138,9 +137,7 @@ def should_bypass_specificity_scorer(
         return True
     if contains_product_id(stripped):
         return True
-    if is_ambiguous_weekday_phrase(stripped):
-        return True
-    return False
+    return bool(is_ambiguous_weekday_phrase(stripped))
 
 
 _GENERIC_WANTS_SOMETHING_RE = re.compile(
@@ -232,11 +229,8 @@ def _score_delivery_dimension(
 
     stripped = message.strip()
     has_city = bool(intent_metadata.get("target_city")) or extract_target_city(stripped) is not None
-    has_date = (
-        normalize_delivery_date({}, stripped) is not None
-        or bool(
-            isinstance(session_delivery_date, str) and session_delivery_date.strip(),
-        )
+    has_date = normalize_delivery_date({}, stripped) is not None or bool(
+        isinstance(session_delivery_date, str) and session_delivery_date.strip(),
     )
     if has_city and has_date:
         return 1.0
@@ -422,10 +416,7 @@ def score_request_specificity(
         intent_metadata=meta,
         session_delivery_date=meta.get("session_delivery_date") or meta.get("delivery_date"),
     )
-    if meta.get("target_city") and (
-        meta.get("session_delivery_date")
-        or meta.get("delivery_date")
-    ):
+    if meta.get("target_city") and (meta.get("session_delivery_date") or meta.get("delivery_date")):
         score = min(100.0, score + 5.0)
     band = _resolve_band(score, dimension_scores, message=stripped)
     if (
@@ -437,10 +428,7 @@ def score_request_specificity(
         )
     ):
         band = "proceed"
-    if (
-        dimension_scores.get("product", 0.0) >= 0.5
-        and dimension_scores.get("occasion", 0.0) >= 0.5
-    ):
+    if dimension_scores.get("product", 0.0) >= 0.5 and dimension_scores.get("occasion", 0.0) >= 0.5:
         band = "proceed"
     if (
         dimension_scores.get("product", 0.0) >= 1.0

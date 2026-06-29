@@ -50,9 +50,7 @@ def test_route_after_resolve_delivery_only_skips_agent_loop() -> None:
     state: AgentState = {
         "messages": [
             HumanMessage(
-                content=(
-                    "Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"
-                ),
+                content=("Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"),
             ),
         ],
         "session_id": "sess-resolve-delivery-only",

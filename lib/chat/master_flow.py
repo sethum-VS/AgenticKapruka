@@ -216,14 +216,8 @@ def _long_session_drift_signals(
             extract_budget(user_message) is not None
             and not intent_metadata.get("discovery_context_reset")
         )
-        or (
-            _RECIPIENT_RE.search(user_message) is not None
-            and _has_stale_discovery_context(state)
-        )
-        or (
-            bool(intent_metadata.get("topic_pivot"))
-            and _has_stale_discovery_context(state)
-        )
+        or (_RECIPIENT_RE.search(user_message) is not None and _has_stale_discovery_context(state))
+        or (bool(intent_metadata.get("topic_pivot")) and _has_stale_discovery_context(state))
     )
 
 
@@ -277,16 +271,12 @@ def should_invoke_master_flow(
     ) and _has_stale_discovery_context(state):
         return True, "topic_pivot_with_stale_carousel"
 
-    if (
-        state.get("specificity_band") == "proceed"
-        and active_flow == "awaiting_clarification"
-    ):
+    if state.get("specificity_band") == "proceed" and active_flow == "awaiting_clarification":
         return True, "proceed_band_during_awaiting_clarification"
 
     long_turn_threshold = cfg.master_flow_long_session_turns
-    if (
-        _count_human_turns(messages) >= long_turn_threshold
-        and _long_session_drift_signals(state, user_message, intent_metadata)
+    if _count_human_turns(messages) >= long_turn_threshold and _long_session_drift_signals(
+        state, user_message, intent_metadata
     ):
         return True, "long_session_drift"
 

@@ -29,8 +29,8 @@ from graphs.nodes.generate_response import (
     extract_search_products,
     generate_response,
     merge_tool_trace,
-    stock_consistency_guard,
     render_assistant_html,
+    stock_consistency_guard,
 )
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question
@@ -58,6 +58,7 @@ def _combined_response_html(result: dict[str, object]) -> str:
     if isinstance(carousel, str):
         parts.append(carousel)
     return "".join(parts)
+
 
 _SEARCH_TOOL_RESULTS = {
     SEARCH_PRODUCTS_TOOL: {
@@ -1064,7 +1065,9 @@ async def test_generate_response_clarifying_question_with_carousel() -> None:
     """ask_user with fresh search renders clarifier alongside carousel (clarify+search)."""
     mock_client = MagicMock()
     mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(message="Here are flower options while we confirm delivery.")
+    mock_response.parsed = AssistantReply(
+        message="Here are flower options while we confirm delivery."
+    )
     mock_response.text = mock_response.parsed.model_dump_json()
     mock_client.models.generate_content.return_value = mock_response
 
@@ -1372,8 +1375,7 @@ async def test_generate_response_combined_weight_and_sweetness() -> None:
         "messages": [
             HumanMessage(
                 content=(
-                    "The Springtime one looks nice. "
-                    "How much does it weigh, and is it less sweet?"
+                    "The Springtime one looks nice. How much does it weigh, and is it less sweet?"
                 ),
             ),
         ],
@@ -2172,9 +2174,7 @@ async def test_generate_response_skips_date_clarifier_when_carousel_deferred() -
     state: AgentState = {
         "messages": [
             HumanMessage(
-                content=(
-                    "birthday cake for mom in Colombo, elegant and not too sweet"
-                ),
+                content=("birthday cake for mom in Colombo, elegant and not too sweet"),
             ),
         ],
         "intent": "discovery",

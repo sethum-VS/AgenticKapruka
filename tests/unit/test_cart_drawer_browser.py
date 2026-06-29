@@ -139,12 +139,16 @@ def test_cart_drawer_full_height_outside_blurred_header() -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page(viewport={"width": 1280, "height": 720})
-        panel_html = get_templates().env.get_template("components/cart_drawer_panel.html").render(
-            cart_items=[]
+        panel_html = (
+            get_templates()
+            .env.get_template("components/cart_drawer_panel.html")
+            .render(cart_items=[])
         )
-        trigger_html = get_templates().env.get_template(
-            "components/cart_drawer_trigger.html"
-        ).render(cart_item_count=0)
+        trigger_html = (
+            get_templates()
+            .env.get_template("components/cart_drawer_trigger.html")
+            .render(cart_item_count=0)
+        )
         css = APP_CSS.read_text(encoding="utf-8")
         page.set_content(
             f"""<!DOCTYPE html>

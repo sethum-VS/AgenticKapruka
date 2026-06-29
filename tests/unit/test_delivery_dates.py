@@ -129,8 +129,6 @@ def test_parse_relative_bare_saturday() -> None:
     assert parse_relative_delivery_date("Saturday", today=friday) == date(2026, 6, 13)
 
 
-
-
 # ── Phase 3: Ambiguous weekday phrase detection ───────────────────────────────
 
 _THURSDAY = date(2026, 6, 25)

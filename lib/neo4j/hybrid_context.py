@@ -655,6 +655,8 @@ def extract_max_price(message: str) -> float | None:
     """Parse budget caps like 'under 2000rs' or '~8000 LKR' into a numeric max_price."""
     cap = extract_budget(message)
     return cap.amount if cap is not None else None
+
+
 _META_QUERY_TOKENS = frozenset(
     {
         "can",
@@ -718,9 +720,7 @@ DESSERT_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
     "Desserts",
 )
 
-ANNIVERSARY_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
-    "Greeting Cards",
-)
+ANNIVERSARY_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = ("Greeting Cards",)
 
 CHOCOLATE_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
     "Flower",
@@ -1159,11 +1159,7 @@ def _birthday_biased_product_keyword(
     cake_scoped = is_birthday_cake_intent(query) or _CAKE_TERM.search(query)
     if chocolate_flavor and (birthday_occasion or cake_scoped):
         return "chocolate birthday cake"
-    if (
-        normalized in {"chocolate", "chocolates"}
-        and birthday_occasion
-        and not cake_scoped
-    ):
+    if normalized in {"chocolate", "chocolates"} and birthday_occasion and not cake_scoped:
         return "chocolate gift"
     if birthday_occasion and normalized in {"cake", "cakes"}:
         return "birthday cake"
@@ -1407,11 +1403,14 @@ def build_discovery_search_args(
         args["category"] = category
     elif not topic_pivot and (
         is_broad_cakes_query(user_message)
-        or (birthday_occasion and _should_demote_desserts_for_birthday(
-            query,
-            context,
-            topic_pivot=topic_pivot,
-        ))
+        or (
+            birthday_occasion
+            and _should_demote_desserts_for_birthday(
+                query,
+                context,
+                topic_pivot=topic_pivot,
+            )
+        )
     ):
         args["category"] = "Birthday"
 
@@ -1600,13 +1599,7 @@ def _birthday_planner_q_needs_override(planner_q: str, user_message: str) -> boo
         return stripped.lower() != canonical.lower()
     # Birthday + chocolate intent but planner didn't include "cake" in the query → override
     # e.g. planner used "chocolate birthday gift" but should be "chocolate birthday cake"
-    if (
-        _BIRTHDAY_OCCASION_RE.search(user_message)
-        and _CHOCOLATE_FLAVOR_RE.search(user_message)
-        and "cake" not in stripped.lower()
-    ):
-        return True
-    return False
+    return bool(_BIRTHDAY_OCCASION_RE.search(user_message) and _CHOCOLATE_FLAVOR_RE.search(user_message) and "cake" not in stripped.lower())
 
 
 def enrich_message_with_session_slots(
@@ -1699,9 +1692,8 @@ def merge_planner_search_args(
         needs_override,
         canonical.get("q"),
     )
-    if birthday_scoped and needs_override:
-        if "q" in canonical:
-            merged["q"] = canonical["q"]
+    if birthday_scoped and needs_override and "q" in canonical:
+        merged["q"] = canonical["q"]
 
     target_city = intent_metadata.get("target_city") if intent_metadata else None
     merged_q = str(merged.get("q") or "")
@@ -1713,9 +1705,7 @@ def merge_planner_search_args(
         if key in canonical:
             merged[key] = canonical[key]
 
-    if re.search(r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b", user_message, re.I):
-        merged.pop("category", None)
-    elif str(merged.get("category") or "").strip().lower() == "birthday" and re.search(
+    if re.search(r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b", user_message, re.I) or str(merged.get("category") or "").strip().lower() == "birthday" and re.search(
         r"\btea\b",
         str(merged.get("q") or ""),
         re.I,

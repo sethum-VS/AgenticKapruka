@@ -127,7 +127,9 @@ def test_product_preference_note_less_sweet_honest_default() -> None:
         "name": "Springtime Birthday Ribbon Cake",
         "summary": "Pastel ribbon cake for birthdays.",
     }
-    note = product_preference_note("is it suitable for someone who prefers less sweet cakes?", product)
+    note = product_preference_note(
+        "is it suitable for someone who prefers less sweet cakes?", product
+    )
     assert note is not None
     assert "does not list exact sweetness" in note.lower()
 

@@ -7,8 +7,9 @@ import json
 import logging
 import re
 import secrets
+from collections.abc import Mapping
 from datetime import date
-from typing import Any, Mapping, cast
+from typing import Any, cast
 
 from google import genai
 from google.genai import types
@@ -42,7 +43,6 @@ from lib.chat.product_curation import (
     refine_last_search_by_budget,
 )
 from lib.chat.product_detail import (
-    enrich_tool_results_with_session_product,
     is_delivery_fee_question,
     is_product_detail_turn,
     is_sweetness_preference_turn,
@@ -468,12 +468,12 @@ def stock_consistency_guard(
         return reply_text
     if not _STOCK_NEGATION_PATTERN.search(reply_text):
         return reply_text
-    in_stock_products = [
-        product for product in products if product.get("in_stock") is not False
-    ]
+    in_stock_products = [product for product in products if product.get("in_stock") is not False]
     if not in_stock_products:
         return reply_text
-    return _build_discovery_template_reply(in_stock_products, user_message=user_message) or reply_text
+    return (
+        _build_discovery_template_reply(in_stock_products, user_message=user_message) or reply_text
+    )
 
 
 def _last_check_delivery_invocation(
@@ -724,10 +724,7 @@ def _build_verified_dated_delivery_reply(
 ) -> str:
     fee = format_currency(rate, currency)
     friendly_date = format_delivery_date_friendly(checked_date)
-    return (
-        f"Yes, we can deliver to {city} on {friendly_date}. "
-        f"Delivery fee is {fee}."
-    )
+    return f"Yes, we can deliver to {city} on {friendly_date}. Delivery fee is {fee}."
 
 
 def _apply_verified_dated_delivery_template(
@@ -745,11 +742,7 @@ def _apply_verified_dated_delivery_template(
     checked_date = delivery.get("checked_date")
     rate = delivery.get("rate")
     delivery_currency = delivery.get("currency") or "LKR"
-    if (
-        not city
-        or not isinstance(checked_date, str)
-        or not isinstance(rate, (int, float))
-    ):
+    if not city or not isinstance(checked_date, str) or not isinstance(rate, (int, float)):
         return reply_text
     fee_label = format_currency(float(rate), str(delivery_currency))
     if "verified with Kapruka" in reply_text or fee_label in reply_text:
@@ -1099,10 +1092,7 @@ def _prepend_situational_empathy(
     if not intent_metadata or not intent_metadata.get("is_situational"):
         return reply_text
     head = reply_text.strip().lower()[:120]
-    if any(
-        phrase in head
-        for phrase in ("sorry", "hear that", "heartbroken", "going through")
-    ):
+    if any(phrase in head for phrase in ("sorry", "hear that", "heartbroken", "going through")):
         return reply_text
     return f"I'm sorry to hear you're going through this. {reply_text.strip()}"
 
@@ -1809,10 +1799,7 @@ async def generate_response(
         and not situational_with_products
         and (
             exit_reason == "ask_user"
-            or (
-                exit_reason is None
-                and not _turn_has_fresh_search(state.get("tool_trace"))
-            )
+            or (exit_reason is None and not _turn_has_fresh_search(state.get("tool_trace")))
         )
     ):
         pending_clarifier = clarifying_question.strip()
@@ -2076,8 +2063,7 @@ async def generate_response(
                 )
             if search_payload.get("results") == []:
                 can_refine_from_last_search = bool(
-                    is_budget_refinement_message(user_message)
-                    and state.get("last_search_products")
+                    is_budget_refinement_message(user_message) and state.get("last_search_products")
                 )
                 if not can_refine_from_last_search:
                     empty_reply = build_empty_search_reply(
@@ -2123,11 +2109,7 @@ async def generate_response(
                     checked_date = delivery.get("checked_date")
                     rate = delivery.get("rate")
                     delivery_currency = delivery.get("currency") or "LKR"
-                    if (
-                        city
-                        and isinstance(checked_date, str)
-                        and isinstance(rate, (int, float))
-                    ):
+                    if city and isinstance(checked_date, str) and isinstance(rate, (int, float)):
                         prose = _build_verified_dated_delivery_reply(
                             city=city,
                             checked_date=checked_date,
@@ -2149,8 +2131,12 @@ async def generate_response(
     fresh_search = _turn_has_fresh_search(state.get("tool_trace"))
     allow_stale_fallback = not topic_pivot and not fresh_search and not delivery_only
 
-    if is_product_detail_turn(user_message) and not delivery_only and not is_delivery_fee_question(
-        user_message,
+    if (
+        is_product_detail_turn(user_message)
+        and not delivery_only
+        and not is_delivery_fee_question(
+            user_message,
+        )
     ):
         matched = match_product_from_last_search(
             user_message,

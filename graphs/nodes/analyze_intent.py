@@ -17,7 +17,6 @@ from lib.chat.delivery_dates import (
 )
 from lib.chat.intent_heuristics import (
     PROCEED_CHECKOUT_MESSAGE,
-    build_guest_checkout_reply,
     classify_routing_guard,
     is_budgeted_gift_ideas_message,
     is_cart_add_trigger,
@@ -473,9 +472,9 @@ async def analyze_intent(
     )
     intent_metadata, hybrid_context_update, topic_pivot, pivot_session_clear = (
         _clear_context_on_pivot(
-        user_message,
-        state,
-        intent_metadata,
+            user_message,
+            state,
+            intent_metadata,
         )
     )
     budget_gift_meta, budget_hybrid_update, budget_gift_pivot, budget_session_clear = (

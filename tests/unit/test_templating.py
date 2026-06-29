@@ -68,7 +68,9 @@ def test_template_response_renders_base_html() -> None:
     assert "/static/js/vendor/htmx-ext-sse.min.js" in html
     assert "/static/js/vendor/alpine.min.js" in html
     assert 'defer src="/static/js/vendor/htmx.min.js"' in html
-    assert "icon_names=add,add_comment,history,local_shipping,menu,redeem,send,shopping_cart" in html
+    assert (
+        "icon_names=add,add_comment,history,local_shipping,menu,redeem,send,shopping_cart" in html
+    )
     assert 'hx-ext="sse"' in html
     assert 'href="/static/css/app.css"' in html
     assert "/static/js/cart-drawer.js" in html

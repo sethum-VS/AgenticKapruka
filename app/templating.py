@@ -143,7 +143,7 @@ def render_cart_add_error_response(
     retry = (
         '<button type="button" '
         'class="mt-2 rounded-lg bg-primary px-3 py-1.5 text-label-sm font-label-sm '
-        'text-on-primary transition-colors hover:bg-primary-container '
+        "text-on-primary transition-colors hover:bg-primary-container "
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" '
         f'hx-post="/cart/add" hx-vals=\'{vals_json}\' hx-target="#cart-panel" '
         'hx-swap="outerHTML" data-testid="cart-add-retry">Try again</button>'

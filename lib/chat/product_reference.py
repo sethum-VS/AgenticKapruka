@@ -97,9 +97,7 @@ def _product_name(product: dict[str, Any]) -> str:
 def _numbered_clarify(products: list[dict[str, Any]], *, max_items: int = 5) -> str:
     from lib.chat.product_curation import _sanitize_product_name
 
-    names = [
-        _sanitize_product_name(_product_name(product)) for product in products[:max_items]
-    ]
+    names = [_sanitize_product_name(_product_name(product)) for product in products[:max_items]]
     numbered = ", ".join(f"{index}) {name}" for index, name in enumerate(names, start=1))
     return f"Which one would you like me to add — {numbered}?"
 
@@ -174,9 +172,7 @@ def resolve_product_reference(
         return {
             "status": "clarify",
             "product": None,
-            "clarifying_question": (
-                "Search for a gift first, then say 'add that to my cart'."
-            ),
+            "clarifying_question": ("Search for a gift first, then say 'add that to my cart'."),
         }
     if len(products) == 1:
         return {

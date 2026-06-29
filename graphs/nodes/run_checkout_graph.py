@@ -15,6 +15,7 @@ from graphs.checkout_state import (
 )
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, CheckoutStep
+from lib.chat.intent_heuristics import is_proceed_checkout_message
 from lib.checkout.chat_parser import (
     apply_chat_message_to_checkout,
     prepare_checkout_invoke_state,
@@ -23,7 +24,6 @@ from lib.checkout.chat_parser import (
 )
 from lib.checkout.prefill import seed_checkout_from_agent_state
 from lib.checkout.review import review_context_from_checkout_state
-from lib.chat.intent_heuristics import is_proceed_checkout_message
 from lib.kapruka.service import KaprukaService
 from lib.redis.cart import get_cart
 from lib.redis.checkout import get_checkout_session, save_checkout_session

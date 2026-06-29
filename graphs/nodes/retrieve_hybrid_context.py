@@ -12,11 +12,9 @@ from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.chat.intent_heuristics import is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
-from lib.chat.routing import RouteAfterAnalyzeIntent, route_after_analyze_intent
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.embeddings.vertex_embeddings import embed_texts
 from lib.neo4j.client import Neo4jClient
-from lib.redis.client import RedisClient
 from lib.neo4j.hybrid_context import (
     VECTOR_CONFIDENCE_THRESHOLD,
     build_graph_hybrid_context,
@@ -29,6 +27,7 @@ from lib.neo4j.hybrid_context import (
 )
 from lib.neo4j.traverse import traverse_from_categories
 from lib.neo4j.vector_search import VectorSearchHit, occasion_vector_search, vector_search
+from lib.redis.client import RedisClient
 from lib.zep.client import ZepClient
 from lib.zep.preferences import (
     extract_preferences,
@@ -142,10 +141,7 @@ async def retrieve_hybrid_context(
     intent_metadata: IntentMetadata | None = state.get("intent_metadata")
     topic_pivot = bool(
         intent_metadata
-        and (
-            intent_metadata.get("topic_pivot")
-            or intent_metadata.get("discovery_context_reset")
-        )
+        and (intent_metadata.get("topic_pivot") or intent_metadata.get("discovery_context_reset"))
     )
     skip_graph_reembed = bool(
         is_budget_refinement_message(user_message) and hybrid_context,
@@ -161,6 +157,7 @@ async def retrieve_hybrid_context(
     if neo4j_client is not None and not skip_graph_reembed:
         embed = embed_fn
         if embed is None:
+
             async def _embed_with_cache(texts: list[str]) -> list[list[float]]:
                 return await embed_texts(texts, redis_client=redis_client)
 
@@ -193,9 +190,7 @@ async def retrieve_hybrid_context(
                         exc_info=result,
                     )
                     facts = state.get("zep_memory_facts")
-                    preferences = (
-                        parse_preferences_from_facts(facts) if facts else {}
-                    )
+                    preferences = parse_preferences_from_facts(facts) if facts else {}
                 else:
                     preferences = result
             elif kind == "graph":
@@ -207,9 +202,8 @@ async def retrieve_hybrid_context(
                 elif result:
                     graph_context = result
 
-    if zep_task is None:
-        if facts := state.get("zep_memory_facts"):
-            preferences = parse_preferences_from_facts(facts)
+    if zep_task is None and (facts := state.get("zep_memory_facts")):
+        preferences = parse_preferences_from_facts(facts)
 
     if graph_context:
         hybrid_context = _merge_graph_hybrid_context(

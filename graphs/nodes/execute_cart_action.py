@@ -207,11 +207,7 @@ async def execute_cart_action(
 
     updates: dict[str, Any] = {"cart_action_result": result_payload}
     user_message = _extract_latest_user_message(state.get("messages") or [])
-    if (
-        is_delivery_fee_question(user_message)
-        and kapruka_service is not None
-        and client_ip
-    ):
+    if is_delivery_fee_question(user_message) and kapruka_service is not None and client_ip:
         city = _resolve_session_delivery_city(state, user_message) or state.get(
             "session_delivery_city_canonical"
         )

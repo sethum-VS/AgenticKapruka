@@ -7,9 +7,7 @@ import re
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
 from lib.zep.memory import format_memory_facts_block
 
-_NO_BACKTICK_PRODUCT_NAME_RULE = (
-    "- Never wrap product names in backticks — quote them plainly.\n"
-)
+_NO_BACKTICK_PRODUCT_NAME_RULE = "- Never wrap product names in backticks — quote them plainly.\n"
 
 _OCCASION_OPENING_RULE = (
     "- Open with one concrete sentence naming the customer's occasion, recipient, "

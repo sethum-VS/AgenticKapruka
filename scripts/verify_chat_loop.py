@@ -460,9 +460,7 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
             "bouquet",
             "gift box",
         )
-        has_physical = any(
-            any(marker in text for marker in physical_markers) for text in top_texts
-        )
+        has_physical = any(any(marker in text for marker in physical_markers) for text in top_texts)
         if not has_physical:
             failures.append(
                 "expected at least one physical gift (hamper/chocolate/flowers) "

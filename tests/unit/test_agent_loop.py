@@ -1605,9 +1605,7 @@ def test_format_planner_hints_anniversary_occasion_adds_hint() -> None:
         "anniversary gift ideas",
         session_occasion="anniversary",
     )
-    assert "anniversary" in hints.lower(), (
-        f"Expected anniversary hint: {hints!r}"
-    )
+    assert "anniversary" in hints.lower(), f"Expected anniversary hint: {hints!r}"
     assert (
         "greeting card" in hints.lower()
         or "greeting" in hints.lower()
@@ -1642,9 +1640,7 @@ async def test_agent_loop_delivery_only_skips_planner() -> None:
         **_base_state(),
         "messages": [
             HumanMessage(
-                content=(
-                    "Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"
-                ),
+                content=("Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"),
             ),
         ],
         "intent_metadata": {
@@ -1681,9 +1677,7 @@ async def test_agent_loop_support_faq_skips_planner() -> None:
         **_base_state(),
         "messages": [
             HumanMessage(
-                content=(
-                    "What is your return and refund policy if the cake arrives damaged?"
-                ),
+                content=("What is your return and refund policy if the cake arrives damaged?"),
             ),
         ],
         "intent_metadata": {"support_topic": "quality"},
@@ -1826,8 +1820,7 @@ async def test_agent_loop_product_detail_fast_path_fetches_get_product() -> None
         "messages": [
             HumanMessage(
                 content=(
-                    "The Springtime one looks nice. "
-                    "How much does it weigh, and is it less sweet?"
+                    "The Springtime one looks nice. How much does it weigh, and is it less sweet?"
                 ),
             ),
         ],

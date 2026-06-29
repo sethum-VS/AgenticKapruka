@@ -163,10 +163,7 @@ def test_chat_enter_key_submits_message() -> None:
 def test_chat_sse_done_event_clears_sending_indicator() -> None:
     """Explicit done event clears Sending… without waiting for body close."""
     sse_body = (
-        "event: message\n"
-        'data: <div id="user-msg">You said hello</div>\n\n'
-        "event: done\n"
-        "data: \n\n"
+        'event: message\ndata: <div id="user-msg">You said hello</div>\n\nevent: done\ndata: \n\n'
     )
 
     with sync_playwright() as playwright:
@@ -437,12 +434,9 @@ def test_chat_sse_status_updates_loading_text_during_held_stream() -> None:
         '<p class="whitespace-pre-wrap">Searching our catalog…</p>'
         "</div></div>"
     )
-    status_chunk = "event: status\n" f"data: {status_html}\n\n"
+    status_chunk = f"event: status\ndata: {status_html}\n\n"
     completion_chunk = (
-        "event: message\n"
-        'data: <div id="assistant-final">Done</div>\n\n'
-        "event: done\n"
-        "data: \n\n"
+        'event: message\ndata: <div id="assistant-final">Done</div>\n\nevent: done\ndata: \n\n'
     )
     stream_args = json.dumps(
         {"statusChunk": status_chunk, "completionChunk": completion_chunk, "delayMs": 400}
@@ -524,12 +518,9 @@ def test_chat_sse_status_timer_cleared_on_fast_completion() -> None:
         '<p class="whitespace-pre-wrap">Searching our catalog…</p>'
         "</div></div>"
     )
-    status_chunk = "event: status\n" f"data: {status_html}\n\n"
+    status_chunk = f"event: status\ndata: {status_html}\n\n"
     completion_chunk = (
-        "event: message\n"
-        'data: <div id="assistant-final">Done</div>\n\n'
-        "event: done\n"
-        "data: \n\n"
+        'event: message\ndata: <div id="assistant-final">Done</div>\n\nevent: done\ndata: \n\n'
     )
     stream_args = json.dumps(
         {"statusChunk": status_chunk, "completionChunk": completion_chunk, "delayMs": 50}
@@ -699,7 +690,7 @@ def test_chat_sse_prunes_stale_carousels_after_new_carousel() -> None:
 @pytest.mark.browser
 def test_chat_sse_done_clears_sending_without_response_html() -> None:
     """Graph completion emits done even when no assistant HTML is streamed."""
-    sse_body = "event: done\n" "data: \n\n"
+    sse_body = "event: done\ndata: \n\n"
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()

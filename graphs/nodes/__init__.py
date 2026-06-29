@@ -5,12 +5,13 @@ from graphs.nodes.analyze_intent import analyze_intent
 from graphs.nodes.call_mcp_tools import call_mcp_tools, select_tool_calls
 from graphs.nodes.generate_response import generate_response, render_assistant_html
 from graphs.nodes.load_zep_memory import load_zep_memory
-from graphs.nodes.retrieve_hybrid_context import (
-    retrieve_hybrid_context,
-    route_after_analyze_intent,
-)
-from lib.chat.routing import RouteAfterAnalyzeIntent, route_after_master_flow
+from graphs.nodes.retrieve_hybrid_context import retrieve_hybrid_context
 from graphs.nodes.zep_memory_write import zep_memory_write
+from lib.chat.routing import (
+    RouteAfterAnalyzeIntent,
+    route_after_analyze_intent,
+    route_after_master_flow,
+)
 
 __all__ = [
     "agent_loop",
@@ -20,6 +21,7 @@ __all__ = [
     "load_zep_memory",
     "render_assistant_html",
     "retrieve_hybrid_context",
+    "RouteAfterAnalyzeIntent",
     "route_after_analyze_intent",
     "route_after_master_flow",
     "select_tool_calls",
