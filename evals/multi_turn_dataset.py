@@ -53,7 +53,7 @@ class MultiTurnCase(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     persona: PersonaTag
     query_mode: Literal["utility", "situational"] = "utility"
-    turns: list[MultiTurnStep] = Field(min_length=2, max_length=8)
+    turns: list[MultiTurnStep] = Field(min_length=2, max_length=10)
     constraints: PreservationConstraints = Field(default_factory=PreservationConstraints)
     final_expect_product_ui: bool = False
     final_expect_checkout_ui: bool = False

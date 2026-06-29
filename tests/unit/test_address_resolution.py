@@ -27,7 +27,7 @@ def test_extract_destination_regex_colombo_zone() -> None:
 async def test_resolve_shipment_address_llm_match_confirms_low_confidence() -> None:
     mock_service = AsyncMock(spec=KaprukaService)
     state: AgentState = {
-        "messages": [HumanMessage(content="send to mom's place in Galle")],
+        "messages": [HumanMessage(content="send to mom's place near the old fort")],
     }
     extracted = ExtractedDestination(
         raw_text="mom's place in Galle",

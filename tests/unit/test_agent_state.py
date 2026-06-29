@@ -79,6 +79,13 @@ def test_agent_state_all_fields_optional_except_messages_reducer() -> None:
         "last_visible_products",
         "search_broaden_applied",
         "cart_action_result",
+        "session_resolved_product",
+        "master_flow_invoked",
+        "master_flow_decision",
+        "master_clarifying_question",
+        "master_flow_mismatch_reason",
+        "active_flow",
+        "checkout_paused",
     }
     assert set(hints) == expected_keys
 

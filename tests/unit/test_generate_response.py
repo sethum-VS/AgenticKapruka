@@ -1279,7 +1279,7 @@ async def test_generate_response_product_detail_follow_up_uses_session_weight() 
     result = await generate_response(state, genai_client=mock_client)
 
     assert "2.77 Lbs" in result["assistant_message"]
-    assert "CAKE00KA001685" in result["assistant_message"]
+    assert "Springtime Birthday Ribbon Cake" in result["assistant_message"]
     mock_client.models.generate_content.assert_not_called()
 
 
