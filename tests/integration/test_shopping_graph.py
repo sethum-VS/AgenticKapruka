@@ -36,6 +36,7 @@ _GRAPH_NODE_NAMES = frozenset(
         "analyze_intent",
         "master_flow",
         "retrieve_hybrid_context",
+        "resolve_delivery_context",
         "agent_loop",
         "call_mcp_tools",
         "generate_response",
@@ -210,7 +211,9 @@ async def test_shopping_graph_cakes_search_via_agent_loop(graph_deps: ShoppingGr
     assert node_names == [
         "load_zep_memory",
         "analyze_intent",
+        "master_flow",
         "retrieve_hybrid_context",
+        "resolve_delivery_context",
         "agent_loop",
         "generate_response",
         "zep_memory_write",
@@ -303,6 +306,7 @@ async def test_shopping_graph_tracking_skips_hybrid_context_and_agent_loop(
     assert node_names == [
         "load_zep_memory",
         "analyze_intent",
+        "master_flow",
         "call_mcp_tools",
         "generate_response",
         "zep_memory_write",
@@ -371,6 +375,7 @@ async def test_shopping_graph_product_id_fast_path_skips_agent_loop(
     assert node_names == [
         "load_zep_memory",
         "analyze_intent",
+        "master_flow",
         "call_mcp_tools",
         "generate_response",
         "zep_memory_write",

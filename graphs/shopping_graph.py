@@ -76,6 +76,7 @@ def build_shopping_graph(
             state,
             zep_client=zep_client,
             neo4j_client=neo4j_client,
+            redis_client=redis_client,
         )
 
     async def _call_mcp_tools(state: AgentState) -> dict[str, Any]:

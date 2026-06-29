@@ -16,6 +16,7 @@ from lib.chat.routing import RouteAfterAnalyzeIntent, route_after_analyze_intent
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.embeddings.vertex_embeddings import embed_texts
 from lib.neo4j.client import Neo4jClient
+from lib.redis.client import RedisClient
 from lib.neo4j.hybrid_context import (
     VECTOR_CONFIDENCE_THRESHOLD,
     build_graph_hybrid_context,
@@ -27,7 +28,7 @@ from lib.neo4j.hybrid_context import (
     fetch_category_ids_for_occasions,
 )
 from lib.neo4j.traverse import traverse_from_categories
-from lib.neo4j.vector_search import occasion_vector_search, vector_search
+from lib.neo4j.vector_search import VectorSearchHit, occasion_vector_search, vector_search
 from lib.zep.client import ZepClient
 from lib.zep.preferences import (
     extract_preferences,
@@ -67,10 +68,27 @@ async def _fetch_graph_hybrid_context(
         return {}
 
     query_embedding = embeddings[0]
-    category_hits, occasion_hits = await asyncio.gather(
+    category_result, occasion_result = await asyncio.gather(
         vector_search(neo4j_client, query_embedding, top_k=_VECTOR_SEARCH_TOP_K),
         occasion_vector_search(neo4j_client, query_embedding, top_k=_VECTOR_SEARCH_TOP_K),
+        return_exceptions=True,
     )
+    category_hits: list[VectorSearchHit] = []
+    occasion_hits: list[VectorSearchHit] = []
+    if isinstance(category_result, BaseException):
+        logger.warning(
+            "retrieve_hybrid_context: category vector search failed; continuing with occasion only",
+            exc_info=category_result,
+        )
+    else:
+        category_hits = category_result
+    if isinstance(occasion_result, BaseException):
+        logger.warning(
+            "retrieve_hybrid_context: occasion vector search failed; continuing with category only",
+            exc_info=occasion_result,
+        )
+    else:
+        occasion_hits = occasion_result
     if not category_hits and not occasion_hits:
         return {}
 
@@ -112,16 +130,12 @@ async def retrieve_hybrid_context(
     *,
     zep_client: ZepClient | None = None,
     neo4j_client: Neo4jClient | None = None,
+    redis_client: RedisClient | None = None,
     embed_fn: EmbedTextsFn | None = None,
 ) -> dict[str, Any]:
     """LangGraph node: GraphRAG + Zep preference hints merged into hybrid_context."""
     thread_id = state.get("zep_thread_id")
     preferences: dict[str, str] = {}
-
-    if thread_id and zep_client is not None:
-        preferences = await extract_preferences(zep_client, thread_id)
-    elif facts := state.get("zep_memory_facts"):
-        preferences = parse_preferences_from_facts(facts)
 
     hybrid_context: dict[str, Any] = dict(state.get("hybrid_context") or {})
     user_message = _extract_latest_user_message(state.get("messages") or [])
@@ -139,39 +153,85 @@ async def retrieve_hybrid_context(
     if topic_pivot:
         hybrid_context = {}
 
+    zep_task: asyncio.Task[dict[str, str]] | None = None
+    if thread_id and zep_client is not None:
+        zep_task = asyncio.create_task(extract_preferences(zep_client, thread_id))
+
+    graph_task: asyncio.Task[dict[str, Any]] | None = None
     if neo4j_client is not None and not skip_graph_reembed:
-        embed = embed_fn or embed_texts
-        try:
-            graph_context = await _fetch_graph_hybrid_context(
+        embed = embed_fn
+        if embed is None:
+            async def _embed_with_cache(texts: list[str]) -> list[list[float]]:
+                return await embed_texts(texts, redis_client=redis_client)
+
+            embed = _embed_with_cache
+        graph_task = asyncio.create_task(
+            _fetch_graph_hybrid_context(
                 user_message,
                 neo4j_client=neo4j_client,
                 embed_fn=embed,
-            )
-            if graph_context:
-                hybrid_context = _merge_graph_hybrid_context(
-                    hybrid_context,
-                    graph_context,
-                    topic_pivot=topic_pivot,
-                )
-                product_count = len(graph_context.get("vector_hits") or []) + len(
-                    graph_context.get("categories") or [],
-                )
-                if product_count == 0:
+            ),
+        )
+
+    async_tasks: list[asyncio.Task[Any]] = []
+    task_kinds: list[str] = []
+    if zep_task is not None:
+        async_tasks.append(zep_task)
+        task_kinds.append("zep")
+    if graph_task is not None:
+        async_tasks.append(graph_task)
+        task_kinds.append("graph")
+
+    graph_context: dict[str, Any] = {}
+    if async_tasks:
+        results = await asyncio.gather(*async_tasks, return_exceptions=True)
+        for kind, result in zip(task_kinds, results, strict=True):
+            if kind == "zep":
+                if isinstance(result, BaseException):
                     logger.warning(
-                        "retrieve_hybrid_context: Neo4j graph returned 0 products for %r — "
-                        "run `python scripts/bootstrap_neo4j.py` for local GraphRAG",
-                        user_message[:80],
+                        "retrieve_hybrid_context: Zep preference fetch failed; continuing without",
+                        exc_info=result,
                     )
-            else:
-                logger.warning(
-                    "retrieve_hybrid_context: Neo4j graph returned 0 products for %r — "
-                    "run `python scripts/bootstrap_neo4j.py` before local eval",
-                    user_message[:80],
-                )
-        except Exception:
-            logger.exception(
-                "retrieve_hybrid_context: Neo4j GraphRAG failed; continuing with Zep only",
+                    facts = state.get("zep_memory_facts")
+                    preferences = (
+                        parse_preferences_from_facts(facts) if facts else {}
+                    )
+                else:
+                    preferences = result
+            elif kind == "graph":
+                if isinstance(result, BaseException):
+                    logger.exception(
+                        "retrieve_hybrid_context: Neo4j GraphRAG failed; continuing with Zep only",
+                        exc_info=result,
+                    )
+                elif result:
+                    graph_context = result
+
+    if zep_task is None:
+        if facts := state.get("zep_memory_facts"):
+            preferences = parse_preferences_from_facts(facts)
+
+    if graph_context:
+        hybrid_context = _merge_graph_hybrid_context(
+            hybrid_context,
+            graph_context,
+            topic_pivot=topic_pivot,
+        )
+        product_count = len(graph_context.get("vector_hits") or []) + len(
+            graph_context.get("categories") or [],
+        )
+        if product_count == 0:
+            logger.warning(
+                "retrieve_hybrid_context: Neo4j graph returned 0 products for %r — "
+                "run `python scripts/bootstrap_neo4j.py` for local GraphRAG",
+                user_message[:80],
             )
+    elif graph_task is not None and neo4j_client is not None and not skip_graph_reembed:
+        logger.warning(
+            "retrieve_hybrid_context: Neo4j graph returned 0 products for %r — "
+            "run `python scripts/bootstrap_neo4j.py` before local eval",
+            user_message[:80],
+        )
 
     hybrid_context = merge_preferences_into_hybrid_context(
         hybrid_context,

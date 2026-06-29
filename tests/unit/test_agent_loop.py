@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage
 
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.agent_loop import (
+    CONFIDENT_DISCOVERY_MAX_ITERATIONS,
     MAX_ITERATIONS,
     PLANNER_CATEGORY_NODE_LIMIT,
     PLANNER_SEARCH_RESULT_LIMIT,
@@ -1275,6 +1276,18 @@ def test_max_iterations_for_state_keeps_three_for_discovery() -> None:
     assert _max_iterations_for_state(state, "discovery") == MAX_ITERATIONS
 
 
+def test_max_iterations_for_state_caps_confident_discovery() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom in Colombo")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:cakes"}],
+            "hints": {"occasion": "Birthday"},
+        },
+        "intent_metadata": {"target_city": "Colombo"},
+    }
+    assert _max_iterations_for_state(state, "discovery") == CONFIDENT_DISCOVERY_MAX_ITERATIONS
+
+
 @pytest.mark.asyncio
 async def test_agent_loop_utility_general_iteration_cap_at_two() -> None:
     """Utility/general turns without catalog need stop after two planner iterations."""
@@ -1655,3 +1668,36 @@ async def test_agent_loop_cart_intent_skips_planner() -> None:
     assert result["agent_loop_exit_reason"] == "finish"
     assert result.get("agent_loop_iterations") == 0
     mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_confident_discovery_skips_planner() -> None:
+    """Confident discovery turns search via build_discovery_search_args without Gemini."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [HumanMessage(content="chocolate gift for wife anniversary")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:chocolates", "score": 0.82}],
+            "hints": {"occasion": "Anniversary"},
+        },
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on confident discovery"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result.get("agent_loop_iterations") == 0
+    assert result["intent"] == "discovery"
+    assert len(result["tool_trace"]) == 1
+    assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
+    mock_service.search_products.assert_awaited_once()

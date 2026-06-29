@@ -31,6 +31,14 @@ async def test_health_returns_aggregated_json(monkeypatch: pytest.MonkeyPatch) -
         "lib.health.aggregator.has_category_vector_index",
         AsyncMock(return_value=True),
     )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_occasion_vector_index",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.traverse_from_categories",
+        AsyncMock(return_value=MagicMock(nodes=())),
+    )
 
     application = create_app()
     application.state.redis = MagicMock()

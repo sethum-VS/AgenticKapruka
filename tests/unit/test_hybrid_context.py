@@ -15,7 +15,10 @@ from lib.neo4j.hybrid_context import (
     build_graph_hybrid_context,
     discovery_tool_manifest,
     enrich_birthday_cake_hints,
+    enrich_flower_fruit_negative_hints,
+    has_strong_hybrid_hints,
     is_birthday_cake_intent,
+    is_confident_discovery_turn,
     occasion_rewrite_needed,
     requires_discovery_delivery_check,
     rerank_and_prune_traversal,
@@ -771,3 +774,41 @@ def test_merge_planner_search_args_tea_strips_birthday_category() -> None:
     )
     assert "tea" in merged["q"].lower()
     assert "category" not in merged
+
+
+def test_has_strong_hybrid_hints_graph_vector_hits() -> None:
+    assert has_strong_hybrid_hints({"vector_hits": [{"id": "category:cakes"}]})
+    assert not has_strong_hybrid_hints({})
+
+
+def test_is_confident_discovery_turn_birthday_cake_with_graph() -> None:
+    assert is_confident_discovery_turn(
+        "birthday cake for mom in Colombo",
+        {"vector_hits": [{"id": "category:cakes"}], "hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+
+
+def test_is_confident_discovery_turn_rejects_vague_gifts() -> None:
+    assert not is_confident_discovery_turn(
+        "show me gifts",
+        {"hints": {"category": "Birthday"}},
+        currency="LKR",
+    )
+
+
+def test_is_confident_discovery_turn_requires_strong_hints() -> None:
+    assert not is_confident_discovery_turn(
+        "red roses under 5000",
+        {},
+        currency="LKR",
+    )
+    enriched = enrich_flower_fruit_negative_hints(
+        "red roses under 5000",
+        {},
+    )
+    assert is_confident_discovery_turn(
+        "red roses under 5000",
+        enriched,
+        currency="LKR",
+    )

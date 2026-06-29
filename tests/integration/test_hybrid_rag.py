@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -207,13 +208,14 @@ class _HybridRagMockStore:
             return rows
 
         if cypher.startswith("MATCH (seed:Category)") and "rels*1" in cypher:
-            return self._traverse(parameters)
+            return self._traverse(parameters, cypher=cypher)
 
         return []
 
-    def _traverse(self, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+    def _traverse(self, parameters: dict[str, Any], *, cypher: str = "") -> list[dict[str, Any]]:
         category_ids = list(parameters.get("category_ids", []))
-        max_hops = int(parameters.get("max_hops", 2))
+        match = re.search(r"rels\*1\.\.(\d+)", cypher)
+        max_hops = int(match.group(1)) if match else 2
         rel_types = set(parameters.get("rel_types", []))
         node_labels = set(parameters.get("node_labels", []))
         results: list[dict[str, Any]] = []

@@ -35,6 +35,14 @@ def _patch_graphrag_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
         "lib.health.aggregator.has_category_vector_index",
         AsyncMock(return_value=True),
     )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_occasion_vector_index",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.traverse_from_categories",
+        AsyncMock(return_value=MagicMock(nodes=())),
+    )
 
 
 @pytest.fixture
@@ -171,6 +179,42 @@ async def test_health_endpoint_returns_503_when_degraded(
 
 
 @pytest.mark.asyncio
+async def test_aggregate_health_degraded_when_occasion_index_missing(
+    all_healthy_clients: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neo4j connectivity up but missing Occasion vector index marks neo4j_graphrag down."""
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_category_embeddings",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_category_vector_index",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_occasion_vector_index",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.traverse_from_categories",
+        AsyncMock(return_value=MagicMock(nodes=())),
+    )
+
+    app = MagicMock()
+    app.state = MagicMock()
+    for key, client in all_healthy_clients.items():
+        setattr(app.state, key, client)
+
+    body, status_code = await aggregate_health(app)
+
+    assert status_code == 503
+    assert body.status == "degraded"
+    assert body.services.neo4j.status == "up"
+    assert body.services.neo4j_graphrag.status == "down"
+
+
+@pytest.mark.asyncio
 async def test_aggregate_health_degraded_when_graphrag_index_missing(
     all_healthy_clients: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -183,6 +227,14 @@ async def test_aggregate_health_degraded_when_graphrag_index_missing(
     monkeypatch.setattr(
         "lib.health.aggregator.has_category_vector_index",
         AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.has_occasion_vector_index",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "lib.health.aggregator.traverse_from_categories",
+        AsyncMock(return_value=MagicMock(nodes=())),
     )
 
     app = MagicMock()

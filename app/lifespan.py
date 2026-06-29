@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from fastapi import FastAPI
 from app.config import get_settings
 from lib.analytics.networkx_worker import NetworkXCommunityWorker
 from lib.debug.trace import configure_dev_logging
+from lib.embeddings.reranker import preload_reranker
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.neo4j.client import Neo4jClient
 from lib.redis.client import RedisClient
@@ -80,6 +82,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         community_worker = NetworkXCommunityWorker(app.state.neo4j)
         await community_worker.start()
     app.state.community_worker = community_worker
+    await asyncio.to_thread(preload_reranker)
+    logger.info("Cross-encoder reranker preloaded")
     logger.info("Application startup complete")
 
     yield

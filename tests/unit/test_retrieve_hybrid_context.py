@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -385,6 +386,58 @@ async def test_fetch_graph_hybrid_context_skips_low_confidence_occasion_hop() ->
 
 
 @pytest.mark.asyncio
+async def test_fetch_graph_hybrid_context_continues_when_occasion_search_fails() -> None:
+    """Occasion index failure should not abort category vector hits."""
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    category_hits = [VectorSearchHit(id="category:cakes", score=0.82)]
+    embed_fn = AsyncMock(return_value=[[0.1] * 768])
+
+    with (
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.vector_search",
+            new=AsyncMock(return_value=category_hits),
+        ) as mock_category_search,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.occasion_vector_search",
+            new=AsyncMock(side_effect=RuntimeError("occasion index missing")),
+        ) as mock_occasion_search,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.fetch_category_ids_for_occasions",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.fetch_category_display_names",
+            new=AsyncMock(return_value={"category:cakes": "Cakes"}),
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.traverse_from_categories",
+            new=AsyncMock(return_value=TraversalResult(nodes=())),
+        ) as mock_traverse,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.build_graph_hybrid_context",
+            return_value={"hints": {"category": "Cakes"}},
+        ) as mock_build,
+    ):
+        result = await _fetch_graph_hybrid_context(
+            "birthday cake",
+            neo4j_client=neo4j_client,
+            embed_fn=embed_fn,
+        )
+
+    mock_category_search.assert_awaited_once()
+    mock_occasion_search.assert_awaited_once()
+    mock_traverse.assert_awaited_once_with(
+        neo4j_client,
+        ["category:cakes"],
+        max_hops=2,
+    )
+    build_kwargs = mock_build.call_args.kwargs
+    assert build_kwargs["vector_hits"] == category_hits
+    assert build_kwargs["direct_occasion_hits"] == []
+    assert result == {"hints": {"category": "Cakes"}}
+
+
+@pytest.mark.asyncio
 async def test_retrieve_hybrid_context_pruned_graph_hints_only_for_planner() -> None:
     """Hybrid context merges into state as soft hints — discovery MCP args are not auto-built."""
     pruned_graph_context = {
@@ -490,6 +543,60 @@ async def test_retrieve_hybrid_context_skips_past_occasion_on_topic_pivot() -> N
 
     hints = result["hybrid_context"].get("hints") or {}
     assert "occasion" not in hints or hints.get("occasion") != "anniversary"
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_parallelizes_zep_and_graph() -> None:
+    """Zep preference fetch runs concurrently with Neo4j graph retrieval."""
+    zep_client = AsyncMock()
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    zep_started = asyncio.Event()
+    graph_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_extract_preferences(
+        _client: object,
+        _thread_id: str,
+    ) -> dict[str, str]:
+        zep_started.set()
+        await release.wait()
+        return {"favorite_category": "Birthday"}
+
+    async def slow_graph_fetch(
+        _query: str,
+        *,
+        neo4j_client: Neo4jClient,
+        embed_fn: object,
+    ) -> dict[str, object]:
+        graph_started.set()
+        await release.wait()
+        return {"hints": {"category": "Cakes"}, "vector_hits": [{"id": "category:cakes"}]}
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom")],
+        "intent": "discovery",
+        "zep_thread_id": "thread-parallel",
+    }
+
+    with (
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.extract_preferences",
+            side_effect=slow_extract_preferences,
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context._fetch_graph_hybrid_context",
+            side_effect=slow_graph_fetch,
+        ),
+    ):
+        task = asyncio.create_task(
+            retrieve_hybrid_context(state, zep_client=zep_client, neo4j_client=neo4j_client),
+        )
+        await asyncio.wait_for(zep_started.wait(), timeout=1.0)
+        await asyncio.wait_for(graph_started.wait(), timeout=1.0)
+        release.set()
+        result = await task
+
+    assert result["hybrid_context"]["preferences"]["favorite_category"] == "Birthday"
+    assert "vector_hits" in result["hybrid_context"]
 
 
 @pytest.mark.asyncio

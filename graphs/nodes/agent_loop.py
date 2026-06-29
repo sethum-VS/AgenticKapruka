@@ -71,8 +71,11 @@ from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.neo4j.hybrid_context import (
     build_budget_refinement_search_args,
+    build_discovery_search_args,
+    enrich_message_with_session_slots,
     is_birthday_cake_intent,
     is_broad_cakes_query,
+    is_confident_discovery_turn,
     merge_planner_search_args,
     strip_location_from_search_query,
 )
@@ -83,6 +86,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 3
 UTILITY_GENERAL_MAX_ITERATIONS = 2
+CONFIDENT_DISCOVERY_MAX_ITERATIONS = 1
 PLANNER_MODEL = FLASH_MODEL
 
 ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
@@ -816,6 +820,16 @@ def _turn_needs_catalog(state: AgentState) -> bool:
 
 def _max_iterations_for_state(state: AgentState, refined_intent: Intent | None) -> int:
     """Cap planner iterations for fast utility/general turns that need no catalog."""
+    if refined_intent == "discovery":
+        user_message = _extract_latest_user_message(state.get("messages") or [])
+        if is_confident_discovery_turn(
+            user_message,
+            state.get("hybrid_context") or {},
+            currency=_resolve_currency(state),
+            intent_metadata=state.get("intent_metadata"),
+            state=dict(state),
+        ):
+            return CONFIDENT_DISCOVERY_MAX_ITERATIONS
     if refined_intent != "general":
         return MAX_ITERATIONS
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
@@ -824,6 +838,20 @@ def _max_iterations_for_state(state: AgentState, refined_intent: Intent | None) 
     if _turn_needs_catalog(state):
         return MAX_ITERATIONS
     return UTILITY_GENERAL_MAX_ITERATIONS
+
+
+def _initial_iteration_limit(state: AgentState) -> int:
+    """Pre-loop cap when hybrid hints make a single planner pass sufficient."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if is_confident_discovery_turn(
+        user_message,
+        state.get("hybrid_context") or {},
+        currency=_resolve_currency(state),
+        intent_metadata=state.get("intent_metadata"),
+        state=dict(state),
+    ):
+        return CONFIDENT_DISCOVERY_MAX_ITERATIONS
+    return MAX_ITERATIONS
 
 
 def _search_query_from_result(result: Any) -> str | None:
@@ -1278,6 +1306,7 @@ def _fast_path_agent_loop_updates(
     refined_intent: Intent | None = "general",
     exit_reason: str = "finish",
     session_delivery_date_update: str | None = None,
+    session_search_query_update: str | None = None,
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {
         "tool_trace": tool_trace,
@@ -1294,6 +1323,8 @@ def _fast_path_agent_loop_updates(
     if session_delivery_date_update is not None:
         updates["session_delivery_date"] = session_delivery_date_update
         updates["delivery_date"] = session_delivery_date_update
+    if session_search_query_update is not None:
+        updates["session_search_query"] = session_search_query_update
     return updates
 
 
@@ -1360,6 +1391,121 @@ async def _run_pending_delivery_check(
     return tool_trace, tool_call_count, session_delivery_date_update
 
 
+def _confident_discovery_fast_path_blocked(
+    state: AgentState,
+    user_message: str,
+) -> bool:
+    """True when another deterministic path should run instead of confident discovery."""
+    intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
+    if intent_metadata.get("is_situational"):
+        return True
+    if _should_run_budgeted_gift_ideas_search(state, user_message, already_ran=False):
+        return True
+    if (
+        is_budget_refinement_message(user_message)
+        and (
+            state.get("session_search_query")
+            or state.get("session_product_focus")
+            or state.get("last_search_products")
+        )
+    ):
+        return True
+    if _should_run_situational_flowers_search(state, user_message, already_ran=False):
+        return True
+    return False
+
+
+async def _try_confident_discovery_fast_path(
+    state: AgentState,
+    *,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> dict[str, Any] | None:
+    """Skip the Gemini planner when hybrid hints yield a reliable discovery search."""
+    intent = state.get("intent")
+    if intent not in ("discovery", "general"):
+        return None
+    if not _turn_needs_catalog(state):
+        return None
+
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if _confident_discovery_fast_path_blocked(state, user_message):
+        return None
+    if state.get("specificity_band") == "clarify":
+        return None
+    hybrid_context = state.get("hybrid_context") or {}
+    if not is_confident_discovery_turn(
+        user_message,
+        hybrid_context,
+        currency=currency,
+        intent_metadata=state.get("intent_metadata"),
+        state=dict(state),
+    ):
+        return None
+
+    discovery_message = enrich_message_with_session_slots(user_message, dict(state))
+    search_args = build_discovery_search_args(
+        discovery_message,
+        hybrid_context,
+        currency=currency,
+        intent_metadata=state.get("intent_metadata"),
+    )
+    enriched_args = merge_planner_search_args(
+        search_args,
+        user_message=user_message,
+        hybrid_context=hybrid_context,
+        currency=currency,
+        intent_metadata=state.get("intent_metadata"),
+        state=dict(state),
+    )
+    enriched_args = _inject_tool_currency(
+        SEARCH_PRODUCTS_TOOL,
+        enriched_args,
+        state,
+        currency,
+    )
+    if _is_duplicate_invocation(tool_trace, SEARCH_PRODUCTS_TOOL, enriched_args):
+        logger.debug("agent_loop: confident discovery fast-path duplicate search; skipping")
+        return None
+
+    logger.debug("agent_loop: confident discovery fast-path — skipping planner")
+    _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+    result = await _invoke_tool_with_rate_limit_retry(
+        SEARCH_PRODUCTS_TOOL,
+        enriched_args,
+        kapruka_service=kapruka_service,
+        client_ip=rate_limit_key,
+        currency=currency,
+    )
+    result = _curate_search_trace_result(result, state=state)
+    tool_trace = [
+        *tool_trace,
+        {"name": SEARCH_PRODUCTS_TOOL, "args": enriched_args, "result": result},
+    ]
+    session_search_query_update: str | None = None
+    search_q_arg = enriched_args.get("q")
+    intent_meta = state.get("intent_metadata")
+    if isinstance(search_q_arg, str) and search_q_arg.strip():
+        session_search_query_update = _persist_session_search_query(
+            search_q_arg,
+            intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+        )
+
+    base_tool_count = int(state.get("tool_call_count") or 0)
+    updates = _fast_path_agent_loop_updates(
+        tool_trace,
+        tool_call_count=base_tool_count + 1,
+        refined_intent="discovery",
+        session_search_query_update=session_search_query_update,
+    )
+    last_search_products = _last_search_products_from_trace(tool_trace, state=state)
+    if last_search_products:
+        updates["last_search_products"] = last_search_products
+    return updates
+
+
 async def _try_agent_loop_fast_path(
     state: AgentState,
     *,
@@ -1413,6 +1559,16 @@ async def _try_agent_loop_fast_path(
                 tool_call_count=base_tool_count + added_calls,
                 session_delivery_date_update=session_delivery_date_update,
             )
+
+    discovery_fast_path = await _try_confident_discovery_fast_path(
+        state,
+        tool_trace=tool_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
+    if discovery_fast_path is not None:
+        return discovery_fast_path
 
     return None
 
@@ -1470,7 +1626,7 @@ async def agent_loop(
     if fast_path is not None:
         return fast_path
 
-    iteration_limit = MAX_ITERATIONS
+    iteration_limit = _initial_iteration_limit(state)
 
     for iteration in range(MAX_ITERATIONS):
         if force_finish:

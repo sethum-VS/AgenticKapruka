@@ -29,6 +29,10 @@ class CrossEncoderService:
             self._model = CrossEncoder(self._model_name)
         return self._model
 
+    def preload(self) -> None:
+        """Eagerly load the cross-encoder model (call from app startup)."""
+        self._get_model()
+
     def score_pairs(self, query: str, texts: list[str]) -> list[float]:
         """Score each text against the query; higher values mean stronger relevance."""
         if not texts:
@@ -49,3 +53,8 @@ def get_reranker() -> CrossEncoderService:
     if _reranker is None:
         _reranker = CrossEncoderService()
     return _reranker
+
+
+def preload_reranker() -> None:
+    """Load the cross-encoder model during app startup to avoid first-request latency."""
+    get_reranker().preload()

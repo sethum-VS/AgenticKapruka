@@ -86,7 +86,7 @@ from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import CheckDeliveryOutput
-from lib.neo4j.hybrid_context import extract_budget
+from lib.neo4j.hybrid_context import extract_budget, is_confident_discovery_turn
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import format_currency
 from lib.utils.text import decode_html_entities, normalize_catalog_text
@@ -1311,6 +1311,35 @@ def _build_discovery_template_reply(
     return body
 
 
+def _should_use_discovery_template_fast_path(
+    state: AgentState,
+    *,
+    user_message: str,
+    visible_products: list[dict[str, Any]] | None,
+) -> bool:
+    """Skip Gemini synthesis when planner was bypassed for confident discovery."""
+    if not visible_products:
+        return False
+    if state.get("intent") not in ("discovery", "general"):
+        return False
+    if state.get("agent_loop_exit_reason") not in ("finish", None):
+        return False
+    if state.get("agent_loop_iterations") not in (0, None):
+        return False
+    intent_metadata = state.get("intent_metadata")
+    if isinstance(intent_metadata, dict) and intent_metadata.get("is_situational"):
+        return False
+    hybrid_context = state.get("hybrid_context") or {}
+    currency = state.get("currency") or "LKR"
+    return is_confident_discovery_turn(
+        user_message,
+        hybrid_context,
+        currency=currency,
+        intent_metadata=intent_metadata if isinstance(intent_metadata, dict) else None,
+        state=dict(state),
+    )
+
+
 def build_products_carousel_html(
     tool_results: dict[str, Any] | None,
     *,
@@ -2120,6 +2149,58 @@ async def generate_response(
         delivery_context_relevant=delivery_context_relevant,
     )
     strict_budget = _carousel_strict_budget(user_message, budget_max, state=state)
+
+    if _should_use_discovery_template_fast_path(
+        state,
+        user_message=user_message,
+        visible_products=visible_products,
+    ):
+        reply_text = _build_discovery_template_reply(
+            visible_products,
+            user_message=user_message,
+        )
+        if reply_text:
+            logger.debug(
+                "generate_response: confident discovery template fast-path (%d products)",
+                len(visible_products),
+            )
+            reply_text = normalize_catalog_text(reply_text)
+            reply_text = _prepend_budget_confirmation(
+                reply_text,
+                intent_metadata,
+                budget_max=budget_max,
+                currency=currency,
+            )
+            clarifying = state.get("agent_clarifying_question")
+            if (
+                isinstance(clarifying, str)
+                and clarifying.strip()
+                and clarifying.strip().lower() not in reply_text.lower()
+            ):
+                reply_text = f"{clarifying.strip()}\n\n{reply_text.strip()}"
+            tool_trace = state.get("tool_trace")
+            reply_text = delivery_claim_guard(
+                reply_text,
+                tool_trace,
+                user_message=user_message,
+                delivery_city_status=state.get("delivery_city_status"),
+                delivery_city_confirmed=bool(state.get("session_delivery_city_confirmed")),
+                delivery_context_relevant=delivery_context_relevant,
+                state=dict(state),
+            )
+            reply_text, delivery_status_html = _apply_perishable_delivery_honesty(
+                reply_text,
+                tool_trace,
+                user_message=user_message,
+                session_product_focus=session_product_focus,
+                delivery_context_relevant=delivery_context_relevant,
+            )
+            return _assistant_response_fields(
+                reply_text,
+                products_html=None if delivery_only else products_html,
+                delivery_status_html=delivery_status_html,
+            )
+
     client = genai_client
     model = select_model(state)
     _emit_synthesis_status()

@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 from lib.kapruka.mcp_client import MCPHttpClient
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import has_category_embeddings
-from lib.neo4j.vector_search import has_category_vector_index
+from lib.neo4j.traverse import traverse_from_categories
+from lib.neo4j.vector_search import has_category_vector_index, has_occasion_vector_index
 from lib.redis.client import RedisClient
 from lib.zep.client import ZepClient
 
@@ -76,11 +77,13 @@ async def _check_neo4j_graphrag(client: Neo4jClient | None) -> ServiceHealth:
         if not await client.health_check():
             return ServiceHealth(status="down")
         has_embeddings = await has_category_embeddings(client)
-        has_index = await has_category_vector_index(client)
+        has_category_index = await has_category_vector_index(client)
+        has_occasion_index = await has_occasion_vector_index(client)
+        await traverse_from_categories(client, ["__health_probe__"], max_hops=2)
     except Exception:
         logger.exception("Neo4j GraphRAG health probe failed")
         return ServiceHealth(status="down")
-    ready = has_embeddings and has_index
+    ready = has_embeddings and has_category_index and has_occasion_index
     return ServiceHealth(status="up" if ready else "down")
 
 

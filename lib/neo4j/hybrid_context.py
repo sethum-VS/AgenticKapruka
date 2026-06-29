@@ -1246,6 +1246,64 @@ def build_discovery_search_args(
     return args
 
 
+_BROAD_GIFTS_ONLY = re.compile(
+    r"^(?:show me )?(?:some )?gifts?\s*[!.?]*$",
+    re.I,
+)
+_SPECIFIC_DISCOVERY_RE = re.compile(
+    r"\b(?:birthday|anniversary|chocolate|cake|roses?|bouquet|hamper|tea\s+gift|red\s+roses)\b",
+    re.I,
+)
+
+
+def has_strong_hybrid_hints(hybrid_context: dict[str, Any] | None) -> bool:
+    """True when graph or heuristic hints are strong enough to cap or skip the planner."""
+    if not hybrid_context:
+        return False
+    if has_graph_hybrid_context(hybrid_context):
+        return True
+    hints = hybrid_context.get("hints") or {}
+    for key in ("occasion", "category", "search_q_boost"):
+        value = hints.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    exclude = hints.get("exclude_categories")
+    return isinstance(exclude, str) and bool(exclude.strip())
+
+
+def is_confident_discovery_turn(
+    user_message: str,
+    hybrid_context: dict[str, Any] | None,
+    *,
+    currency: str,
+    intent_metadata: IntentMetadata | None = None,
+    state: dict[str, Any] | None = None,
+) -> bool:
+    """True when deterministic discovery search args are reliable without the planner."""
+    stripped = user_message.strip()
+    if not stripped:
+        return False
+    if _BROAD_GIFTS_ONLY.match(stripped):
+        return False
+    intent_metadata = intent_metadata or {}
+    topic_pivot = bool(intent_metadata.get("topic_pivot"))
+    from lib.chat.intent_heuristics import is_bare_category_pivot
+
+    if topic_pivot and is_bare_category_pivot(stripped):
+        return False
+    discovery_message = enrich_message_with_session_slots(stripped, state)
+    args = build_discovery_search_args(
+        discovery_message,
+        hybrid_context,
+        currency=currency,
+        intent_metadata=intent_metadata,
+    )
+    query = str(args.get("q") or "").strip()
+    if not query or _is_meta_catalog_query(query):
+        return False
+    return has_strong_hybrid_hints(hybrid_context)
+
+
 def _birthday_planner_q_needs_override(planner_q: str, user_message: str) -> bool:
     """True when planner search q is misaligned with birthday-cake discovery intent."""
     stripped = planner_q.strip()
