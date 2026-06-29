@@ -53,8 +53,8 @@ from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initi
 from graphs.state import AgentState, Intent, ToolInvocation
 from lib.chat.delivery_dates import normalize_delivery_date
 from lib.chat.intent_heuristics import is_budgeted_gift_ideas_message
-from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.query_preprocessor import QueryPreprocessor
+from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.kapruka.product_id import extract_product_id
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL

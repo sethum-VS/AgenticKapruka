@@ -14,9 +14,9 @@ from pydantic import BaseModel, Field, ValidationError
 from app.config import Settings, get_settings
 from graphs.state import AgentState, Intent
 from lib.chat.delivery_dates import normalize_delivery_date
+from lib.chat.intent_heuristics import classify_routing_guard
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import FLASH_MODEL
-from lib.chat.intent_heuristics import classify_routing_guard
 from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
 from lib.chat.request_specificity import (
     ClarificationDimension,

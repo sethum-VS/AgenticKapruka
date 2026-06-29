@@ -32,7 +32,11 @@ from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.intent_heuristics import build_guest_checkout_reply, is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
-from lib.chat.off_topic import impossible_request_subject, is_impossible_catalog_request, off_topic_topic
+from lib.chat.off_topic import (
+    impossible_request_subject,
+    is_impossible_catalog_request,
+    off_topic_topic,
+)
 from lib.chat.product_curation import (
     carousel_focus_guard,
     curate_carousel_products,

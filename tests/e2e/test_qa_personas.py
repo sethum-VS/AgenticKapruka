@@ -157,9 +157,7 @@ def test_persona_action_shopper_tracking_and_cart(page: Page, base_url: str) -> 
     assert re.search(
         r"delivered|in transit|pending|processing|tracking|out for delivery",
         lowered_vimp,
-    ), (
-        f"Expected tracking status in VIMP reply, got: {vimp_reply!r}"
-    )
+    ), f"Expected tracking status in VIMP reply, got: {vimp_reply!r}"
 
     # 3. Add product to cart → cart drawer shows 1 item
     _chat_turn(page, "Show me anniversary flowers for my wife")

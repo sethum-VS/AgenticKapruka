@@ -153,7 +153,8 @@ _BARE_GIFT_NEED_RE = re.compile(
     re.I,
 )
 _IN_STOCK_REFINEMENT_RE = re.compile(
-    r"\b(?:what(?:'s| is)\s+(?:in stock|available)|show me what(?:'s| is)\s+(?:in stock|available))\b",
+    r"\b(?:what(?:'s| is)\s+(?:in stock|available)"
+    r"|show me what(?:'s| is)\s+(?:in stock|available))\b",
     re.I,
 )
 
@@ -463,9 +464,8 @@ def score_request_specificity(
         band = "proceed"
     if is_bare_category_pivot(stripped) is not None:
         band = "proceed"
-    if (
-        _IN_STOCK_REFINEMENT_RE.search(stripped)
-        and (session_product_focus or session_recipient_hint or session_budget_max)
+    if _IN_STOCK_REFINEMENT_RE.search(stripped) and (
+        session_product_focus or session_recipient_hint or session_budget_max
     ):
         band = "proceed"
     if is_budgeted_gift_ideas_message(stripped):
