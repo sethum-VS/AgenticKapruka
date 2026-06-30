@@ -24,7 +24,7 @@ def test_is_budget_refinement_message_rejects_new_product() -> None:
 
 def test_is_topic_pivot_message_nevermind_cakes() -> None:
     assert is_topic_pivot_message("Nevermind. Cakes.")
-    assert is_topic_pivot_message("cakes")
+    assert not is_topic_pivot_message("cakes")
 
 
 def test_is_topic_pivot_message_rejects_full_request() -> None:
@@ -33,7 +33,7 @@ def test_is_topic_pivot_message_rejects_full_request() -> None:
 
 def test_is_bare_category_pivot_nevermind_cakes() -> None:
     assert is_bare_category_pivot("Nevermind. Cakes.") == "cake"
-    assert is_bare_category_pivot("cakes") == "cake"
+    assert is_bare_category_pivot("cakes") is None
     assert is_bare_category_pivot("birthday cake for mom") is None
 
 

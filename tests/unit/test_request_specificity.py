@@ -312,3 +312,35 @@ def test_delivery_only_inquiry_proceeds_without_product_clarify() -> None:
     )
     assert result.band == "proceed"
     assert result.clarifying_question is None
+
+
+def test_category_browse_proceeds_without_clarify() -> None:
+    result = score_request_specificity(
+        "Hi, what kinds of gifts can I buy here?",
+        session_product_focus=None,
+        session_occasion=None,
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata={},
+    )
+    assert result.band == "proceed"
+    assert result.clarifying_question is None
+
+
+def test_explicit_product_browse_proceeds_without_occasion() -> None:
+    for message in (
+        "Show me chocolate options",
+        "Maybe flowers would help — something gentle",
+        "Cake and flower combo please",
+        "Show me chocolate cakes instead",
+        "Fresh fruit basket for a get-well gift",
+    ):
+        result = score_request_specificity(
+            message,
+            session_product_focus=None,
+            session_occasion=None,
+            session_recipient_hint=None,
+            session_budget_max=None,
+            intent_metadata={},
+        )
+        assert result.band == "proceed", message

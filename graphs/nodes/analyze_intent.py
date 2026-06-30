@@ -670,9 +670,9 @@ async def analyze_intent(
     if not should_bypass_specificity_scorer(user_message, guard_intent=None):
         specificity = score_request_specificity(
             user_message,
-            session_product_focus=session_product_focus,
-            session_occasion=session_occasion,
-            session_recipient_hint=session_recipient_hint,
+            session_product_focus=state.get("session_product_focus"),
+            session_occasion=state.get("session_occasion"),
+            session_recipient_hint=state.get("session_recipient_hint"),
             session_budget_max=session_budget_max,
             session_flavor_hint=session_flavor_hint,
             intent_metadata=intent_metadata,
@@ -682,9 +682,9 @@ async def analyze_intent(
                 user_message,
                 specificity,
                 genai_client=genai_client,
-                session_product_focus=session_product_focus,
-                session_occasion=session_occasion,
-                session_recipient_hint=session_recipient_hint,
+                session_product_focus=state.get("session_product_focus"),
+                session_occasion=state.get("session_occasion"),
+                session_recipient_hint=state.get("session_recipient_hint"),
                 session_budget_max=session_budget_max,
                 intent_metadata=intent_metadata,
             )
@@ -703,6 +703,7 @@ async def analyze_intent(
                         "intent_metadata": intent_metadata,
                         "specificity_score": specificity.score,
                         "specificity_band": "proceed",
+                        "agent_clarifying_question": None,
                         "session_awaiting_clarification_dimension": None,
                     },
                 )
@@ -729,6 +730,8 @@ async def analyze_intent(
             "specificity_score": specificity.score,
             "specificity_band": specificity.band,
         }
+        if specificity.band == "proceed":
+            specificity_fields["agent_clarifying_question"] = None
         if resolve_awaiting_clarification_dimension(state):
             logger.debug(
                 "analyze_intent: specificity gate proceed (score=%.1f) — clearing await flag",
@@ -740,6 +743,13 @@ async def analyze_intent(
                 "analyze_intent: specificity gate proceed (score=%.1f)",
                 specificity.score,
             )
+    else:
+        logger.debug("analyze_intent: specificity bypass — clearing stale clarify gate")
+        specificity_fields = {
+            "specificity_band": "proceed",
+            "agent_clarifying_question": None,
+            "session_awaiting_clarification_dimension": None,
+        }
 
     logger.debug(
         "analyze_intent: shopping turn — deferring discovery/general to agent_loop planner",

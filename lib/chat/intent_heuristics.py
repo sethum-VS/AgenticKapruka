@@ -298,9 +298,23 @@ def is_topic_pivot_message(message: str) -> bool:
         return False
     if _TOPIC_PIVOT_PREFIX.search(stripped):
         return True
-    if _BARE_CATEGORY_REPLY.match(stripped):
+    if re.search(r"\binstead\b", stripped, re.I):
         return True
     return bool(re.search(r"nevermind.*\b(?:cakes?|flowers?|chocolates?)\b", stripped, re.I))
+
+
+_CATEGORY_BROWSE_TOKENS: tuple[str, ...] = (
+    "categories",
+    "kinds of gifts",
+    "what can i buy",
+    "what do you sell",
+)
+
+
+def is_category_browse_message(message: str) -> bool:
+    """True when the shopper asks to browse Kapruka's category tree, not search products."""
+    lowered = message.strip().lower()
+    return any(token in lowered for token in _CATEGORY_BROWSE_TOKENS)
 
 
 def is_bare_category_pivot(message: str) -> str | None:
@@ -353,10 +367,7 @@ def infer_intent_from_message(message: str) -> Intent:
     ):
         return "checkout"
 
-    if any(
-        token in lowered
-        for token in ("categories", "kinds of gifts", "what can i buy", "what do you sell")
-    ):
+    if is_category_browse_message(message):
         return "general"
 
     if lowered.startswith("cake00ka") or "product " in lowered:

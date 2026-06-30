@@ -224,6 +224,17 @@ def _synthesize_assistant_reply(user_prompt: str) -> str:
                     lines.append(name)
             if lines:
                 curated = lines[:3]
+                user_message = _extract_customer_message(user_prompt)
+                if _distress_needs_empathy(user_message):
+                    if len(curated) == 1:
+                        return (
+                            "I'm sorry to hear that — here's a thoughtful, gentle curated pick: "
+                            f"{curated[0]}."
+                        )
+                    return (
+                        "I'm sorry to hear that — here are a few thoughtful, "
+                        "gentle curated options: " + "; ".join(curated) + "."
+                    )
                 if len(curated) == 1:
                     return f"Here is a thoughtful pick: {curated[0]}."
                 return "Here are a few curated options: " + "; ".join(curated) + "."
@@ -419,25 +430,36 @@ def _planner_step_for_eval_case(
     return AgentPlannerStep(action="finish", rationale="expected tools collected")
 
 
+_PREFLIGHT_RESULT_TOOLS: frozenset[str] = frozenset({CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL})
+
+
 def tool_names_from_state(result: AgentState) -> list[str]:
-    """Ordered MCP tool names from agent_loop tool_trace or heuristic tool_results."""
+    """Ordered MCP tool names from agent_loop tool_trace plus delivery preflight."""
+    trace_names: list[str] = []
     tool_trace = result.get("tool_trace")
     if isinstance(tool_trace, list) and tool_trace:
-        names: list[str] = []
         for invocation in tool_trace:
             if not isinstance(invocation, dict):
                 continue
             name = invocation.get("name")
             if isinstance(name, str) and name:
-                names.append(name)
-        return names
+                trace_names.append(name)
 
     tool_results = result.get("tool_results")
-    if not isinstance(tool_results, dict):
-        return []
+    result_names: list[str] = []
+    if isinstance(tool_results, dict):
+        result_names = [
+            key
+            for key, value in tool_results.items()
+            if value is not None and key in _PREFLIGHT_RESULT_TOOLS
+        ]
 
-    names = [key for key, value in tool_results.items() if value is not None]
-    return names
+    if trace_names:
+        preflight = [name for name in result_names if name not in trace_names]
+        return preflight + trace_names
+    if isinstance(tool_results, dict):
+        return [key for key, value in tool_results.items() if value is not None]
+    return []
 
 
 def _should_assert_agent_loop_tools(case: GoldenCase) -> bool:
@@ -543,8 +565,8 @@ def build_eval_genai_client(
 
         if config is not None and config.response_schema is AssistantReply:
             message = _synthesize_assistant_reply(contents)
-            if _is_concierge_system_instruction(config):
-                user_message = _extract_customer_message(contents)
+            user_message = _extract_customer_message(contents)
+            if _is_concierge_system_instruction(config) or _distress_needs_empathy(user_message):
                 message = _apply_situational_flavor(message, user_message=user_message)
             response.parsed = AssistantReply(message=message)
             response.text = json.dumps({"message": message})

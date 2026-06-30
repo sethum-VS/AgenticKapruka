@@ -45,6 +45,7 @@ async def test_analyze_intent_shopping_turn_skips_gemini() -> None:
         "intent_metadata": expected_metadata,
         "specificity_score": 75.0,
         "specificity_band": "proceed",
+        "agent_clarifying_question": None,
         "session_product_focus": "cake",
         "session_occasion": "birthday",
         "session_recipient_hint": "mom",
@@ -90,7 +91,11 @@ async def test_analyze_intent_tracking_guard_skips_gemini() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     expected_metadata: IntentMetadata = _preprocessor.process("where is order VIMP123?")
-    assert result == {"intent": "tracking", "intent_metadata": expected_metadata}
+    assert result == {
+        "intent": "tracking",
+        "intent_metadata": expected_metadata,
+        "session_awaiting_clarification_dimension": None,
+    }
     mock_client.models.generate_content.assert_not_called()
 
 

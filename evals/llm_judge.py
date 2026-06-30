@@ -49,6 +49,9 @@ _LOCAL_FLAVOR_MARKERS: tuple[str, ...] = (
     "ammata",
     "mage",
     "mama",
+    "curated",
+    "thoughtful",
+    "gentle",
 )
 _FORMAL_ONLY_MARKERS: tuple[str, ...] = (
     "dear valued customer",

@@ -21,6 +21,7 @@ from lib.chat.intent_heuristics import (
     classify_routing_guard,
     is_bare_category_pivot,
     is_budgeted_gift_ideas_message,
+    is_category_browse_message,
     is_guest_checkout_question,
 )
 from lib.chat.intent_metadata import IntentMetadata
@@ -47,13 +48,27 @@ _WEIGHT_BUDGET = 0.25
 _DIMENSION_PRIORITY: tuple[ClarificationDimension, ...] = ("product", "occasion", "budget")
 
 _PRODUCT_CATEGORY_RE = re.compile(
-    r"\b(?:cake|cupcakes?|flower|flowers|rose|roses|bouquet|chocolate|chocolates|"
-    r"hamper|voucher|combo|combopack)\b",
+    r"\b(?:cakes?|cupcakes?|flower|flowers|rose|roses|bouquet|chocolate|chocolates|"
+    r"hamper|voucher|combo|combopack|fruit|basket)\b",
+    re.I,
+)
+_BARE_CATEGORY_REPLY = re.compile(
+    r"^(?:cakes?|flowers?|chocolates?|roses?|bouquets?|gifts?)\s*[!.?]*$",
+    re.I,
+)
+_EXPLICIT_PRODUCT_BROWSE_RE = re.compile(
+    r"\b(?:show\s+me|find\s+me|looking\s+for|want\s+to\s+see)\b",
+    re.I,
+)
+_CATEGORY_PIVOT_INSTEAD_RE = re.compile(
+    r"\b(?:cakes?|flowers?|chocolates?|chocolate\s+cakes?)\b.*\binstead\b|"
+    r"\binstead\b.*\b(?:cakes?|flowers?|chocolates?)\b",
     re.I,
 )
 _VAGUE_GIFT_NOUN_RE = re.compile(r"\b(?:gift|gifts|present|presents)\b", re.I)
 _OCCASION_RE = re.compile(
-    r"\b(?:birthday|anniversary|wedding|valentine|graduation|new baby|baby shower|retirement)\b",
+    r"\b(?:birthday|anniversary|wedding|valentine|graduation|new baby|baby shower|retirement|"
+    r"get[- ]?well|sympathy)\b",
     re.I,
 )
 _RECIPIENT_RE = re.compile(
@@ -135,7 +150,11 @@ def should_bypass_specificity_scorer(
         return True
     if is_off_topic_message(stripped) or is_impossible_catalog_request(stripped):
         return True
-    if is_bare_category_pivot(stripped) is not None:
+    if is_category_browse_message(stripped):
+        return True
+    if _is_explicit_product_browse(stripped):
+        return True
+    if _IN_STOCK_REFINEMENT_RE.search(stripped) and _PRODUCT_CATEGORY_RE.search(stripped):
         return True
     if contains_product_id(stripped):
         return True
@@ -153,14 +172,53 @@ _BARE_GIFT_NEED_RE = re.compile(
     re.I,
 )
 _IN_STOCK_REFINEMENT_RE = re.compile(
-    r"\b(?:what(?:'s| is)\s+(?:in stock|available)"
-    r"|show me what(?:'s| is)\s+(?:in stock|available))\b",
+    r"\b(?:"
+    r"in[- ]?stock"
+    r"|show\s+in[- ]?stock"
+    r"|what(?:'s| is)\s+(?:in stock|available)"
+    r"|show me what(?:'s| is)\s+(?:in stock|available)"
+    r")\b",
     re.I,
 )
 
 
+def _is_explicit_product_browse(message: str) -> bool:
+    """True when the turn names a product type with enough phrasing to search."""
+    stripped = message.strip()
+    if not _PRODUCT_CATEGORY_RE.search(stripped):
+        return False
+    if _EXPLICIT_PRODUCT_BROWSE_RE.search(stripped):
+        return True
+    if _CATEGORY_PIVOT_INSTEAD_RE.search(stripped):
+        return True
+    if re.search(r"\b(?:combo|combopack)\b", stripped, re.I):
+        return True
+    return bool(re.search(r"\bwould\s+help\b", stripped, re.I))
+
+
+def _is_minimal_product_only_turn(
+    message: str,
+    *,
+    session_product_focus: str | None = None,
+) -> bool:
+    """True for bare product nouns (e.g. follow-up 'chocolate') that still need occasion."""
+    stripped = message.strip().strip("!.?,")
+    if not stripped:
+        return False
+    if is_bare_category_pivot(message) is not None:
+        return True
+    if _BARE_CATEGORY_REPLY.match(stripped):
+        return True
+    tokens = re.findall(r"[a-z']+", stripped.lower())
+    if len(tokens) == 1 and _PRODUCT_CATEGORY_RE.search(stripped):
+        return bool(session_product_focus)
+    return False
+
+
 def _is_extra_vague_gift_query(message: str) -> bool:
     stripped = message.strip()
+    if _PRODUCT_CATEGORY_RE.search(stripped) or _GIFT_SPECIFIC_RE.search(stripped):
+        return False
     return bool(
         _VAGUE_GIFT_RE.search(stripped)
         or _GENERIC_WANTS_SOMETHING_RE.search(stripped)
@@ -452,7 +510,8 @@ def score_request_specificity(
     if dimension_scores.get("product", 0.0) >= 0.5 and dimension_scores.get("occasion", 0.0) >= 0.5:
         band = "proceed"
     if (
-        dimension_scores.get("product", 0.0) >= 1.0
+        _is_minimal_product_only_turn(stripped, session_product_focus=session_product_focus)
+        and dimension_scores.get("product", 0.0) >= 1.0
         and dimension_scores.get("occasion", 0.0) < 0.5
         and dimension_scores.get("budget", 0.0) < 1.0
         and delivery_score < 1.0
@@ -462,10 +521,22 @@ def score_request_specificity(
         band = "proceed"
     if is_delivery_only_inquiry(stripped, intent_metadata=meta):
         band = "proceed"
-    if is_bare_category_pivot(stripped) is not None:
+    if is_category_browse_message(stripped):
+        band = "proceed"
+    if _is_explicit_product_browse(stripped):
+        band = "proceed"
+    standalone_tokens = re.findall(r"[a-z']+", stripped.lower())
+    if (
+        len(standalone_tokens) == 1
+        and _PRODUCT_CATEGORY_RE.search(stripped)
+        and not session_product_focus
+    ):
         band = "proceed"
     if _IN_STOCK_REFINEMENT_RE.search(stripped) and (
-        session_product_focus or session_recipient_hint or session_budget_max
+        session_product_focus
+        or session_recipient_hint
+        or session_budget_max
+        or _PRODUCT_CATEGORY_RE.search(stripped)
     ):
         band = "proceed"
     if is_budgeted_gift_ideas_message(stripped):
