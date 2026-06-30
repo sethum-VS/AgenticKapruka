@@ -85,6 +85,24 @@ async def test_resolve_delivery_context_skips_when_no_city_signal() -> None:
 @pytest.mark.asyncio
 async def test_resolve_delivery_context_ambiguous_colombo_clarifies() -> None:
     service = AsyncMock(spec=KaprukaService)
+    preflight_output = {
+        "city": "Colombo",
+        "now": "2026-06-12T12:00:00+05:30",
+        "checked_date": "2026-06-12",
+        "available": True,
+        "rate": 500.0,
+        "currency": "LKR",
+        "reason": None,
+        "next_available_date": None,
+        "perishable_warning": None,
+    }
+
+    class _MockOutput:
+        def model_dump(self) -> dict[str, object]:
+            return preflight_output
+
+    service.check_delivery.return_value = _MockOutput()
+
     state: AgentState = {
         "messages": [HumanMessage(content="Birthday cake for mom in Colombo")],
         "session_id": "sess-resolve-ambiguous",
@@ -115,10 +133,84 @@ async def test_resolve_delivery_context_ambiguous_colombo_clarifies() -> None:
     assert result["agent_clarifying_question"] == ambiguous.customer_message
     assert result["delivery_context_ready"] is True
     assert result.get("agent_loop_exit_reason") is None
+    tool_trace = result.get("tool_trace") or []
+    assert len(tool_trace) == 1
+    assert tool_trace[0]["name"] == "kapruka_check_delivery"
+    assert tool_trace[0]["args"] == {"city": "Colombo"}
 
 
 @pytest.mark.asyncio
-async def test_resolve_delivery_context_ambiguous_colombo_blocks_on_delivery_intent() -> None:
+async def test_resolve_delivery_context_ambiguous_colombo_soft_nudge_dated_preflight() -> None:
+    """Rich cake + bare Colombo runs dated check_delivery before zone clarify."""
+    service = AsyncMock(spec=KaprukaService)
+    preflight_output = {
+        "city": "Colombo",
+        "now": "2026-06-12T12:00:00+05:30",
+        "checked_date": "2026-06-15",
+        "available": True,
+        "rate": 500.0,
+        "currency": "LKR",
+        "reason": None,
+        "next_available_date": None,
+        "perishable_warning": None,
+    }
+
+    class _MockOutput:
+        def model_dump(self) -> dict[str, object]:
+            return preflight_output
+
+    service.check_delivery.return_value = _MockOutput()
+
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content=(
+                    "Mom's 65th birthday this Sunday in Colombo — chocolate cakes under Rs 8,000"
+                ),
+            ),
+        ],
+        "session_id": "sess-resolve-colombo-rich-cake",
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "en",
+            "requires_delivery_validation": True,
+            "target_city": "Colombo",
+            "budget_max": 8000.0,
+        },
+    }
+    ambiguous = CityResolution(
+        status="ambiguous",
+        candidates=["Colombo 01", "Colombo 02", "Colombo 03"],
+        customer_message="Colombo has several delivery zones. Which area?",
+    )
+
+    with (
+        patch(
+            "graphs.nodes.resolve_delivery_context.resolve_delivery_city",
+            new=AsyncMock(return_value=ambiguous),
+        ),
+        patch(
+            "graphs.nodes.resolve_delivery_context.normalize_delivery_date",
+            return_value="2026-06-15",
+        ),
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+    ):
+        result = await resolve_delivery_context(
+            state,
+            kapruka_service=service,
+            client_ip=_CLIENT_IP,
+        )
+
+    service.check_delivery.assert_awaited_once_with(
+        _CLIENT_IP,
+        city="Colombo",
+        delivery_date="2026-06-15",
+        product_id=None,
+    )
+    tool_trace = result.get("tool_trace") or []
+    assert len(tool_trace) == 1
+    assert tool_trace[0]["name"] == "kapruka_check_delivery"
+    assert tool_trace[0]["args"] == {"city": "Colombo", "delivery_date": "2026-06-15"}
     service = AsyncMock(spec=KaprukaService)
     state: AgentState = {
         "messages": [HumanMessage(content="Can you deliver to Colombo this Sunday?")],

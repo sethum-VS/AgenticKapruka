@@ -17,6 +17,8 @@ def reset_e2e_session(page: Page, base_url: str) -> None:
     """Clear MCP log, LangGraph checkpoints, mock planner state, and session cookie."""
     page.request.post(f"{base_url}/e2e/reset")
     page.context.clear_cookies()
+    page.goto(f"{base_url}/chat")
+    wait_for_alpine(page)
 
 
 def fetch_mcp_tools(page: Page, base_url: str) -> list[str]:
@@ -32,26 +34,45 @@ def fetch_mcp_tools(page: Page, base_url: str) -> list[str]:
 def send_chat_message(page: Page, message: str, *, timeout_ms: int = 60_000) -> None:
     """Type a message, submit, and wait until SSE streaming completes."""
     page.fill("#chat-message", message)
-    page.click('button[type="submit"]')
-    page.wait_for_function(
-        """() => {
+    completion_js = """({users, assistants}) => {
+          const curUsers = document.querySelectorAll('[data-role="user-message"]').length;
+          const curAssistants = document.querySelectorAll(
+            '[aria-label="Assistant message"]',
+          ).length;
+          const started = curUsers > users || curAssistants > assistants;
           const form = document.getElementById('chat-form');
-          const loading = document.getElementById('chat-loading');
           const formIdle = form && !form.classList.contains('htmx-request');
+          const loading = document.getElementById('chat-loading');
           const loadingIdle = !loading || (
             !loading.classList.contains('htmx-request')
             && !loading.classList.contains('chat-loading')
           );
           const noPendingStream = !document.querySelector('[id^="assistant-stream-"]');
-          const assistants = document.querySelectorAll('[aria-label="Assistant message"]');
-          const last = assistants.length ? assistants[assistants.length - 1] : null;
+          const assistantEls = document.querySelectorAll('[aria-label="Assistant message"]');
+          const last = assistantEls.length ? assistantEls[assistantEls.length - 1] : null;
           const lastText = last ? (last.textContent || '').trim().toLowerCase() : '';
           const notSearching = lastText !== 'searching kapruka…';
-          return formIdle && loadingIdle && noPendingStream && notSearching;
-        }""",
-        timeout=timeout_ms,
-    )
-    page.wait_for_selector('[aria-label="Assistant message"]', timeout=timeout_ms)
+          return started && formIdle && loadingIdle && noPendingStream && notSearching;
+        }"""
+    last_error: Exception | None = None
+    for attempt in range(2):
+        prior_user_turns = page.locator('[data-role="user-message"]').count()
+        prior_assistant_turns = page.locator('[aria-label="Assistant message"]').count()
+        page.locator("#chat-form").evaluate("form => form.requestSubmit()")
+        try:
+            page.wait_for_function(
+                completion_js,
+                arg={"users": prior_user_turns, "assistants": prior_assistant_turns},
+                timeout=timeout_ms,
+            )
+            page.wait_for_selector('[aria-label="Assistant message"]', timeout=timeout_ms)
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0:
+                page.wait_for_timeout(500)
+    if last_error is not None:
+        raise last_error
 
 
 def extract_chat_messages_html(page: Page) -> str:

@@ -73,6 +73,7 @@ class AgentState(TypedDict):
     session_delivery_city_canonical: str | None
     session_delivery_date: str | None
     session_product_focus: str | None
+    session_situational: bool | None
     session_flavor_hint: str | None
     session_search_query: str | None
     session_occasion: str | None

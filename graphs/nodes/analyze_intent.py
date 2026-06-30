@@ -32,7 +32,7 @@ from lib.chat.off_topic import (
     is_off_topic_message,
     off_topic_topic,
 )
-from lib.chat.query_preprocessor import QueryPreprocessor
+from lib.chat.query_preprocessor import QueryPreprocessor, classify_query_mode
 from lib.chat.request_specificity import (
     refine_specificity_with_llm,
     resolve_awaiting_clarification_dimension,
@@ -289,6 +289,24 @@ def _resolve_delivery_dates(
     return None, state.get("session_delivery_date")
 
 
+def _resolve_session_situational(
+    state: AgentState,
+    intent_metadata: IntentMetadata,
+) -> bool:
+    """Keep concierge tone after an opening distress/situational turn."""
+    if intent_metadata.get("is_situational"):
+        return True
+    if state.get("session_situational"):
+        return True
+    for message in state.get("messages") or []:
+        if not isinstance(message, HumanMessage):
+            continue
+        content = message.content
+        if isinstance(content, str) and classify_query_mode(content) == "situational":
+            return True
+    return False
+
+
 def _with_session_fields(
     payload: dict[str, Any],
     *,
@@ -298,6 +316,7 @@ def _with_session_fields(
     session_occasion: str | None,
     session_recipient_hint: str | None,
     session_flavor_hint: str | None,
+    session_situational: bool | None,
     delivery_date: str | None,
     session_delivery_date: str | None,
 ) -> dict[str, Any]:
@@ -313,6 +332,8 @@ def _with_session_fields(
         payload["session_recipient_hint"] = session_recipient_hint
     if session_flavor_hint is not None:
         payload["session_flavor_hint"] = session_flavor_hint
+    if session_situational:
+        payload["session_situational"] = True
     if delivery_date is not None:
         payload["delivery_date"] = delivery_date
     if session_delivery_date is not None:
@@ -535,6 +556,13 @@ async def analyze_intent(
             {**intent_metadata, "session_flavor_hint": session_flavor_hint},
         )
 
+    session_situational = _resolve_session_situational(state, intent_metadata)
+    if session_situational:
+        intent_metadata = cast(
+            IntentMetadata,
+            {**intent_metadata, "is_situational": True},
+        )
+
     def _with_budget(payload: dict[str, Any]) -> dict[str, Any]:
         result = _with_session_fields(
             payload,
@@ -544,6 +572,7 @@ async def analyze_intent(
             session_occasion=session_occasion,
             session_recipient_hint=session_recipient_hint,
             session_flavor_hint=session_flavor_hint,
+            session_situational=session_situational,
             delivery_date=delivery_date,
             session_delivery_date=session_delivery_date,
         )

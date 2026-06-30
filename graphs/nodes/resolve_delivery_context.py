@@ -211,6 +211,69 @@ async def _preflight_check_delivery(
     }
 
 
+async def _attach_ambiguous_colombo_preflight(
+    state: AgentState,
+    user_message: str,
+    updates: dict[str, Any],
+    *,
+    kapruka_service: KaprukaService,
+    client_ip: str,
+) -> dict[str, Any]:
+    """Run kapruka_check_delivery for bare-Colombo gift discovery with zone soft nudge."""
+    intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
+    if not intent_metadata.get("requires_delivery_validation"):
+        return updates
+    if updates.get("delivery_city_status") != "ambiguous" or not updates.get(
+        "delivery_context_ready",
+    ):
+        return updates
+    raw_city = updates.get("delivery_city_raw")
+    if not isinstance(raw_city, str) or not raw_city.strip():
+        raw_city = _resolve_session_delivery_city(state, user_message)
+    if not isinstance(raw_city, str) or not raw_city.strip():
+        return updates
+    delivery_date = updates.get("delivery_date")
+    if delivery_date is not None and not isinstance(delivery_date, str):
+        delivery_date = None
+    if delivery_date is None:
+        delivery_date = normalize_delivery_date({}, user_message)
+    preflight_city = raw_city.strip()
+    if delivery_date:
+        preflight = await _preflight_check_delivery(
+            kapruka_service=kapruka_service,
+            client_ip=client_ip,
+            city=preflight_city,
+            delivery_date=delivery_date,
+            product_id=_resolve_delivery_product_id(state),
+        )
+    else:
+        preflight = await _preflight_check_delivery(
+            kapruka_service=kapruka_service,
+            client_ip=client_ip,
+            city=preflight_city,
+            product_id=_resolve_delivery_product_id(state),
+        )
+    merged: dict[str, Any] = {**updates, "tool_trace": [preflight]}
+    if delivery_date is not None:
+        merged.setdefault("delivery_date", delivery_date)
+        merged.setdefault("session_delivery_date", delivery_date)
+    preflight_result = preflight.get("result")
+    if isinstance(preflight_result, dict) and not preflight_result.get("available"):
+        reason = preflight_result.get("reason")
+        customer_message = (
+            str(reason).strip()
+            if isinstance(reason, str) and reason.strip()
+            else f"Kapruka cannot deliver to {preflight_city}."
+        )
+        return {
+            **merged,
+            "delivery_context_ready": False,
+            "agent_clarifying_question": customer_message,
+            "agent_loop_exit_reason": "ask_user",
+        }
+    return merged
+
+
 async def resolve_delivery_context(
     state: AgentState,
     *,
@@ -239,7 +302,13 @@ async def resolve_delivery_context(
             genai_client=genai_client,
         )
         if address_updates.get("agent_clarifying_question"):
-            return address_updates
+            return await _attach_ambiguous_colombo_preflight(
+                state,
+                user_message,
+                address_updates,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+            )
 
     raw_city = _resolve_session_delivery_city(state, user_message)
     if not raw_city and address_updates.get("delivery_city_raw"):
@@ -397,7 +466,7 @@ async def resolve_delivery_context(
             "resolve_delivery_context: soft Colombo zone nudge for gift discovery %r",
             raw_city,
         )
-        return {
+        soft_nudge: dict[str, Any] = {
             **resolved_base,
             "delivery_city_raw": raw_city,
             "delivery_city_status": "ambiguous",
@@ -405,6 +474,13 @@ async def resolve_delivery_context(
             "delivery_context_ready": True,
             "agent_clarifying_question": customer_message,
         }
+        return await _attach_ambiguous_colombo_preflight(
+            state,
+            user_message,
+            soft_nudge,
+            kapruka_service=kapruka_service,
+            client_ip=rate_limit_key,
+        )
     return {
         **resolved_base,
         "delivery_context_ready": False,

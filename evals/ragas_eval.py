@@ -566,8 +566,19 @@ def build_eval_genai_client(
         if config is not None and config.response_schema is AssistantReply:
             message = _synthesize_assistant_reply(contents)
             user_message = _extract_customer_message(contents)
-            if _is_concierge_system_instruction(config) or _distress_needs_empathy(user_message):
-                message = _apply_situational_flavor(message, user_message=user_message)
+            empathy_source = (
+                user_message
+                if _distress_needs_empathy(user_message)
+                else contents
+                if _distress_needs_empathy(contents)
+                else user_message
+            )
+            if (
+                _is_concierge_system_instruction(config)
+                or _distress_needs_empathy(user_message)
+                or _distress_needs_empathy(contents)
+            ):
+                message = _apply_situational_flavor(message, user_message=empathy_source)
             response.parsed = AssistantReply(message=message)
             response.text = json.dumps({"message": message})
             return response
