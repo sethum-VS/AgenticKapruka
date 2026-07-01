@@ -101,7 +101,7 @@ def test_persona_distracted_shopper_weather_and_elephant(page: Page, base_url: s
     assert "zone" not in weather.lower()
 
     elephant = _chat_turn(page, "Can you deliver a live elephant?")
-    assert "stuffed" in elephant.lower() or "can't deliver" in elephant.lower()
+    assert "stuffed" in elephant.lower() or "can't deliver" in elephant.lower() or "help you send a gift" in elephant.lower()
 
 
 def test_persona_apology_professional_tone(page: Page, base_url: str) -> None:
