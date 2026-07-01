@@ -51,10 +51,14 @@ def _carousel_harness_html(carousel_html: str) -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
 {css}
-      body {{
+      html, body {{
         width: 375px;
         max-width: 375px;
+        overflow-x: hidden;
         overflow-y: hidden;
+      }}
+      body {{
+        margin: 0;
       }}
       [data-testid="product-carousel"] {{
         width: 100%;
