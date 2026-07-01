@@ -41,7 +41,11 @@ def test_merge_preferences_into_hybrid_context_builds_mcp_hints() -> None:
         "past_occasion": "anniversary",
     }
 
-    merged = merge_preferences_into_hybrid_context({}, preferences)
+    merged = merge_preferences_into_hybrid_context(
+        {},
+        preferences,
+        user_message="anniversary flowers",
+    )
 
     assert merged["preferences"] == preferences
     assert merged["hints"]["category"] == "Flowers"

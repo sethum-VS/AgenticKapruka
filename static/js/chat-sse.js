@@ -9,6 +9,7 @@
 (function () {
   const CHAT_FORM_ID = "chat-form";
   const CHAT_STREAM_PATH = "/chat/stream";
+  const CHAT_STREAM_TIMEOUT_MS = 90_000;
 
   function chatDebugEnabled(form) {
     return form?.dataset?.chatDebug === "true";
@@ -103,6 +104,37 @@
     return { events, remainder };
   }
 
+  function containsProductCarousel(html) {
+    return (
+      html.includes('data-testid="product-carousel"') ||
+      html.includes('data-slot="product-carousel"')
+    );
+  }
+
+  function pruneStaleCarousels(messagesRoot) {
+    const assistants = messagesRoot.querySelectorAll('[data-role="assistant-message"]');
+    if (assistants.length <= 1) {
+      return;
+    }
+    for (let index = 0; index < assistants.length - 1; index += 1) {
+      const bubble = assistants[index];
+      for (const slot of bubble.querySelectorAll(
+        '.assistant-products, [data-slot="product-carousel"], [data-testid="product-carousel"]',
+      )) {
+        const container = slot.closest(".assistant-products") || slot;
+        container.remove();
+      }
+    }
+    const remaining = messagesRoot.querySelectorAll('[data-testid="product-carousel"]');
+    if (remaining.length > 1) {
+      for (let index = 0; index < remaining.length - 1; index += 1) {
+        const carousel = remaining[index];
+        const container = carousel.closest(".assistant-products") || carousel.parentElement;
+        container?.remove();
+      }
+    }
+  }
+
   function swapListenerHtml(listener, html) {
     const targetSelector = listener.getAttribute("hx-target");
     const target = targetSelector ? document.querySelector(targetSelector) : null;
@@ -116,17 +148,120 @@
     for (const node of Array.from(target.children).slice(childCountBefore)) {
       htmx.process(node);
     }
+    if (containsProductCarousel(html)) {
+      pruneStaleCarousels(target);
+      removePendingAssistantBubbles();
+    }
     document.body.dispatchEvent(
       new CustomEvent("htmx:afterSwap", { detail: { target } }),
     );
   }
 
-  function swapStatusHtml(html) {
-    // Status events OOB-update the pending assistant bubble without appending.
+  const STATUS_MIN_VISIBLE_MS = 800;
+  const DEFAULT_LOADING_TEXT = "Sending…";
+  let statusShownAt = 0;
+  let statusFlushTimer = null;
+
+  function loadingIndicatorSpan(indicator) {
+    return (
+      indicator.querySelector('[data-testid="chat-loading-text"]') ||
+      indicator.querySelector("span")
+    );
+  }
+
+  function updateLoadingStatusText(text) {
+    const indicator = document.getElementById("chat-loading");
+    if (!indicator) {
+      return;
+    }
+    const span = loadingIndicatorSpan(indicator);
+    if (!span) {
+      return;
+    }
+    const display = text || DEFAULT_LOADING_TEXT;
+    span.textContent = display;
+    indicator.setAttribute("aria-label", display);
+  }
+
+  function showLoadingIndicator(text) {
+    const indicator = document.getElementById("chat-loading");
+    if (!indicator) {
+      return;
+    }
+    indicator.hidden = false;
+    indicator.setAttribute("aria-hidden", "false");
+    updateLoadingStatusText(text || DEFAULT_LOADING_TEXT);
+  }
+
+  function hideLoadingIndicator() {
+    const indicator = document.getElementById("chat-loading");
+    if (!indicator) {
+      return;
+    }
+    const span = loadingIndicatorSpan(indicator);
+    if (span) {
+      span.textContent = "";
+    }
+    indicator.removeAttribute("aria-label");
+    indicator.hidden = true;
+    indicator.setAttribute("aria-hidden", "true");
+  }
+
+  function parseStatusTextFromHtml(html) {
+    const template = document.createElement("template");
+    template.innerHTML = html.trim();
+    const paragraph = template.content.querySelector("p");
+    if (!paragraph) {
+      return null;
+    }
+    const text = paragraph.textContent?.trim();
+    return text || null;
+  }
+
+  function swapCarouselHtml(html) {
     htmx.swap(document.body, html, { swapStyle: "none" });
+    const messagesRoot = document.getElementById("chat-messages");
+    if (messagesRoot && containsProductCarousel(html)) {
+      pruneStaleCarousels(messagesRoot);
+      removePendingAssistantBubbles();
+    }
     document.body.dispatchEvent(
       new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
     );
+  }
+
+  function swapStatusHtml(html) {
+    const statusText = parseStatusTextFromHtml(html);
+    if (statusText) {
+      updateLoadingStatusText(statusText);
+    }
+
+    const now = Date.now();
+    const apply = () => {
+      htmx.swap(document.body, html, { swapStyle: "none" });
+      document.body.dispatchEvent(
+        new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
+      );
+      statusShownAt = Date.now();
+    };
+
+    const elapsed = now - statusShownAt;
+    if (statusShownAt > 0 && elapsed < STATUS_MIN_VISIBLE_MS) {
+      if (statusFlushTimer) {
+        clearTimeout(statusFlushTimer);
+      }
+      statusFlushTimer = setTimeout(() => {
+        statusFlushTimer = null;
+        const form = findChatForm();
+        if (!form || !form.classList.contains("htmx-request")) {
+          return;
+        }
+        apply();
+      }, STATUS_MIN_VISIBLE_MS - elapsed);
+      return;
+    }
+
+    apply();
   }
 
   function toggleRequestState(form, active) {
@@ -135,7 +270,8 @@
     const messageInput = form.querySelector("#chat-message");
     if (active) {
       form.classList.add("htmx-request");
-      indicator?.classList.add("htmx-request");
+      indicator?.classList.add("htmx-request", "chat-loading");
+      showLoadingIndicator(DEFAULT_LOADING_TEXT);
       if (submitButton) {
         submitButton.disabled = true;
       }
@@ -144,8 +280,14 @@
         messageInput.value = "";
       }
     } else {
+      if (statusFlushTimer) {
+        clearTimeout(statusFlushTimer);
+        statusFlushTimer = null;
+      }
+      statusShownAt = 0;
       form.classList.remove("htmx-request");
-      indicator?.classList.remove("htmx-request");
+      indicator?.classList.remove("htmx-request", "chat-loading");
+      hideLoadingIndicator();
       if (submitButton) {
         submitButton.disabled = false;
       }
@@ -159,6 +301,20 @@
     for (const el of document.querySelectorAll('[id^="assistant-stream-"]')) {
       el.remove();
     }
+  }
+
+  function showStreamFailureMessage() {
+    const messages = document.getElementById("chat-messages");
+    if (!messages) {
+      return;
+    }
+    const bubble = document.createElement("div");
+    bubble.className = "chat-message assistant";
+    bubble.setAttribute("data-testid", "chat-stream-error");
+    bubble.innerHTML =
+      '<p class="text-body-sm text-on-surface-variant">Connection interrupted. Please send your message again.</p>';
+    messages.appendChild(bubble);
+    messages.scrollTop = messages.scrollHeight;
   }
 
   function registerAfterRequestBackup() {
@@ -189,12 +345,17 @@
     });
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), CHAT_STREAM_TIMEOUT_MS);
+
       const response = await fetch(connectPath, {
         method: "POST",
         body: formData,
         headers: { "HX-Request": "true" },
         credentials: "same-origin",
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         chatDebugLog(form, "http error", { status: response.status });
@@ -221,6 +382,10 @@
         buffer = parsed.remainder;
 
         for (const event of parsed.events) {
+          if (event.eventName === "done") {
+            toggleRequestState(form, false);
+            continue;
+          }
           if (!acceptedEvents.includes(event.eventName)) {
             continue;
           }
@@ -230,6 +395,8 @@
           });
           if (event.eventName === "status") {
             swapStatusHtml(event.data);
+          } else if (event.eventName === "carousel") {
+            swapCarouselHtml(event.data);
           } else {
             swapListenerHtml(listener, event.data);
           }
@@ -239,11 +406,17 @@
       if (buffer.trim()) {
         const parsed = parseSseChunk(`${buffer}\n\n`);
         for (const event of parsed.events) {
+          if (event.eventName === "done") {
+            toggleRequestState(form, false);
+            continue;
+          }
           if (!acceptedEvents.includes(event.eventName)) {
             continue;
           }
           if (event.eventName === "status") {
             swapStatusHtml(event.data);
+          } else if (event.eventName === "carousel") {
+            swapCarouselHtml(event.data);
           } else {
             swapListenerHtml(listener, event.data);
           }
@@ -259,7 +432,9 @@
       form.reset();
     } catch (error) {
       removePendingAssistantBubbles();
+      showStreamFailureMessage();
       chatDebugLog(form, "stream failed", error);
+      toggleRequestState(form, false);
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {
           detail: { elt: form, successful: false },

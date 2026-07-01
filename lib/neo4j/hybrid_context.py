@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import statistics
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -18,6 +19,7 @@ from lib.chat.model_router import select_rewrite_model
 from lib.chat.product_curation import (
     PUJA_NEGATIVE_CATEGORY_HINTS,
     has_graph_hybrid_context,
+    is_anniversary_occasion_intent,
     is_flower_fruit_intent,
 )
 from lib.embeddings.reranker import CrossEncoderService
@@ -42,7 +44,34 @@ RETURN DISTINCT c.id AS id
 
 # Minimum vector-search score before a direct occasion hit seeds category traversal.
 VECTOR_CONFIDENCE_THRESHOLD = 0.65
+# Legacy absolute threshold for mocked 0–1 scores in unit tests; production uses relative ranking.
 DEFAULT_RERANKER_THRESHOLD = 0.45
+# Minimum gap between top-1 and top-2 reranker scores before emitting a hint (logit scale).
+MIN_RERANK_HINT_MARGIN = 0.5
+
+_RECIPIENT_CATEGORY_SLUGS = frozenset(
+    {
+        "mother",
+        "father",
+        "fathersday",
+        "mothersday",
+        "momtobe",
+        "dad",
+        "parents",
+        "wife",
+        "husband",
+        "girlfriend",
+        "boyfriend",
+        "grandmother",
+        "grandfather",
+        "newadditions",
+        "personalized-gifts",
+    }
+)
+_VENDOR_OCCASION_RE = re.compile(
+    r"(?:\bhotel\b|\bresort\b|\binn\b|chocolatier|bakery|kapruka-|gerard-|amari)",
+    re.IGNORECASE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +138,82 @@ class _RerankTarget:
     in_traversal: bool
 
 
+def _category_slug(node_id: str) -> str:
+    return node_id.rsplit(":", maxsplit=1)[-1].lower()
+
+
+def _is_recipient_category(node_id: str) -> bool:
+    return _category_slug(node_id) in _RECIPIENT_CATEGORY_SLUGS
+
+
+def _is_vendor_or_hotel_occasion(node_id: str, display_name: str) -> bool:
+    slug = _category_slug(node_id)
+    return bool(_VENDOR_OCCASION_RE.search(f"{slug} {display_name}"))
+
+
+def _product_nouns_in_query(query: str) -> list[str]:
+    lowered = query.lower()
+    found: list[str] = []
+    for token in _PRODUCT_TOKEN_PRIORITY:
+        if re.search(rf"\b{re.escape(token)}\b", lowered):
+            found.append(token)
+    return found
+
+
+def _adjust_rerank_score(
+    query: str,
+    target: _RerankTarget,
+    score: float,
+    *,
+    vector_hit_scores: dict[str, float],
+) -> float:
+    """Boost product-aligned nodes; demote recipient categories and vendor occasions."""
+    adjusted = score
+    product_nouns = _product_nouns_in_query(query)
+
+    if target.kind == "occasion" and _is_vendor_or_hotel_occasion(
+        target.node_id,
+        target.display_name,
+    ):
+        return score - 10.0
+
+    if target.kind == "category" and _is_recipient_category(target.node_id) and product_nouns:
+        adjusted -= 3.0
+
+    if target.kind == "category" and product_nouns:
+        slug = _category_slug(target.node_id)
+        for noun in product_nouns:
+            mapped = _CATEGORY_SEARCH_TERMS.get(noun, noun.rstrip("s"))
+            if mapped in slug or noun.rstrip("s") in slug or slug.startswith(noun.rstrip("s")):
+                adjusted += 2.0
+                break
+
+    vector_score = vector_hit_scores.get(target.node_id)
+    if vector_score is not None and not _is_recipient_category(target.node_id):
+        adjusted += vector_score
+
+    return adjusted
+
+
+def _relative_survival_threshold(scores: list[float]) -> float:
+    """Score floor for keeping traversal nodes; adapts to MS MARCO logit scale."""
+    if not scores:
+        return float("inf")
+    if len(scores) == 1:
+        return scores[0] - 1.0
+    median = statistics.median(scores)
+    top = max(scores)
+    margin = max((top - median) * 0.2, MIN_RERANK_HINT_MARGIN * 0.5)
+    return median + margin
+
+
+def _hint_passes_threshold(scored_values: list[float], *, threshold: float) -> bool:
+    """True when scores look like normalized 0–1 mocks (unit tests) vs raw logits."""
+    if not scored_values:
+        return False
+    return max(scored_values) <= 1.0 and min(scored_values) >= 0.0
+
+
 def _build_rerank_targets(
     *,
     traversal: TraversalResult,
@@ -151,6 +256,8 @@ def _build_rerank_targets(
             in_traversal=True,
         )
     for node in traversal.occasions:
+        if _is_vendor_or_hotel_occasion(node.id, node.display_name):
+            continue
         _add(
             kind="occasion",
             node_id=node.id,
@@ -167,10 +274,13 @@ def _build_rerank_targets(
             in_traversal=False,
         )
     for hit in direct_occasion_hits:
+        display = _occasion_display_name(hit.id, traversal.occasions)
+        if _is_vendor_or_hotel_occasion(hit.id, display):
+            continue
         _add(
             kind="occasion",
             node_id=hit.id,
-            display_name=_occasion_display_name(hit.id, traversal.occasions),
+            display_name=display,
             description=None,
             in_traversal=False,
         )
@@ -197,6 +307,7 @@ def rerank_and_prune_traversal(
     if not targets:
         return traversal, None, None
 
+    rerank_query = strip_location_from_search_query(query)
     texts = [
         build_embedding_text(
             display_name=target.display_name,
@@ -204,11 +315,35 @@ def rerank_and_prune_traversal(
         )
         for target in targets
     ]
-    scores = reranker.score_pairs(query, texts)
-    scored = list(zip(targets, scores, strict=True))
+    raw_scores = reranker.score_pairs(rerank_query, texts)
+    vector_hit_scores = {hit.id: hit.score for hit in vector_hits}
+    vector_hit_scores.update({hit.id: hit.score for hit in direct_occasion_hits})
+    adjusted_scores = [
+        _adjust_rerank_score(
+            rerank_query,
+            target,
+            score,
+            vector_hit_scores=vector_hit_scores,
+        )
+        for target, score in zip(targets, raw_scores, strict=True)
+    ]
+    scored = list(zip(targets, adjusted_scores, strict=True))
+    raw_scored = list(zip(targets, raw_scores, strict=True))
+
+    use_absolute = _hint_passes_threshold(raw_scores, threshold=threshold)
+    if use_absolute:
+        survival_floor = threshold
+        prune_scored = raw_scored
+        hint_scored = raw_scored
+    else:
+        survival_floor = _relative_survival_threshold(adjusted_scores)
+        prune_scored = scored
+        hint_scored = scored
 
     surviving_ids = {
-        target.node_id for target, score in scored if score >= threshold and target.in_traversal
+        target.node_id
+        for target, score in prune_scored
+        if score >= survival_floor and target.in_traversal
     }
     pruned_nodes = tuple(
         node
@@ -217,25 +352,124 @@ def rerank_and_prune_traversal(
     )
     pruned = TraversalResult(nodes=pruned_nodes)
 
-    category_hint = _best_hint_by_rerank_score(scored, kind="category", threshold=threshold)
-    occasion_hint = _best_hint_by_rerank_score(scored, kind="occasion", threshold=threshold)
+    category_hint = _best_hint_by_rerank_score(
+        hint_scored,
+        query=rerank_query,
+        kind="category",
+        threshold=threshold,
+        use_absolute=use_absolute,
+    )
+    occasion_hint = _best_hint_by_rerank_score(
+        hint_scored,
+        query=rerank_query,
+        kind="occasion",
+        threshold=threshold,
+        use_absolute=use_absolute,
+    )
     return pruned, category_hint, occasion_hint
 
 
 def _best_hint_by_rerank_score(
     scored: list[tuple[_RerankTarget, float]],
     *,
+    query: str,
     kind: Literal["category", "occasion"],
     threshold: float,
+    use_absolute: bool,
 ) -> str | None:
-    passing = [
+    candidates = [
         (score, target.display_name)
         for target, score in scored
-        if target.kind == kind and score >= threshold
+        if target.kind == kind
+        and not (
+            target.kind == "occasion"
+            and _is_vendor_or_hotel_occasion(target.node_id, target.display_name)
+        )
     ]
-    if not passing:
+    if not candidates:
         return None
-    return max(passing, key=lambda item: item[0])[1]
+
+    if use_absolute:
+        passing = [(score, name) for score, name in candidates if score >= threshold]
+        if not passing:
+            return None
+        return max(passing, key=lambda item: item[0])[1]
+
+    ranked = sorted(candidates, key=lambda item: item[0], reverse=True)
+    top_score, top_name = ranked[0]
+    if len(ranked) == 1:
+        return top_name
+    second_score = ranked[1][0]
+    if top_score - second_score < MIN_RERANK_HINT_MARGIN:
+        return None
+    if kind == "category" and _product_nouns_in_query(query):
+        top_target = next(t for t, s in scored if t.display_name == top_name and t.kind == kind)
+        if _is_recipient_category(top_target.node_id):
+            return None
+    return top_name
+
+
+def _best_vector_category_hint(
+    query: str,
+    vector_hits: list[VectorSearchHit],
+    display_names: dict[str, str],
+) -> str | None:
+    """Pick a category hint from vector hits when reranker yields none."""
+    eligible = [hit for hit in vector_hits if hit.score >= VECTOR_CONFIDENCE_THRESHOLD]
+    if not eligible:
+        return None
+
+    product_nouns = _product_nouns_in_query(query)
+
+    def _effective_score(hit: VectorSearchHit) -> float:
+        score = hit.score
+        if _is_recipient_category(hit.id) and product_nouns:
+            score -= 0.35
+        slug = _category_slug(hit.id)
+        for noun in product_nouns:
+            mapped = _CATEGORY_SEARCH_TERMS.get(noun, noun.rstrip("s"))
+            if mapped in slug or noun.rstrip("s") in slug:
+                score += 0.25
+                break
+        return score
+
+    best = max(eligible, key=_effective_score)
+    if _is_recipient_category(best.id) and product_nouns:
+        product_aligned = [
+            hit
+            for hit in eligible
+            if not _is_recipient_category(hit.id)
+            and any(
+                noun.rstrip("s") in _category_slug(hit.id)
+                or _CATEGORY_SEARCH_TERMS.get(noun, "") in _category_slug(hit.id)
+                for noun in product_nouns
+            )
+        ]
+        if product_aligned:
+            best = max(product_aligned, key=lambda hit: hit.score)
+        elif _effective_score(best) < VECTOR_CONFIDENCE_THRESHOLD:
+            return None
+    return str(display_names.get(best.id, best.id))
+
+
+def _best_vector_occasion_hint(
+    query: str,
+    occasion_hits: list[VectorSearchHit],
+    traversal: TraversalResult,
+) -> str | None:
+    """Pick an occasion hint from vector hits when reranker yields none."""
+    eligible: list[VectorSearchHit] = []
+    for hit in occasion_hits:
+        if hit.score < VECTOR_CONFIDENCE_THRESHOLD:
+            continue
+        display = _occasion_display_name(hit.id, traversal.occasions)
+        if _is_vendor_or_hotel_occasion(hit.id, display):
+            continue
+        eligible.append(hit)
+    if not eligible:
+        return None
+    best = max(eligible, key=lambda hit: hit.score)
+    return _occasion_display_name(best.id, traversal.occasions)
 
 
 def build_graph_hybrid_context(
@@ -268,6 +502,8 @@ def build_graph_hybrid_context(
             threshold=reranker_threshold,
         )
 
+    reranker_produced_hints = bool(category_hint or occasion_hint)
+
     ranked_hits = [
         {
             "id": hit.id,
@@ -281,8 +517,19 @@ def build_graph_hybrid_context(
     hints: dict[str, str] = {}
     if category_hint:
         hints["category"] = category_hint
+    elif not reranker_produced_hints and vector_hits:
+        fallback_category = _best_vector_category_hint(query, vector_hits, display_names)
+        if fallback_category:
+            category_hint = fallback_category
+            hints["category"] = fallback_category
+
     if occasion_hint:
         hints["occasion"] = occasion_hint
+    elif not reranker_produced_hints and occasion_hits:
+        fallback_occasion = _best_vector_occasion_hint(query, occasion_hits, traversal)
+        if fallback_occasion:
+            occasion_hint = fallback_occasion
+            hints["occasion"] = fallback_occasion
 
     return {
         "vector_hits": ranked_hits,
@@ -349,18 +596,67 @@ _CATALOG_BROWSE_RE = re.compile(
     re.IGNORECASE,
 )
 _MAX_PRICE_RE = re.compile(
-    r"\b(?:under|below|less\s+than|upto|up\s+to)\s*(?:rs\.?|lkr|\$)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
+    r"\b(?:under|below|less\s+than|upto|up\s+to)\s*(?:rs\.?|lkr|usd|\$)?\s*(\d[\d,]*)\s*(?:rs\.?|lkr|usd)?\b",
     re.IGNORECASE,
 )
-_TILDE_BUDGET_RE = re.compile(r"~\s*(\d[\d,]*)\s*(?:rs\.?|lkr)?\b", re.IGNORECASE)
+_TILDE_BUDGET_RE = re.compile(
+    r"~\s*(\d[\d,]*)\s*(?:rs\.?|lkr|usd|\$)?\b",
+    re.IGNORECASE,
+)
 _AROUND_BUDGET_RE = re.compile(
-    r"\b(?:around|about)\s*(?:rs\.?|lkr|\$)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
+    r"\b(?:around|about)\s*(?:rs\.?|lkr|usd|\$)?\s*(\d[\d,]*)\s*(?:rs\.?|lkr|usd)?\b",
     re.IGNORECASE,
 )
 _BUDGET_OF_RE = re.compile(
-    r"\bbudget\s*(?:of|around|about)?\s*(?:rs\.?|lkr|\$)?\s*(\d[\d,]*)\s*(?:rs|lkr)?\b",
+    r"\bbudget\s*(?:of|around|about)?\s*(?:rs\.?|lkr|usd|\$)?\s*(\d[\d,]*)\s*(?:rs\.?|lkr|usd)?\b",
     re.IGNORECASE,
 )
+_CURRENCY_IN_SPAN = re.compile(r"(rs\.?|lkr|usd|\$)", re.I)
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetCap:
+    """Numeric budget cap with explicit currency from the user message."""
+
+    amount: float
+    currency: str
+
+
+def _currency_from_span(span: str) -> str:
+    lowered = span.lower()
+    if lowered.startswith("rs") or lowered == "lkr":
+        return "LKR"
+    if lowered.startswith("usd") or lowered == "$":
+        return "USD"
+    return "LKR"
+
+
+def extract_budget(message: str) -> BudgetCap | None:
+    """Parse budget caps with currency (Rs/LKR/USD/$) from the user message."""
+    for pattern in (_MAX_PRICE_RE, _TILDE_BUDGET_RE, _AROUND_BUDGET_RE, _BUDGET_OF_RE):
+        match = pattern.search(message)
+        if not match:
+            continue
+        digits = match.group(1).replace(",", "")
+        try:
+            value = float(digits)
+        except ValueError:
+            continue
+        if value <= 0:
+            continue
+        span = match.group(0)
+        currency_match = _CURRENCY_IN_SPAN.search(span)
+        currency = _currency_from_span(currency_match.group(1)) if currency_match else "LKR"
+        return BudgetCap(amount=value, currency=currency)
+    return None
+
+
+def extract_max_price(message: str) -> float | None:
+    """Parse budget caps like 'under 2000rs' or '~8000 LKR' into a numeric max_price."""
+    cap = extract_budget(message)
+    return cap.amount if cap is not None else None
+
+
 _META_QUERY_TOKENS = frozenset(
     {
         "can",
@@ -402,6 +698,10 @@ _META_QUERY_TOKENS = frozenset(
     }
 )
 _BIRTHDAY_OCCASION_RE = re.compile(r"\bbirthday\b", re.I)
+_MOM_BIRTHDAY_RE = re.compile(
+    r"\b(?:mom|mother|mum|amma)\b.*\bbirthday\b|\bbirthday\b.*\b(?:mom|mother|mum|amma)\b",
+    re.I,
+)
 _BIRTHDAY_CAKE_INTENT = re.compile(
     r"\bbirthday\s+cake\b|\bcake\b.*\bbirthday\b|\bbirthday\b.*\bcake\b",
     re.I,
@@ -420,11 +720,21 @@ DESSERT_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
     "Desserts",
 )
 
+ANNIVERSARY_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = ("Greeting Cards",)
+
+CHOCOLATE_NEGATIVE_CATEGORY_HINTS: tuple[str, ...] = (
+    "Flower",
+    "Flowers",
+    "Bouquet",
+    "Floral",
+)
+
 _CATEGORY_SEARCH_TERMS: dict[str, str] = {
     "chocolates": "chocolate",
     "flowers": "flower",
     "birthday": "birthday cake",
     "cakes": "cake",
+    "tea": "tea gift",
     "gifts": "cake",
     "gift": "cake",
     "food": "cake",
@@ -432,6 +742,8 @@ _CATEGORY_SEARCH_TERMS: dict[str, str] = {
     "perfumes": "perfume",
     "jewellery": "jewelry",
 }
+
+_VEGETARIAN_RE = re.compile(r"\bvegetarian\b", re.I)
 
 # Neo4j Category nodes are Kapruka parent departments (e.g. Cakes, Flowers). They are not
 # valid kapruka_search_products category filters — only occasion/subcategory names work
@@ -464,11 +776,11 @@ _DELIVERY_CITY_NAMES = (
 )
 _CITY_PATTERN = "|".join(_DELIVERY_CITY_NAMES)
 _STRIP_IN_CITY_RE = re.compile(
-    rf"\b(?:in|to|near|around|within)\s+({_CITY_PATTERN})\b",
+    rf"\b(?:in|to|for|near|around|within)\s+({_CITY_PATTERN})\b",
     re.IGNORECASE,
 )
 _STRIP_TRAILING_CITY_RE = re.compile(
-    rf"\b(?:in|to)\s+({_CITY_PATTERN})\s*$",
+    rf"\b(?:in|to|for)\s+({_CITY_PATTERN})\s*$",
     re.IGNORECASE,
 )
 
@@ -481,6 +793,44 @@ def _product_like_tokens(message: str) -> list[str]:
     ]
 
 
+_PRODUCT_TOKEN_PRIORITY: tuple[str, ...] = (
+    "chocolate",
+    "chocolates",
+    "tea",
+    "cake",
+    "cakes",
+    "flower",
+    "flowers",
+    "roses",
+    "bouquet",
+    "hamper",
+    "gift",
+    "gifts",
+)
+
+_RELEVANCE_SORT_PRODUCTS_RE = re.compile(
+    r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b",
+    re.I,
+)
+
+
+def _budget_search_sort(query: str) -> str:
+    """Tea/coffee gift searches need relevance sort; price_asc surfaces cheap snacks."""
+    if _RELEVANCE_SORT_PRODUCTS_RE.search(query):
+        return "relevance"
+    return "price_asc"
+
+
+def _primary_product_token(message: str) -> str | None:
+    """Pick the most product-specific token for budget-scoped Kapruka search q."""
+    lowered = message.lower()
+    for token in _PRODUCT_TOKEN_PRIORITY:
+        if re.search(rf"\b{re.escape(token)}\b", lowered):
+            return token
+    tokens = _product_like_tokens(message)
+    return tokens[0] if tokens else None
+
+
 def _is_meta_catalog_query(message: str) -> bool:
     """True when the user asks to browse/sort the catalog without naming a product."""
     stripped = message.strip()
@@ -491,28 +841,14 @@ def _is_meta_catalog_query(message: str) -> bool:
     return bool(_PRICE_SORT_RE.search(stripped) and not _product_like_tokens(stripped))
 
 
-def extract_max_price(message: str) -> float | None:
-    """Parse budget caps like 'under 2000rs' or '~8000 LKR' into a numeric max_price."""
-    for pattern in (_MAX_PRICE_RE, _TILDE_BUDGET_RE, _AROUND_BUDGET_RE, _BUDGET_OF_RE):
-        match = pattern.search(message)
-        if not match:
-            continue
-        digits = match.group(1).replace(",", "")
-        try:
-            value = float(digits)
-        except ValueError:
-            continue
-        if value > 0:
-            return value
-    return None
-
-
 _extract_max_price = extract_max_price
 
 
-def _product_search_keyword(token: str) -> str:
+def _product_search_keyword(token: str, *, has_budget: bool = False) -> str:
     """Map a user token to a Kapruka-friendly product keyword."""
     normalized = token.lower().strip()
+    if has_budget and normalized in ("gift", "gifts"):
+        return "gift hamper"
     mapped = _CATEGORY_SEARCH_TERMS.get(normalized)
     if mapped:
         return mapped
@@ -555,18 +891,185 @@ def _should_canonicalize_birthday_search_q(query: str) -> bool:
 def is_birthday_cake_scoped_turn(
     query: str,
     hybrid_context: dict[str, Any] | None = None,
+    *,
+    session_product_focus: str | None = None,
+    topic_pivot: bool = False,
 ) -> bool:
     """True when carousel/search curation should prefer Birthday category cakes."""
+    _ = session_product_focus
     if is_birthday_cake_intent(query):
         return True
-    if not birthday_occasion_from_context(hybrid_context):
+    if topic_pivot:
         return False
     stripped = query.strip()
+    # Birthday + chocolate without "cake" still scopes to birthday cakes (not confectionery)
+    if _BIRTHDAY_OCCASION_RE.search(stripped) and _CHOCOLATE_FLAVOR_RE.search(stripped):
+        return True
+    if not birthday_occasion_from_context(hybrid_context, user_message=query):
+        return False
     return bool(stripped and _CAKE_TERM.search(stripped))
 
 
-def birthday_occasion_from_context(hybrid_context: dict[str, Any] | None) -> bool:
+def is_broad_cakes_query(query: str) -> bool:
+    """True for bare 'cakes' queries that should bias toward birthday cakes."""
+    stripped = query.strip().strip("!.?")
+    if not stripped:
+        return False
+    if _BIRTHDAY_CAKE_INTENT.search(stripped):
+        return False
+    if re.match(r"^cakes?\s*$", stripped, re.I):
+        return True
+    if re.search(r"nevermind.*\bcakes?\b", stripped, re.I):
+        return True
+    return bool(re.match(r"^nevermind\.?\s*cakes?\s*$", stripped, re.I))
+
+
+def _focus_derived_search_q(
+    session_product_focus: str | None,
+    *,
+    user_message: str = "",
+    max_price: float | None = None,
+) -> str | None:
+    """Map session product focus to a Kapruka search q when budget-refining."""
+    if session_product_focus == "chocolate":
+        return "chocolate gift"
+    if session_product_focus == "cake":
+        return "birthday cake" if is_birthday_cake_intent(user_message) else "cake"
+    if session_product_focus == "flowers":
+        budgeted = max_price is not None or extract_budget(user_message) is not None
+        if budgeted:
+            if re.search(r"\bred\b", user_message, re.I):
+                return "red roses"
+            return "roses"
+        return "fresh roses bouquet"
+    if session_product_focus in ("gift", "combo"):
+        return "gift hamper"
+    return None
+
+
+_GENERIC_BUDGET_Q_RE = re.compile(
+    r"^(?:chocolate gift|gift hamper|gift|"
+    r"(?:\w+\s+)*(?:birthday|anniversary)\s+(?:chocolate|cake|gift)(?:\s+\w+)*|"
+    r"(?:wife|husband|mom|mother|mum|dad|father|girlfriend|boyfriend|partner)\s+"
+    r"(?:birthday|anniversary)\s+(?:chocolate|cake|gift)(?:\s+gift)?)$",
+    re.I,
+)
+
+
+def _apply_occasion_budget_search_bias(
+    state: dict[str, Any],
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Bias budget-refinement MCP search toward occasion-appropriate gifts."""
+    occasion = state.get("session_occasion")
+    focus = state.get("session_product_focus")
+    if isinstance(occasion, str) and occasion.strip().lower() == "birthday":
+        if focus in ("chocolate", "cake"):
+            args["q"] = "birthday chocolate cake"
+            args["category"] = "Birthday"
+    elif isinstance(occasion, str) and occasion.strip().lower() == "anniversary":
+        focus = state.get("session_product_focus")
+        if focus == "flowers":
+            args["q"] = "anniversary flowers bouquet"
+        elif focus in ("chocolate", "cake"):
+            args["q"] = "anniversary chocolate gift"
+        else:
+            args["q"] = "anniversary gift"
+    args["sort"] = "relevance"
+    return args
+
+
+def _enrich_budget_search_q(
+    q: str,
+    state: dict[str, Any],
+) -> str:
+    """Preserve occasion/recipient context on budget-only refinement turns."""
+    if not _GENERIC_BUDGET_Q_RE.match(q.strip()):
+        return q.strip()
+
+    parts: list[str] = []
+    recipient = state.get("session_recipient_hint")
+    if isinstance(recipient, str) and recipient.strip():
+        parts.append(recipient.strip())
+    occasion = state.get("session_occasion")
+    hybrid = state.get("hybrid_context") or {}
+    hints = hybrid.get("hints") or {}
+    hint_occasion = hints.get("occasion")
+    if not occasion and isinstance(hint_occasion, str) and hint_occasion.strip():
+        occasion = hint_occasion.strip().lower()
+    if isinstance(occasion, str) and occasion.strip():
+        parts.append(occasion.strip())
+    parts.append(q.strip())
+    return " ".join(parts)
+
+
+def build_budget_refinement_search_args(
+    state: dict[str, Any],
+    user_message: str,
+    *,
+    currency: str,
+) -> dict[str, Any] | None:
+    """Deterministic kapruka_search_products args for budget-only refinement turns."""
+    from lib.chat.intent_heuristics import is_budget_refinement_message
+
+    if not is_budget_refinement_message(user_message):
+        return None
+
+    intent_metadata = state.get("intent_metadata") or {}
+    topic_pivot = bool(intent_metadata.get("topic_pivot"))
+    budget_gift_discovery = bool(intent_metadata.get("budgeted_gift_discovery"))
+    if budget_gift_discovery or topic_pivot:
+        return None
+
+    session_q = state.get("session_search_query")
+    budget_cap = extract_budget(user_message)
+    max_price = intent_metadata.get("budget_max") or state.get("session_budget_max")
+    if budget_cap is not None:
+        max_price = budget_cap.amount
+        currency = budget_cap.currency
+
+    q: str | None = None
+    if isinstance(session_q, str) and session_q.strip():
+        q = session_q.strip()
+    else:
+        q = _focus_derived_search_q(
+            state.get("session_product_focus"),
+            user_message=user_message,
+            max_price=float(max_price) if isinstance(max_price, (int, float)) else None,
+        )
+
+    if not q:
+        return None
+
+    q = _enrich_budget_search_q(q, state)
+
+    if not isinstance(max_price, (int, float)) or max_price <= 0:
+        return {"q": q, "currency": currency}
+
+    args: dict[str, Any] = {
+        "q": q,
+        "currency": currency,
+        "max_price": float(max_price),
+        "sort": "relevance",
+    }
+    if (
+        not topic_pivot
+        and (state.get("session_product_focus") == "cake" or is_broad_cakes_query(q))
+        and is_birthday_cake_intent(user_message)
+    ):
+        args["category"] = "Birthday"
+    return _apply_occasion_budget_search_bias(state, args)
+
+
+def birthday_occasion_from_context(
+    hybrid_context: dict[str, Any] | None,
+    *,
+    user_message: str = "",
+    topic_pivot: bool = False,
+) -> bool:
     """True when graph/Zep hints mark the turn as a Birthday occasion."""
+    if topic_pivot:
+        return is_birthday_cake_intent(user_message)
     context = hybrid_context or {}
     hints = context.get("hints") or {}
     occasion = str(hints.get("occasion") or "").strip().lower()
@@ -577,14 +1080,31 @@ def birthday_occasion_from_context(hybrid_context: dict[str, Any] | None) -> boo
     return favorite == "birthday"
 
 
+_ANNIVERSARY_OCCASION_RE = re.compile(r"\banniversary\b", re.I)
+
+
+def anniversary_occasion_from_context(hybrid_context: dict[str, Any] | None) -> bool:
+    """True when graph/Zep hints mark the turn as an Anniversary occasion."""
+    context = hybrid_context or {}
+    hints = context.get("hints") or {}
+    occasion = str(hints.get("occasion") or "").strip().lower()
+    return occasion == "anniversary"
+
+
 def _should_demote_desserts_for_birthday(
     query: str,
     hybrid_context: dict[str, Any] | None,
+    *,
+    topic_pivot: bool = False,
 ) -> bool:
     """Demote generic desserts when the turn is birthday-cake scoped, not chocolate+flowers."""
     if is_birthday_cake_intent(query):
         return True
-    if not birthday_occasion_from_context(hybrid_context):
+    if not birthday_occasion_from_context(
+        hybrid_context,
+        user_message=query,
+        topic_pivot=topic_pivot,
+    ):
         return False
     stripped = query.strip()
     if not stripped:
@@ -627,11 +1147,24 @@ def _fallback_search_query(category: str | None) -> str:
     return "cake"
 
 
-def _birthday_biased_product_keyword(token: str, *, birthday_occasion: bool) -> str:
+def _birthday_biased_product_keyword(
+    token: str,
+    *,
+    birthday_occasion: bool,
+    query: str = "",
+) -> str:
     """Map a budget/meta token to a Kapruka keyword, preferring birthday cakes."""
     normalized = token.lower().strip()
-    if birthday_occasion and normalized in {"cake", "cakes", "chocolate", "chocolates"}:
+    chocolate_flavor = bool(_CHOCOLATE_FLAVOR_RE.search(query))
+    cake_scoped = is_birthday_cake_intent(query) or _CAKE_TERM.search(query)
+    if chocolate_flavor and (birthday_occasion or cake_scoped):
+        return "chocolate birthday cake"
+    if normalized in {"chocolate", "chocolates"} and birthday_occasion and not cake_scoped:
+        return "chocolate gift"
+    if birthday_occasion and normalized in {"cake", "cakes"}:
         return "birthday cake"
+    if birthday_occasion and normalized in {"chocolate", "chocolates"}:
+        return "chocolate birthday cake"
     return _product_search_keyword(token)
 
 
@@ -721,18 +1254,82 @@ def strip_location_from_search_query(
     return cleaned or stripped
 
 
+def _has_neo4j_retrieval_signal(hybrid_context: dict[str, Any] | None) -> bool:
+    """True when Neo4j retrieval populated graph fields (including vector hits)."""
+    if not hybrid_context:
+        return False
+    return bool(
+        hybrid_context.get("vector_hits")
+        or hybrid_context.get("categories")
+        or hybrid_context.get("occasions")
+        or hybrid_context.get("direct_occasion_hits")
+    )
+
+
 def enrich_flower_fruit_negative_hints(
     query: str,
     hybrid_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Add puja/religious exclude hints when GraphRAG is up and query is flower/fruit."""
+    """Add puja/religious exclude hints when GraphRAG ran and query is flower/fruit."""
     context = dict(hybrid_context or {})
-    if not is_flower_fruit_intent(query) or not has_graph_hybrid_context(context):
+    if not is_flower_fruit_intent(query) or not _has_neo4j_retrieval_signal(context):
         return context
     hints = dict(context.get("hints") or {})
     hints["exclude_categories"] = ", ".join(PUJA_NEGATIVE_CATEGORY_HINTS)
     context["hints"] = hints
     return context
+
+
+def enrich_chocolate_focus_hints(
+    query: str,
+    hybrid_context: dict[str, Any] | None,
+    *,
+    session_product_focus: str | None = None,
+) -> dict[str, Any]:
+    """Demote floral categories when the turn targets chocolate gifts, not cakes."""
+    context = dict(hybrid_context or {})
+    chocolate_focus = session_product_focus == "chocolate" or bool(
+        _CHOCOLATE_FLAVOR_RE.search(query),
+    )
+    if not chocolate_focus or is_birthday_cake_intent(query) or _CAKE_TERM.search(query):
+        return context
+    hints = dict(context.get("hints") or {})
+    existing = str(hints.get("exclude_categories") or "")
+    hints["exclude_categories"] = _merge_exclude_category_hints(
+        existing,
+        CHOCOLATE_NEGATIVE_CATEGORY_HINTS,
+    )
+    context["hints"] = hints
+    return context
+
+
+def enrich_anniversary_hints(
+    query: str,
+    hybrid_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Bias anniversary turns toward flowers/hampers and away from greeting cards."""
+    context = dict(hybrid_context or {})
+    if not is_anniversary_occasion_intent(query, context):
+        return context
+    hints = dict(context.get("hints") or {})
+    hints.setdefault("occasion", "Anniversary")
+    existing = str(hints.get("exclude_categories") or "")
+    hints["exclude_categories"] = _merge_exclude_category_hints(
+        existing,
+        ANNIVERSARY_NEGATIVE_CATEGORY_HINTS,
+    )
+    context["hints"] = hints
+    return context
+
+
+def _anniversary_biased_search_q(query: str) -> str:
+    """Pick anniversary-focused Kapruka keywords from the customer turn."""
+    lowered = query.lower()
+    if re.search(r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b", lowered):
+        return "anniversary flowers"
+    if re.search(r"\b(?:cake|cakes|hamper|hampers)\b", lowered):
+        return "anniversary gift hamper"
+    return "anniversary gift hamper"
 
 
 def enrich_birthday_cake_hints(
@@ -742,17 +1339,28 @@ def enrich_birthday_cake_hints(
     intent_metadata: IntentMetadata | None = None,
 ) -> dict[str, Any]:
     """Boost birthday cake category and demote dessert departments for cake-scoped turns."""
-    _ = intent_metadata
+    topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
     context = dict(hybrid_context or {})
-    if not _should_demote_desserts_for_birthday(query, context):
+    if not _should_demote_desserts_for_birthday(query, context, topic_pivot=topic_pivot):
         return context
     hints = dict(context.get("hints") or {})
-    if birthday_occasion_from_context(context) or is_birthday_cake_intent(query):
+    if birthday_occasion_from_context(
+        context,
+        user_message=query,
+        topic_pivot=topic_pivot,
+    ) or is_birthday_cake_intent(query):
         hints.setdefault("occasion", "Birthday")
+    if _MOM_BIRTHDAY_RE.search(query):
+        hints["search_q_boost"] = "Happy Birthday Mom"
     existing = str(hints.get("exclude_categories") or "")
+    dessert_hints: tuple[str, ...]
+    if _CHOCOLATE_FLAVOR_RE.search(query):
+        dessert_hints = ("Desserts",)
+    else:
+        dessert_hints = DESSERT_NEGATIVE_CATEGORY_HINTS
     hints["exclude_categories"] = _merge_exclude_category_hints(
         existing,
-        DESSERT_NEGATIVE_CATEGORY_HINTS,
+        dessert_hints,
     )
     context["hints"] = hints
     return context
@@ -767,32 +1375,89 @@ def build_discovery_search_args(
 ) -> dict[str, Any]:
     """Map graph/Zep hybrid_context hints to kapruka_search_products arguments."""
     context = hybrid_context or {}
+    topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
+    from lib.chat.intent_heuristics import is_bare_category_pivot
+
+    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
     category = _resolve_mcp_category_filter(context)
     query = strip_location_from_search_query(user_message.strip(), intent_metadata)
-    birthday_occasion = birthday_occasion_from_context(context) or is_birthday_cake_intent(query)
+    birthday_occasion = birthday_occasion_from_context(
+        context,
+        user_message=query,
+        topic_pivot=topic_pivot,
+    ) or is_birthday_cake_intent(query)
+    anniversary_occasion = is_anniversary_occasion_intent(query, context)
     fallback_category = category or ("Birthday" if birthday_occasion else None)
 
+    if topic_pivot and bare_focus == "cake":
+        return {"q": "cake", "currency": currency}
+
+    if is_broad_cakes_query(query) and not topic_pivot:
+        query = "birthday cake"
+        fallback_category = "Birthday"
+
     args: dict[str, Any] = {"q": query, "currency": currency}
+    if _VEGETARIAN_RE.search(query):
+        args["q"] = query.strip()
     if category:
         args["category"] = category
-    elif birthday_occasion and _should_demote_desserts_for_birthday(query, context):
+    elif not topic_pivot and (
+        is_broad_cakes_query(user_message)
+        or (
+            birthday_occasion
+            and _should_demote_desserts_for_birthday(
+                query,
+                context,
+                topic_pivot=topic_pivot,
+            )
+        )
+    ):
         args["category"] = "Birthday"
 
     if _PRICE_SORT_RE.search(query):
-        args["sort"] = "price_asc"
+        args["sort"] = _budget_search_sort(query)
 
-    max_price = _extract_max_price(query)
-    if max_price is not None:
-        args["max_price"] = max_price
-        args["sort"] = "price_asc"
-        product_tokens = _product_like_tokens(query)
-        if product_tokens:
+    budget_cap = extract_budget(query)
+    if budget_cap is not None:
+        args["max_price"] = budget_cap.amount
+        args["sort"] = _budget_search_sort(query)
+        args["currency"] = budget_cap.currency
+        primary_token = _primary_product_token(query)
+        if primary_token:
             args["q"] = _birthday_biased_product_keyword(
-                product_tokens[0],
+                primary_token,
                 birthday_occasion=birthday_occasion,
+                query=query,
             )
+        elif _MOM_BIRTHDAY_RE.search(query):
+            args["q"] = "Happy Birthday Mom"
         else:
             args["q"] = _fallback_search_query(fallback_category)
+    else:
+        max_price = _extract_max_price(query)
+        if max_price is not None:
+            args["max_price"] = max_price
+            args["sort"] = _budget_search_sort(query)
+            primary_token = _primary_product_token(query)
+            if primary_token:
+                args["q"] = _birthday_biased_product_keyword(
+                    primary_token,
+                    birthday_occasion=birthday_occasion,
+                    query=query,
+                )
+            else:
+                args["q"] = _fallback_search_query(fallback_category)
+
+    if _MOM_BIRTHDAY_RE.search(query) and "gift" in query.lower():
+        # Use product-specific q when the query carries a product focus
+        if _CHOCOLATE_FLAVOR_RE.search(query):
+            args["q"] = "chocolate birthday cake"
+            args.setdefault("category", "Birthday")
+        elif _CAKE_TERM.search(query):
+            args["q"] = "birthday cake"
+            args.setdefault("category", "Birthday")
+        else:
+            args["q"] = "Happy Birthday Mom"
 
     if _is_meta_catalog_query(query):
         args["q"] = _fallback_search_query(fallback_category)
@@ -805,17 +1470,119 @@ def build_discovery_search_args(
         args["q"] = canonical_birthday_cake_search_q(query)
         args.setdefault("category", "Birthday")
 
+    if anniversary_occasion:
+        args["q"] = _anniversary_biased_search_q(query)
+        if re.search(r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b", query, re.I):
+            # Anniversary flower gifts include cake+rose combos catalogued under Cakes.
+            args.pop("category", None)
+
+    if re.search(r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b", query, re.I):
+        args.pop("category", None)
+
     if intent_metadata:
         session_budget = intent_metadata.get("budget_max")
+        budget_currency = intent_metadata.get("budget_currency")
         if (
             isinstance(session_budget, (int, float))
             and session_budget > 0
             and "max_price" not in args
         ):
             args["max_price"] = float(session_budget)
-            args.setdefault("sort", "price_asc")
+            args.setdefault("sort", _budget_search_sort(query))
+        if isinstance(budget_currency, str) and budget_currency.strip():
+            args["currency"] = budget_currency.strip().upper()
+
+    effective_budget = args.get("max_price")
+    if (
+        isinstance(effective_budget, (int, float))
+        and effective_budget > 0
+        and re.search(r"\b(?:rose|roses)\b", query, re.I)
+    ):
+        if re.search(r"\bred\b", query, re.I):
+            args["q"] = "red roses"
+        else:
+            args["q"] = "roses"
 
     return args
+
+
+_BROAD_GIFTS_ONLY = re.compile(
+    r"^(?:show me )?(?:some )?gifts?\s*[!.?]*$",
+    re.I,
+)
+_SPECIFIC_DISCOVERY_RE = re.compile(
+    r"\b(?:birthday|anniversary|chocolate|cake|roses?|bouquet|hamper|tea\s+gift|red\s+roses)\b",
+    re.I,
+)
+
+
+def has_strong_hybrid_hints(hybrid_context: dict[str, Any] | None) -> bool:
+    """True when graph or heuristic hints are strong enough to cap or skip the planner."""
+    if not hybrid_context:
+        return False
+    if has_graph_hybrid_context(hybrid_context):
+        return True
+    hints = hybrid_context.get("hints") or {}
+    for key in ("occasion", "category", "search_q_boost"):
+        value = hints.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    exclude = hints.get("exclude_categories")
+    return isinstance(exclude, str) and bool(exclude.strip())
+
+
+def _is_budgeted_flower_discovery(
+    user_message: str,
+    search_args: dict[str, Any],
+) -> bool:
+    """True when max_price + flower/roses intent yields deterministic search args."""
+    if not is_flower_fruit_intent(user_message):
+        return False
+    max_price = search_args.get("max_price")
+    if not isinstance(max_price, (int, float)) or max_price <= 0:
+        return False
+    query = str(search_args.get("q") or "").strip().lower()
+    if not query:
+        return False
+    return bool(
+        re.search(r"\b(?:rose|roses|bouquet|flower|floral)\b", query, re.I)
+        or _SPECIFIC_DISCOVERY_RE.search(user_message)
+    )
+
+
+def is_confident_discovery_turn(
+    user_message: str,
+    hybrid_context: dict[str, Any] | None,
+    *,
+    currency: str,
+    intent_metadata: IntentMetadata | None = None,
+    state: dict[str, Any] | None = None,
+) -> bool:
+    """True when deterministic discovery search args are reliable without the planner."""
+    stripped = user_message.strip()
+    if not stripped:
+        return False
+    if _BROAD_GIFTS_ONLY.match(stripped):
+        return False
+    intent_metadata = intent_metadata or {}
+    topic_pivot = bool(intent_metadata.get("topic_pivot"))
+    from lib.chat.intent_heuristics import is_bare_category_pivot
+
+    if topic_pivot and is_bare_category_pivot(stripped):
+        return False
+    discovery_message = enrich_message_with_session_slots(stripped, state)
+    args = build_discovery_search_args(
+        discovery_message,
+        hybrid_context,
+        currency=currency,
+        intent_metadata=intent_metadata,
+    )
+    query = str(args.get("q") or "").strip()
+    if not query or _is_meta_catalog_query(query):
+        return False
+    if _is_budgeted_flower_discovery(stripped, args):
+        return True
+    return has_strong_hybrid_hints(hybrid_context)
 
 
 def _birthday_planner_q_needs_override(planner_q: str, user_message: str) -> bool:
@@ -830,7 +1597,43 @@ def _birthday_planner_q_needs_override(planner_q: str, user_message: str) -> boo
     if _should_canonicalize_birthday_search_q(user_message):
         canonical = canonical_birthday_cake_search_q(user_message)
         return stripped.lower() != canonical.lower()
-    return False
+    # Birthday + chocolate intent but planner didn't include "cake" in the query → override
+    # e.g. planner used "chocolate birthday gift" but should be "chocolate birthday cake"
+    return bool(
+        _BIRTHDAY_OCCASION_RE.search(user_message)
+        and _CHOCOLATE_FLAVOR_RE.search(user_message)
+        and "cake" not in stripped.lower()
+    )
+
+
+def enrich_message_with_session_slots(
+    user_message: str,
+    state: dict[str, Any] | None,
+) -> str:
+    """Merge accumulated session shopping slots into discovery search context."""
+    if not state:
+        return user_message
+    lowered = user_message.lower()
+    extras: list[str] = []
+    focus = state.get("session_product_focus")
+    if isinstance(focus, str) and focus.strip() and focus.strip().lower() not in {"gift"}:
+        token = focus.strip()
+        if token.lower() not in lowered:
+            extras.append(token)
+    for key in (
+        "session_flavor_hint",
+        "session_recipient_hint",
+        "session_occasion",
+        "session_search_query",
+    ):
+        val = state.get(key)
+        if isinstance(val, str) and val.strip():
+            token = val.strip()
+            if token.lower() not in lowered:
+                extras.append(token)
+    if not extras:
+        return user_message
+    return f"{user_message.strip()} {' '.join(extras)}".strip()
 
 
 def merge_planner_search_args(
@@ -840,25 +1643,90 @@ def merge_planner_search_args(
     hybrid_context: dict[str, Any] | None,
     currency: str,
     intent_metadata: IntentMetadata | None = None,
+    state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply deterministic discovery search args from hybrid context over planner args."""
-    if not is_birthday_cake_scoped_turn(user_message, hybrid_context):
-        return planner_args
+    merged = dict(planner_args)
+
+    if state is not None:
+        budget_args = build_budget_refinement_search_args(state, user_message, currency=currency)
+        if budget_args is not None:
+            merged.update(budget_args)
+            return merged
+
+    intent_metadata = intent_metadata or (state.get("intent_metadata") if state else None)
+    topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
+    from lib.chat.intent_heuristics import is_bare_category_pivot
+
+    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
+
+    if topic_pivot and bare_focus == "cake":
+        merged["q"] = "cake"
+        merged.pop("category", None)
+        return merged
+
+    if is_broad_cakes_query(user_message) and not topic_pivot:
+        merged["q"] = "birthday cake"
+        merged.setdefault("category", "Birthday")
+        return merged
+
+    discovery_message = enrich_message_with_session_slots(user_message, state)
     canonical = build_discovery_search_args(
-        user_message,
+        discovery_message,
         hybrid_context,
         currency=currency,
         intent_metadata=intent_metadata,
     )
-    merged = dict(planner_args)
-    planner_q = str(planner_args.get("q") or "")
-    q_overridden = _birthday_planner_q_needs_override(planner_q, user_message)
-    if q_overridden and "q" in canonical:
+    planner_q = str(planner_args.get("q") or "").strip()
+    if planner_q:
+        merged["q"] = strip_location_from_search_query(planner_q, intent_metadata)
+    elif canonical.get("q"):
         merged["q"] = canonical["q"]
-    if q_overridden or is_birthday_cake_intent(planner_q):
-        for key in ("category", "max_price", "sort", "currency"):
-            if key in canonical:
-                merged[key] = canonical[key]
+
+    birthday_scoped = is_birthday_cake_scoped_turn(
+        discovery_message,
+        hybrid_context,
+        topic_pivot=topic_pivot,
+    )
+    needs_override = _birthday_planner_q_needs_override(planner_q, discovery_message)
+    logger.debug(
+        "merge_planner_search_args: planner_q=%r birthday_scoped=%s "
+        "needs_override=%s canonical_q=%r",
+        planner_q,
+        birthday_scoped,
+        needs_override,
+        canonical.get("q"),
+    )
+    if birthday_scoped and needs_override and "q" in canonical:
+        merged["q"] = canonical["q"]
+
+    target_city = intent_metadata.get("target_city") if intent_metadata else None
+    merged_q = str(merged.get("q") or "")
+    if target_city and merged_q and target_city.lower() in merged_q.lower() and canonical.get("q"):
+        merged["q"] = canonical["q"]
+
+    for key in ("category", "max_price", "sort", "currency"):
+        if key in canonical:
+            merged[key] = canonical[key]
+
+    non_food_category = str(merged.get("category") or "").strip().lower() == "birthday"
+    if re.search(r"\b(?:tea|coffee|perfume|jewell?ery|watch)\b", user_message, re.I) or (
+        non_food_category
+        and re.search(
+            r"\btea\b",
+            str(merged.get("q") or ""),
+            re.I,
+        )
+    ):
+        merged.pop("category", None)
+
+    if is_anniversary_occasion_intent(user_message, hybrid_context) and re.search(
+        r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b",
+        user_message,
+        re.I,
+    ):
+        merged.pop("category", None)
+
     return merged
 
 

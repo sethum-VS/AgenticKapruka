@@ -17,3 +17,8 @@ def extract_product_id(message: str) -> str | None:
     """Return the first Kapruka-like product id token in the message, if any."""
     match = PRODUCT_ID_RE.search(message)
     return match.group(1) if match else None
+
+
+def is_valid_product_id(product_id: str) -> bool:
+    """Return True when product_id matches Kapruka catalog id format."""
+    return bool(PRODUCT_ID_RE.fullmatch(product_id.strip()))

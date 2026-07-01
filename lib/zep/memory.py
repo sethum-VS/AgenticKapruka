@@ -74,9 +74,11 @@ def message_references_recipient(text: str) -> bool:
 def scope_memory_facts_for_turn(
     facts: list[str],
     user_message: str,
+    *,
+    is_budget_refinement: bool = False,
 ) -> list[str]:
     """Drop recipient-specific Zep facts when the current turn does not mention them."""
-    if not facts or message_references_recipient(user_message):
+    if not facts or message_references_recipient(user_message) or is_budget_refinement:
         return facts
     return [fact for fact in facts if not _RECIPIENT_ENTITY_RE.search(fact)]
 

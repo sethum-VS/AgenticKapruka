@@ -11,7 +11,7 @@ from langchain_core.runnables import RunnableConfig
 from starlette.responses import Response, StreamingResponse
 
 from app.dependencies import get_redis
-from app.templating import get_templates
+from app.templating import get_templates, render_cart_partial_oob
 from lib.chat.deps import (
     build_shopping_graph_deps,
     client_ip_from_request,
@@ -24,10 +24,16 @@ from lib.chat.page_context import (
     resolve_page_cart,
     resolve_page_currency,
 )
-from lib.chat.session import SESSION_COOKIE_NAME, cookie_params, resolve_chat_thread_id
+from lib.chat.session import (
+    SESSION_COOKIE_NAME,
+    cookie_params,
+    resolve_chat_thread_id,
+    rotate_chat_thread,
+)
 from lib.chat.sse import format_sse_event
 from lib.chat.streaming import iter_chat_sse_events
 from lib.debug.trace import is_debug_trace_enabled, trace_error, trace_turn_start
+from lib.redis.cart import clear_cart
 from lib.redis.client import RedisClient
 from lib.redis.session import get_session_currency
 from lib.zep.session import get_or_create_session
@@ -38,11 +44,20 @@ router = APIRouter()
 
 RedisDep = Annotated[RedisClient, Depends(get_redis)]
 
+
+def _chat_new_empty_state_html() -> str:
+    """OOB swap HTML that restores the welcome empty state after new session."""
+    templates = get_templates()
+    empty = templates.get_template("chat/empty_state.html").render()
+    return f'<div id="chat-messages" hx-swap-oob="innerHTML">{empty}</div>'
+
+
 _STREAM_SETUP_ERROR_HTML = (
-    '<div class="flex justify-start">'
-    '<div class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 '
-    'text-sm text-red-800" role="alert">'
-    "Something went wrong. Please try again.</div></div>"
+    '<div class="mb-4 flex flex-col gap-4" data-role="assistant-message">'
+    '<div class="flex items-start gap-3">'
+    '<div class="max-w-[85%] rounded-xl rounded-tl-none border border-error-container '
+    'bg-error-container/30 p-4 text-body-md text-on-error-container" role="alert">'
+    "Something went wrong. Please try again.</div></div></div>"
 )
 
 
@@ -142,6 +157,7 @@ async def chat_stream(
             trace_error(f"chat stream setup failed (session={thread_id})", exc)
             logger.exception("chat stream failed for session %s", thread_id)
             yield format_sse_event(_STREAM_SETUP_ERROR_HTML)
+            yield format_sse_event("", event="done")
 
     headers = {
         "Cache-Control": "no-cache",
@@ -155,4 +171,21 @@ async def chat_stream(
     )
     if new_cookie is not None:
         response.set_cookie(SESSION_COOKIE_NAME, new_cookie, **cookie_params())
+    return response
+
+
+@router.post("/new")
+async def chat_new(request: Request, redis_client: RedisDep) -> Response:
+    """Rotate chat thread and clear conversation context; cart is cleared."""
+    prior_thread_id, new_thread_id, signed_cookie = rotate_chat_thread(request)
+    await clear_cart(redis_client, new_thread_id)
+    if prior_thread_id and prior_thread_id != new_thread_id:
+        await clear_cart(redis_client, prior_thread_id)
+    currency = await get_session_currency(redis_client, new_thread_id)
+    content = _chat_new_empty_state_html() + render_cart_partial_oob(
+        items=[],
+        currency=currency,
+    )
+    response = Response(content=content, media_type="text/html")
+    response.set_cookie(SESSION_COOKIE_NAME, signed_cookie, **cookie_params())
     return response

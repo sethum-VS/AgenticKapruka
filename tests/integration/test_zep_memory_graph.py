@@ -13,7 +13,7 @@ from tests.helpers.mock_genai import build_mock_genai_client
 from graphs.shopping_graph import ShoppingGraphDeps, build_shopping_graph, initial_shopping_state
 from graphs.state import AgentState
 from lib.kapruka.service import KaprukaService
-from lib.kapruka.types import SearchProductsOutput
+from lib.kapruka.types import CategoryRef, Money, ProductResult, SearchProductsOutput
 from lib.zep.client import ZepClient
 
 _TEST_API_KEY = "zep-test-api-key"
@@ -24,8 +24,23 @@ _CLIENT_IP = "203.0.113.55"
 _USER_MESSAGE = "birthday cake for mom"
 _ASSISTANT_MESSAGE = "I found Chocolate Birthday Cake (LKR 4,500) for your mom's birthday."
 
+_CHOCOLATE_CAKE = ProductResult(
+    id="cake001",
+    name="Chocolate Birthday Cake",
+    summary="Rich chocolate birthday cake.",
+    price=Money(amount=4500.0, currency="LKR"),
+    compare_at_price=None,
+    in_stock=True,
+    stock_level="high",
+    image_url="https://example.com/cake.jpg",
+    category=CategoryRef(id="cat_birthday", name="Birthday", slug="birthday"),
+    rating=None,
+    ships_internationally=False,
+    url="https://www.kapruka.com/cake",
+)
+
 _SEARCH_OUTPUT = SearchProductsOutput(
-    results=[],
+    results=[_CHOCOLATE_CAKE],
     next_cursor=None,
     applied_filters={"q": _USER_MESSAGE, "limit": 10, "in_stock_only": False},
 )
@@ -115,7 +130,8 @@ async def test_shopping_graph_persists_turn_to_zep_after_chat(
         "Recipient is mom",
     ]
     assert result["assistant_message"] == _ASSISTANT_MESSAGE
-    assert "Chocolate Birthday Cake" in (result.get("response_html") or "")
+    rendered = (result.get("response_html") or "") + (result.get("carousel_html") or "")
+    assert "Chocolate Birthday Cake" in rendered
 
     assert len(capture.memory_posts) == 1
     posted_messages = capture.memory_posts[0]["messages"]

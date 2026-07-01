@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from functools import lru_cache
@@ -20,7 +21,8 @@ from lib.checkout.sender import SenderFormValues
 from lib.kapruka.types import LOCATION_TYPES, CheckDeliveryOutput, TrackOrderOutput
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import SUPPORTED_CURRENCIES, format_currency
-from lib.utils.timezone import colombo_today_iso
+from lib.utils.text import normalize_catalog_text
+from lib.utils.timezone import colombo_today_iso, format_delivery_date_friendly
 
 SUPPORTED_CURRENCY_CODES: tuple[str, ...] = tuple(sorted(SUPPORTED_CURRENCIES))
 
@@ -46,6 +48,9 @@ def _create_templates() -> Jinja2Templates:
     )
     env.filters["format_currency"] = format_currency
     env.filters["urlencode"] = urlencode_filter
+    env.filters["decode_html"] = normalize_catalog_text
+    env.filters["normalize_catalog"] = normalize_catalog_text
+    env.filters["format_delivery_date"] = format_delivery_date_friendly
     return Jinja2Templates(env=env)
 
 
@@ -112,6 +117,42 @@ def render_cart_partial(
     templates = get_templates()
     template = templates.env.get_template("checkout/cart_partial.html")
     return template.render(items=items, currency=currency)
+
+
+def render_cart_add_error_response(
+    *,
+    items: list[StoredCartItem],
+    currency: str = "LKR",
+    product_id: str,
+    error_code: str,
+    message: str,
+    quantity: int = 1,
+    icing_text: str | None = None,
+) -> str:
+    """Cart partial with inline alert and retry — returns HTTP 200 for HTMX swaps."""
+    partial = render_cart_partial(items=items, currency=currency)
+    banner = render_error_banner(
+        error_code=error_code,
+        message=message,
+        title="Couldn't add to cart",
+    )
+    hx_vals: dict[str, object] = {"product_id": product_id, "quantity": quantity}
+    if icing_text:
+        hx_vals["icing_text"] = icing_text
+    vals_json = json.dumps(hx_vals)
+    retry = (
+        '<button type="button" '
+        'class="mt-2 rounded-lg bg-primary px-3 py-1.5 text-label-sm font-label-sm '
+        "text-on-primary transition-colors hover:bg-primary-container "
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" '
+        f'hx-post="/cart/add" hx-vals=\'{vals_json}\' hx-target="#cart-panel" '
+        'hx-swap="outerHTML" data-testid="cart-add-retry">Try again</button>'
+    )
+    alert = f'<div class="mb-3" data-testid="cart-add-error">{banner}{retry}</div>'
+    marker = 'aria-label="Shopping cart"\n>'
+    if marker not in partial:
+        return partial + alert
+    return partial.replace(marker, f"{marker}\n  {alert}", 1)
 
 
 def render_cart_partial_oob(

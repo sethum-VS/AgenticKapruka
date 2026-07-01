@@ -32,46 +32,33 @@ def _carousel_products() -> list[dict[str, object]]:
     ]
 
 
-def test_product_carousel_renders_horizontal_scroll_track() -> None:
-    """Carousel uses flex overflow-x-auto with scroll snap for product cards."""
+def test_product_carousel_renders_responsive_grid() -> None:
+    """Carousel uses a responsive 2-column grid for product cards in chat."""
     html = render_product_carousel(_carousel_products())
 
     assert 'data-testid="product-carousel"' in html
     assert 'data-testid="product-carousel-track"' in html
-    assert "flex" in html
-    assert "overflow-x-auto" in html
-    assert "snap-x" in html
-    assert "snap-mandatory" in html
-    assert "scroll-smooth" in html
-    assert "overscroll-x-contain" in html
+    assert "grid" in html
+    assert "grid-cols-1" in html
+    assert "md:grid-cols-2" in html
     assert html.count('data-testid="product-card"') == 3
 
 
-def test_product_carousel_includes_alpine_navigation_buttons() -> None:
-    """Prev/next Alpine buttons support click and keyboard arrow navigation."""
+def test_product_carousel_includes_region_semantics() -> None:
+    """Product region is keyboard-focusable with an accessible label."""
     html = render_product_carousel(_carousel_products())
 
-    assert 'data-testid="carousel-prev"' in html
-    assert 'data-testid="carousel-next"' in html
-    assert 'aria-label="Previous products"' in html
-    assert 'aria-label="Next products"' in html
-    assert '@click="scrollCarousel(-1)"' in html
-    assert '@click="scrollCarousel(1)"' in html
-    assert '@keydown.arrow-left.prevent="scrollCarousel(-1)"' in html
-    assert '@keydown.arrow-right.prevent="scrollCarousel(1)"' in html
-    assert 'x-ref="track"' in html
     assert 'role="region"' in html
     assert 'aria-label="Product carousel"' in html
+    assert 'tabindex="0"' in html
 
 
 def test_product_carousel_mobile_overflow_containment_classes() -> None:
-    """Outer container constrains width on narrow viewports; cards stay shrink-0."""
+    """Outer container constrains width on narrow viewports."""
     html = render_product_carousel(_carousel_products())
 
     assert 'class="relative w-full min-w-0"' in html
-    assert "snap-start" in html
-    assert "shrink-0" in html
-    assert "w-56" in html
+    assert "min-w-0" in html
 
 
 def test_product_carousel_renders_empty_for_no_products() -> None:
@@ -82,11 +69,12 @@ def test_product_carousel_renders_empty_for_no_products() -> None:
 
 
 def test_product_carousel_enables_lazy_image_on_cards() -> None:
-    """Carousel product cards use Alpine lazyImage with skeleton placeholders."""
+    """First two carousel cards load eagerly; remaining cards lazy-load."""
     html = render_product_carousel(_carousel_products())
 
-    assert html.count('data-testid="lazy-image"') == 3
-    assert html.count('data-testid="lazy-image-skeleton"') == 3
+    assert html.count('data-testid="lazy-image"') == 1
+    assert html.count('data-testid="lazy-image-skeleton"') == 1
+    assert html.count('loading="lazy"') == 2
     assert 'x-data="lazyImage"' in html
     assert 'template x-if="inView"' in html
     assert "transition-opacity duration-300" in html

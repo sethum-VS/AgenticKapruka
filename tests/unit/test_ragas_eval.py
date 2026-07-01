@@ -106,7 +106,7 @@ def test_build_eval_genai_client_adds_situational_flavor_for_concierge() -> None
     client = build_eval_genai_client("discovery")
     tool_block = json.dumps({SEARCH_PRODUCTS_TOOL: SEARCH_PRODUCTS_JSON}, indent=2)
     user_prompt = (
-        "Customer message:\nI broke up and need gentle flowers\n\n"
+        "Customer message:\nMachan, I broke up and need gentle flowers\n\n"
         "tool_results (sole source of truth for catalog facts):\n"
         f"{tool_block}"
     )
@@ -131,7 +131,7 @@ async def test_agent_loop_multi_step_anniversary_kandy(redis_client: RedisClient
         id="agent-001-anniversary-kandy-dinner",
         scenario="discovery",
         user_query="Plan a surprise anniversary dinner in Kandy next Saturday — flowers and a cake",
-        expected_tools=[SEARCH_PRODUCTS_TOOL, CHECK_DELIVERY_TOOL],
+        expected_tools=[CHECK_DELIVERY_TOOL, SEARCH_PRODUCTS_TOOL],
         reference_answer="Search then check Kandy delivery.",
     )
     graph = await build_eval_graph_for_case(case, redis_client)

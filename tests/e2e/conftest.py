@@ -35,6 +35,16 @@ def _e2e_health_ok() -> bool:
         return False
 
 
+def _free_e2e_port() -> None:
+    """Stop any process bound to the E2E port so pytest always runs fresh mock code."""
+    subprocess.run(
+        ["make", "stop-all"],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        check=False,
+        capture_output=True,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolated_e2e_session(page: Page, base_url: str) -> None:
     """Fresh fakeredis checkpoint + session cookie before each browser E2E test."""
@@ -44,34 +54,31 @@ def _isolated_e2e_session(page: Page, base_url: str) -> None:
 @pytest.fixture(scope="session", autouse=True)
 def e2e_server() -> Iterator[None]:
     """Start the mocked E2E uvicorn server before Playwright tests."""
-    proc: subprocess.Popen[bytes] | None = None
-    reuse_existing = _e2e_health_ok()
-
-    if not reuse_existing:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "tests.e2e.e2e_server"],
-            env=os.environ.copy(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        deadline = time.monotonic() + 45.0
-        while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                stderr = proc.stderr.read().decode() if proc.stderr else ""
-                proc.wait(timeout=5)
-                pytest.fail(f"E2E server exited early: {stderr}")
-            if _e2e_health_ok():
-                break
-            time.sleep(0.25)
-        else:
-            proc.kill()
+    _free_e2e_port()
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "tests.e2e.e2e_server"],
+        env=os.environ.copy(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    deadline = time.monotonic() + 45.0
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
             stderr = proc.stderr.read().decode() if proc.stderr else ""
             proc.wait(timeout=5)
-            pytest.fail(f"E2E server did not become reachable within 45s: {stderr}")
+            pytest.fail(f"E2E server exited early: {stderr}")
+        if _e2e_health_ok():
+            break
+        time.sleep(0.25)
+    else:
+        proc.kill()
+        stderr = proc.stderr.read().decode() if proc.stderr else ""
+        proc.wait(timeout=5)
+        pytest.fail(f"E2E server did not become reachable within 45s: {stderr}")
 
     yield
 
-    if proc is not None and proc.poll() is None:
+    if proc.poll() is None:
         proc.terminate()
         try:
             proc.wait(timeout=10)

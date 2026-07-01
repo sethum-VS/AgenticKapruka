@@ -205,11 +205,77 @@
       "reference_answer": "I'll fetch Kapruka product cake00ka002034 directly — name, price, stock, and description — without running a catalog search."
     },
     {
+      "id": "spec-001-vague-gift-clarify",
+      "scenario": "discovery",
+      "user_query": "any gift ideas?",
+      "expected_tools": [],
+      "reference_answer": "Ask one focused clarifying question about product type before running kapruka_search_products."
+    },
+    {
+      "id": "spec-002-gift-followup-chocolate",
+      "scenario": "discovery",
+      "user_query": "Turn 1: any gift ideas? Turn 2: chocolate for mom's birthday",
+      "expected_tools": ["kapruka_search_products"],
+      "reference_answer": "First turn clarifies product type; second turn scores high enough cumulatively to search chocolate birthday gifts for mom."
+    },
+    {
+      "id": "spec-003-budgeted-gift-chip-proceed",
+      "scenario": "discovery",
+      "user_query": "Gift ideas under Rs. 5,000",
+      "expected_tools": [
+        "kapruka_search_products",
+        "kapruka_search_products",
+        "kapruka_search_products",
+        "kapruka_search_products"
+      ],
+      "reference_answer": "Budgeted gift-idea chip bypasses or passes specificity gate and proceeds to catalog search without a clarifying question."
+    },
+    {
       "id": "deliv-001-kandy-multiturn-session-city",
       "scenario": "checkout",
       "user_query": "Turn 1: birthday cake in Kandy. Turn 2: can you deliver? Turn 3: tomorrow",
       "expected_tools": ["kapruka_search_products", "kapruka_check_delivery"],
       "reference_answer": "Session-scoped delivery city Kandy must persist across turns so the third message calls kapruka_check_delivery with city=Kandy and the resolved tomorrow date without re-asking for the destination."
+    },
+    {
+      "id": "disc-013-galle-roses-multiturn",
+      "scenario": "discovery",
+      "user_query": "Turn 1: Fresh roses to Galle tomorrow. Turn 2: Girlfriend's birthday, romantic red roses",
+      "expected_tools": ["kapruka_search_products", "kapruka_check_delivery"],
+      "reference_answer": "Turn 1 clarifies occasion while searching roses; turn 2 merges session slots into a non-empty rose bouquet carousel with Galle delivery fee when dated check runs."
+    },
+    {
+      "id": "disc-014-rich-cake-colombo-zone",
+      "scenario": "discovery",
+      "user_query": "Mom's 65th birthday this Sunday in Colombo — chocolate cakes under Rs 8,000",
+      "expected_tools": ["kapruka_search_products", "kapruka_check_delivery"],
+      "reference_answer": "Rich cake message proceeds to catalog search and asks which Colombo zone to deliver to, pairing carousel with zone clarifier."
+    },
+    {
+      "id": "disc-015-budget-gift-quality",
+      "scenario": "discovery",
+      "user_query": "Gift ideas under Rs 5,000",
+      "expected_tools": [
+        "kapruka_search_products",
+        "kapruka_search_products",
+        "kapruka_search_products",
+        "kapruka_search_products"
+      ],
+      "reference_answer": "Budgeted gift search prioritizes hampers and chocolate gift boxes over loose candy or single fruit SKUs."
+    },
+    {
+      "id": "deliv-002-galle-roses-delivery-fee",
+      "scenario": "discovery",
+      "user_query": "Fresh red roses for Galle tomorrow for my girlfriend's birthday",
+      "expected_tools": ["kapruka_search_products", "kapruka_check_delivery"],
+      "reference_answer": "Search roses and surface Kapruka delivery fee for Galle on the requested date from kapruka_check_delivery."
+    },
+    {
+      "id": "deliv-003-sunday-cake-perishable",
+      "scenario": "discovery",
+      "user_query": "Chocolate birthday cake for Sunday delivery to Colombo 03",
+      "expected_tools": ["kapruka_search_products", "kapruka_check_delivery"],
+      "reference_answer": "Sunday cake order surfaces perishable freshness guidance from kapruka_check_delivery alongside product options."
     }
   ]
 }

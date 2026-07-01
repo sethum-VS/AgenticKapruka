@@ -6,10 +6,15 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any
+import secrets
+from collections.abc import Mapping
+from datetime import date
+from typing import Any, cast
 
 from google import genai
 from google.genai import types
+from langchain_core.messages import HumanMessage
+from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ValidationError
 
 from app.templating import (
@@ -17,6 +22,7 @@ from app.templating import (
     render_cart_partial_oob,
     render_delivery_date_status,
     render_product_carousel,
+    render_rate_limit_banner,
     render_tracking_status,
 )
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
@@ -24,20 +30,52 @@ from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
+from lib.chat.intent_heuristics import build_guest_checkout_reply, is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
+from lib.chat.off_topic import (
+    impossible_request_subject,
+    is_impossible_catalog_request,
+    off_topic_topic,
+)
 from lib.chat.product_curation import (
+    carousel_focus_guard,
     curate_carousel_products,
+    enrich_carousel_product_descriptions,
+    filter_cake_accessories,
     has_graph_hybrid_context,
+    is_cake_accessory,
+    refine_last_search_by_budget,
+)
+from lib.chat.product_detail import (
+    is_delivery_fee_question,
+    is_product_detail_turn,
+    is_sweetness_preference_turn,
+    is_valid_product_detail_payload,
+    match_product_from_last_search,
+    normalize_resolved_product,
+    product_preference_note,
+    resolve_product_detail,
+    summarize_product_from_carousel,
 )
 from lib.chat.product_honesty import (
     artificial_floral_note_for_picks,
     reply_already_discloses_artificial_floral,
 )
-from lib.chat.query_preprocessor import extract_target_city
+from lib.chat.query_preprocessor import (
+    extract_target_city,
+    is_delivery_context_relevant_turn,
+    should_defer_delivery_date,
+)
+from lib.chat.request_specificity import is_delivery_only_inquiry
 from lib.chat.search_broadening import build_empty_search_reply
+from lib.chat.status_copy import PUTTING_TOGETHER_RECOMMENDATIONS
+from lib.chat.support_faq import build_support_faq_reply, is_support_question
 from lib.chat.system_prompts import (
+    build_context_aware_clarifier,
     build_farewell_message,
     build_general_welcome_message,
+    build_impossible_product_redirect,
+    build_off_topic_redirect_message,
     build_response_system_instruction,
     is_farewell_message,
 )
@@ -58,10 +96,12 @@ from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import CheckDeliveryOutput
+from lib.neo4j.hybrid_context import extract_budget, is_confident_discovery_turn
 from lib.redis.cart import StoredCartItem
 from lib.utils.currency import format_currency
-from lib.utils.text import decode_html_entities
-from lib.zep.memory import format_memory_facts_block
+from lib.utils.text import decode_html_entities, normalize_catalog_text
+from lib.utils.timezone import colombo_today, format_delivery_date_friendly
+from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_turn
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +110,6 @@ _LLM_CONTEXT_PRODUCT_LIMIT = 5
 _CAKE_QUERY_PATTERN = re.compile(r"\bcakes?\b", re.I)
 _CAKE_CATEGORY_PATTERN = re.compile(r"\bcake", re.I)
 _CAKE_ID_PREFIX = re.compile(r"^cake", re.I)
-_ACCESSORY_BLACKLIST = re.compile(
-    r"\b(topper|mould|mold|turning\s+table|cake\s+stand|stand)\b",
-    re.I,
-)
 
 _TOOL_ERROR_ACTION_LABELS: dict[str, str] = {
     SEARCH_PRODUCTS_TOOL: "search the Kapruka catalog",
@@ -104,7 +140,15 @@ _CAROUSEL_NEGATION_PATTERN = re.compile(
     r"couldn'?t\s+find|could\s+not\s+find|"
     r"no\s+fresh|"
     r"none\s+within|"
-    r"no\s+options\s+under"
+    r"no\s+options\s+under|"
+    r"no\s+products|nothing\s+matching|don'?t\s+have\s+any|"
+    r"no\s+(?:cakes?|flowers?|chocolates?|hampers?|gifts?)\s+(?:under|within|below|for)\b"
+    r")\b",
+    re.I,
+)
+_STOCK_NEGATION_PATTERN = re.compile(
+    r"\b(?:"
+    r"out\s+of\s+stock|not\s+available|unavailable|no\s+longer\s+available"
     r")\b",
     re.I,
 )
@@ -163,6 +207,74 @@ def merge_tool_trace(tool_trace: list[ToolInvocation]) -> dict[str, Any]:
     return merged
 
 
+def _turn_has_fresh_search(tool_trace: list[ToolInvocation] | None) -> bool:
+    return any(invocation.get("name") == SEARCH_PRODUCTS_TOOL for invocation in (tool_trace or []))
+
+
+def _turn_search_has_products(tool_trace: list[ToolInvocation] | None) -> bool:
+    """True when the latest search_products invocation returned at least one product."""
+    if not tool_trace:
+        return False
+    for invocation in reversed(tool_trace):
+        if invocation.get("name") != SEARCH_PRODUCTS_TOOL:
+            continue
+        result = invocation.get("result")
+        if not isinstance(result, dict) or result.get("error"):
+            return False
+        raw_results = result.get("results")
+        if not isinstance(raw_results, list):
+            return False
+        return any(isinstance(item, dict) for item in raw_results)
+    return False
+
+
+def _session_budget_applies(state: AgentState, user_message: str) -> bool:
+    pivot_meta = state.get("intent_metadata") or {}
+    if isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"):
+        return False
+    if extract_budget(user_message) is not None:
+        return True
+    if is_budget_refinement_message(user_message):
+        return True
+    messages = state.get("messages") or []
+    user_turns = [message for message in messages if isinstance(message, HumanMessage)]
+    if len(user_turns) >= 2:
+        prior = user_turns[-2].content
+        if isinstance(prior, str) and extract_budget(prior) is not None:
+            return True
+    return False
+
+
+def _suppress_delivery_tool_results(
+    tool_results: dict[str, Any] | None,
+    *,
+    delivery_context_relevant: bool,
+) -> dict[str, Any] | None:
+    if delivery_context_relevant or not tool_results:
+        return tool_results
+    if CHECK_DELIVERY_TOOL not in tool_results:
+        return tool_results
+    filtered = dict(tool_results)
+    filtered.pop(CHECK_DELIVERY_TOOL, None)
+    return filtered
+
+
+def _rate_limit_banner_html(agent_tool_error: dict[str, Any]) -> str | None:
+    error_code = agent_tool_error.get("error")
+    if error_code not in ("429", "rate_limit_exceeded"):
+        return None
+    raw_retry = agent_tool_error.get("retry_after_seconds")
+    retry_after = 30
+    if isinstance(raw_retry, str) and raw_retry.isdigit():
+        retry_after = max(1, int(raw_retry))
+    return render_rate_limit_banner(
+        title="Still searching…",
+        message="I'm checking our catalog — one moment.",
+        error_code="rate_limit_exceeded",
+        retry_after_seconds=retry_after,
+    )
+
+
 def _error_code_from_tool_trace(
     tool_trace: list[ToolInvocation] | None,
     tool_name: str,
@@ -205,6 +317,8 @@ def build_agent_tool_error_message(
         and ("past" in raw_message.lower() or error_code == "past_delivery_date")
     ):
         return delivery_date_clarifying_question()
+    if error_code in ("429", "rate_limit_exceeded"):
+        return "I'm checking our catalog — one moment."
     if error_code == "date_not_deliverable":
         return (
             "That delivery date is not available. "
@@ -216,8 +330,22 @@ def build_agent_tool_error_message(
             "We cannot deliver to that city. Please choose a Kapruka delivery area "
             "(for example Colombo 03, Kandy, or Galle)."
         )
+    if error_code == "product_id_unresolved" and tool == GET_PRODUCT_TOOL:
+        return (
+            "I couldn't load that product's details — try tapping it in the carousel above, "
+            "or tell me which item you mean."
+        )
     if error_code == "validation_error":
         lowered = raw_message.lower()
+        if tool == GET_PRODUCT_TOOL and (
+            error_code == "product_id_unresolved"
+            or "product_id_unresolved" in lowered
+            or "product_id" in lowered
+        ):
+            return (
+                "I couldn't load that product's details — try tapping it in the carousel above, "
+                "or tell me which item you mean."
+            )
         if tool == CHECK_DELIVERY_TOOL and (
             "delivery_date" in lowered or "date" in lowered or "past" in lowered
         ):
@@ -265,12 +393,27 @@ def delivery_claim_guard(
     tool_trace: list[ToolInvocation] | None,
     *,
     user_message: str = "",
+    delivery_city_status: str | None = None,
+    delivery_city_confirmed: bool = False,
+    delivery_context_relevant: bool = True,
+    state: Mapping[str, object] | None = None,
 ) -> str:
     """Replace ungrounded delivery fee/availability claims when check_delivery is absent."""
+    if not delivery_context_relevant:
+        return reply_text
     if not _reply_claims_delivery_facts(reply_text):
         return reply_text
     if _tool_trace_has_check_delivery(tool_trace):
         return reply_text
+    if state is not None:
+        from lib.chat.query_preprocessor import should_defer_delivery_date
+
+        if should_defer_delivery_date(state, user_message):
+            city = extract_target_city(user_message) or "your area"
+            return (
+                f"Here are some Kapruka options for delivery to {city}. "
+                "We can confirm your delivery zone and date at checkout."
+            )
     if _user_named_city_and_date(user_message):
         city = extract_target_city(user_message) or "your city"
         return (
@@ -289,13 +432,52 @@ def carousel_consistency_guard(
     products: list[dict[str, Any]],
     *,
     user_message: str = "",
+    budget_max: float | None = None,
+    currency: str = "LKR",
+    strict_budget: bool = False,
 ) -> str:
     """Replace contradictory empty-search copy when MCP search returned carousel products."""
     if not products or not reply_text.strip():
         return reply_text
     if not _CAROUSEL_NEGATION_PATTERN.search(reply_text):
         return reply_text
+    if budget_max is not None and budget_max > 0:
+        in_budget = [
+            product
+            for product in products
+            if not product.get("slightly_over_budget") and not product.get("over_budget")
+        ]
+        if not in_budget and products:
+            budget_label = format_currency(budget_max, currency)
+            if strict_budget:
+                return (
+                    f"I couldn't find Kapruka options within your {budget_label} budget. "
+                    "Try a slightly higher budget or a broader gift type."
+                )
+            return (
+                f"Here are some Kapruka options; a few exceed your {budget_label} budget — "
+                "I've marked those in the carousel."
+            )
     return _build_discovery_template_reply(products, user_message=user_message) or reply_text
+
+
+def stock_consistency_guard(
+    reply_text: str,
+    products: list[dict[str, Any]],
+    *,
+    user_message: str = "",
+) -> str:
+    """Rewrite stock-unavailability copy when carousel still shows in-stock products."""
+    if not products or not reply_text.strip():
+        return reply_text
+    if not _STOCK_NEGATION_PATTERN.search(reply_text):
+        return reply_text
+    in_stock_products = [product for product in products if product.get("in_stock") is not False]
+    if not in_stock_products:
+        return reply_text
+    return (
+        _build_discovery_template_reply(in_stock_products, user_message=user_message) or reply_text
+    )
 
 
 def _last_check_delivery_invocation(
@@ -343,7 +525,8 @@ def _build_verified_delivery_fee_line(
     currency: str,
 ) -> str:
     fee = format_currency(rate, currency)
-    return f"Delivery to {city} on {checked_date}: {fee} (verified with Kapruka)"
+    friendly_date = format_delivery_date_friendly(checked_date)
+    return f"Delivery to {city} on {friendly_date}: {fee} (verified with Kapruka)"
 
 
 def _build_verified_city_delivery_line(
@@ -356,11 +539,54 @@ def _build_verified_city_delivery_line(
     return f"Delivery to {city}: {fee} flat rate per order (verified with Kapruka)"
 
 
+_PERISHABLE_GIFT_RE = re.compile(
+    r"\b(?:cake|cakes|flower|flowers|rose|roses|bouquet|fruit|chocolate|chocolates|"
+    r"gift|gifts|hamper|hampers)\b",
+    re.I,
+)
+
+
+def _reply_has_verified_delivery_fee(
+    reply_text: str,
+    *,
+    rate: float | None = None,
+    currency: str = "LKR",
+) -> bool:
+    if "verified with Kapruka" in reply_text:
+        return True
+    return rate is not None and format_currency(rate, currency) in reply_text
+
+
+def _turn_implies_perishable_gift(
+    user_message: str,
+    *,
+    session_product_focus: str | None = None,
+) -> bool:
+    if session_product_focus in ("cake", "flowers", "chocolate", "gift"):
+        return True
+    return bool(_PERISHABLE_GIFT_RE.search(user_message))
+
+
+def _delivery_date_more_than_one_day_out(checked_date: str) -> bool:
+    try:
+        target = date.fromisoformat(checked_date)
+    except ValueError:
+        return False
+    return (target - colombo_today()).days > 1
+
+
 def _apply_perishable_delivery_honesty(
     reply_text: str,
     tool_trace: list[ToolInvocation] | None,
+    *,
+    user_message: str = "",
+    session_product_focus: str | None = None,
+    delivery_context_relevant: bool = True,
 ) -> tuple[str, str | None]:
     """Append verified delivery fee and perishable_warning; render delivery status partial."""
+    if not delivery_context_relevant:
+        return reply_text, None
+
     invocation = _last_check_delivery_invocation(tool_trace)
     if invocation is None:
         return reply_text, None
@@ -380,7 +606,11 @@ def _apply_perishable_delivery_honesty(
 
     if delivery_output.available:
         city = _canonical_city_from_check_delivery_invocation(invocation)
-        if city:
+        if city and not _reply_has_verified_delivery_fee(
+            updated_reply,
+            rate=delivery_output.rate,
+            currency=delivery_output.currency,
+        ):
             if _is_city_only_check_delivery(invocation):
                 fee_line = _build_verified_city_delivery_line(
                     city=city,
@@ -394,18 +624,35 @@ def _apply_perishable_delivery_honesty(
                     rate=delivery_output.rate,
                     currency=delivery_output.currency,
                 )
-            if "verified with Kapruka" not in updated_reply:
-                updated_reply = f"{updated_reply}\n\n{fee_line}".strip()
+            updated_reply = f"{updated_reply}\n\n{fee_line}".strip()
         if not _is_city_only_check_delivery(invocation):
             delivery_html = render_delivery_date_status(result=delivery_output)
 
     warning = delivery_output.perishable_warning
+    if (not isinstance(warning, str) or not warning.strip()) and _turn_implies_perishable_gift(
+        user_message,
+        session_product_focus=session_product_focus,
+    ):
+        checked_date = delivery_output.checked_date
+        if (
+            checked_date
+            and not _is_city_only_check_delivery(invocation)
+            and _delivery_date_more_than_one_day_out(checked_date)
+        ):
+            warning = (
+                "Fresh cakes, flowers, and gift combos are best within a day or two of "
+                "delivery. Your date is more than a day out — consider ordering closer to "
+                "the event."
+            )
     if isinstance(warning, str) and warning.strip():
         warning = warning.strip()
-        if warning not in updated_reply:
-            updated_reply = f"{updated_reply}\n\n{warning}".strip()
+        dated_delivery = not _is_city_only_check_delivery(invocation)
+        # Warning lives in delivery_status_html when that partial renders — avoid triplication.
         if delivery_html is None:
-            delivery_html = render_delivery_date_status(result=delivery_output)
+            if warning not in updated_reply:
+                updated_reply = f"{updated_reply}\n\n{warning}".strip()
+            if dated_delivery or (warning and _is_city_only_check_delivery(invocation)):
+                delivery_html = render_delivery_date_status(result=delivery_output)
 
     return updated_reply, delivery_html
 
@@ -472,10 +719,48 @@ def _is_likely_cake_product(product: dict[str, Any]) -> bool:
     return bool(_CAKE_CATEGORY_PATTERN.search(_product_category_text(product)))
 
 
+def _build_verified_dated_delivery_reply(
+    *,
+    city: str,
+    checked_date: str,
+    rate: float,
+    currency: str,
+) -> str:
+    fee = format_currency(rate, currency)
+    friendly_date = format_delivery_date_friendly(checked_date)
+    return f"Yes, we can deliver to {city} on {friendly_date}. Delivery fee is {fee}."
+
+
+def _apply_verified_dated_delivery_template(
+    reply_text: str,
+    tool_trace: list[ToolInvocation] | None,
+) -> str:
+    """Use verified dated-delivery copy when check_delivery ran with a date."""
+    invocation = _last_check_delivery_invocation(tool_trace)
+    if invocation is None or _is_city_only_check_delivery(invocation):
+        return reply_text
+    delivery = invocation.get("result")
+    if not isinstance(delivery, dict) or not delivery.get("available"):
+        return reply_text
+    city = _canonical_city_from_check_delivery_invocation(invocation)
+    checked_date = delivery.get("checked_date")
+    rate = delivery.get("rate")
+    delivery_currency = delivery.get("currency") or "LKR"
+    if not city or not isinstance(checked_date, str) or not isinstance(rate, (int, float)):
+        return reply_text
+    fee_label = format_currency(float(rate), str(delivery_currency))
+    if "verified with Kapruka" in reply_text or fee_label in reply_text:
+        return reply_text
+    return _build_verified_dated_delivery_reply(
+        city=city,
+        checked_date=checked_date,
+        rate=float(rate),
+        currency=str(delivery_currency),
+    )
+
+
 def _is_cake_accessory(product: dict[str, Any]) -> bool:
-    name = str(product.get("name") or "")
-    summary = str(product.get("summary") or "")
-    return bool(_ACCESSORY_BLACKLIST.search(f"{name} {summary}"))
+    return is_cake_accessory(product)
 
 
 def _filter_cake_search_products(
@@ -485,11 +770,12 @@ def _filter_cake_search_products(
     """Drop non-cake items and baking accessories when the search q targets cakes."""
     if not _is_cake_search_query(query):
         return products
-    return [
+    cake_products = [
         product
         for product in products
         if _is_likely_cake_product(product) and not _is_cake_accessory(product)
     ]
+    return filter_cake_accessories(cake_products)
 
 
 def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -501,18 +787,26 @@ def _curated_search_results(search_payload: dict[str, Any]) -> list[dict[str, An
         for item in raw_results
         if isinstance(item, dict) and item.get("id") and item.get("name")
     ]
+    for product in products:
+        name = product.get("name")
+        if isinstance(name, str):
+            product["name"] = normalize_catalog_text(name)
     query = _search_query_from_payload(search_payload)
-    curated = _filter_cake_search_products(products, query)
-    if not curated and products and _is_cake_search_query(query):
-        return products
-    return curated
+    return _filter_cake_search_products(products, query)
 
 
 def _discovery_curation_query(
     search_payload: dict[str, Any],
     *,
     user_message: str,
+    session_search_query: str | None = None,
 ) -> str:
+    if (
+        is_budget_refinement_message(user_message)
+        and isinstance(session_search_query, str)
+        and session_search_query.strip()
+    ):
+        return session_search_query.strip()
     query = _search_query_from_payload(search_payload)
     return user_message.strip() or (query or "")
 
@@ -525,6 +819,11 @@ def _budget_curated_products(
     currency: str,
     graph_context_available: bool,
     hybrid_context: dict[str, Any] | None = None,
+    session_product_focus: str | None = None,
+    session_flavor_hint: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_occasion: str | None = None,
+    strict_budget: bool = False,
 ) -> list[dict[str, Any]]:
     """Apply birthday/puja relevance and budget-aware carousel ordering."""
     return curate_carousel_products(
@@ -534,7 +833,45 @@ def _budget_curated_products(
         currency=currency,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
+        session_flavor_hint=session_flavor_hint,
+        session_recipient_hint=session_recipient_hint,
+        session_occasion=session_occasion,
+        strict_budget=strict_budget,
     )
+
+
+def _refine_last_search_kwargs(
+    *,
+    budget_max: float,
+    currency: str,
+    user_message: str,
+    session_product_focus: str | None,
+    session_search_query: str | None = None,
+    session_recipient_hint: str | None = None,
+    hybrid_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "budget_max": budget_max,
+        "currency": currency,
+        "session_product_focus": session_product_focus,
+        "session_search_query": session_search_query,
+        "session_recipient_hint": session_recipient_hint,
+        "user_message": user_message,
+        "hybrid_context": hybrid_context,
+    }
+
+
+def _enrich_product_display_price(product: dict[str, Any]) -> dict[str, Any]:
+    """Add display_price for LLM prose synthesis."""
+    enriched = dict(product)
+    raw_price = product.get("price")
+    if isinstance(raw_price, dict):
+        amount = raw_price.get("amount")
+        currency = raw_price.get("currency") or "LKR"
+        if isinstance(amount, (int, float)):
+            enriched["display_price"] = format_currency(float(amount), str(currency))
+    return enriched
 
 
 def _cap_search_products_for_llm_context(
@@ -546,6 +883,10 @@ def _cap_search_products_for_llm_context(
     user_message: str = "",
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
+    session_product_focus: str | None = None,
+    session_search_query: str | None = None,
+    session_recipient_hint: str | None = None,
+    strict_budget: bool = False,
 ) -> dict[str, Any] | None:
     """Slice curated kapruka_search_products results before Gemini synthesis."""
     if not tool_results:
@@ -561,13 +902,20 @@ def _cap_search_products_for_llm_context(
 
     curated = _budget_curated_products(
         _curated_search_results(search_payload),
-        query=_discovery_curation_query(search_payload, user_message=user_message),
+        query=_discovery_curation_query(
+            search_payload,
+            user_message=user_message,
+            session_search_query=session_search_query,
+        ),
         budget_max=budget_max,
         currency=currency,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
+        session_recipient_hint=session_recipient_hint,
+        strict_budget=strict_budget,
     )
-    capped_results = curated[:limit]
+    capped_results = [_enrich_product_display_price(product) for product in curated[:limit]]
     if capped_results == raw_results:
         return tool_results
 
@@ -584,18 +932,63 @@ def _budget_prompt_line(budget_max: float | None, currency: str) -> str:
     return f"Customer budget cap: {format_currency(budget_max, currency)}.\n"
 
 
+def _session_context_prompt_lines(
+    *,
+    session_search_query: str | None,
+    session_occasion: str | None,
+    session_recipient_hint: str | None,
+    session_flavor_hint: str | None = None,
+    session_budget_max: float | None = None,
+    session_delivery_date: str | None = None,
+    user_message: str,
+) -> str:
+    lines: list[str] = []
+    if isinstance(session_search_query, str) and session_search_query.strip():
+        lines.append(f"Session topic: {session_search_query.strip()}")
+    if isinstance(session_occasion, str) and session_occasion.strip():
+        lines.append(f"Occasion: {session_occasion.strip()}")
+    if isinstance(session_recipient_hint, str) and session_recipient_hint.strip():
+        lines.append(f"Recipient: {session_recipient_hint.strip()}")
+    if isinstance(session_flavor_hint, str) and session_flavor_hint.strip():
+        lines.append(f"Flavor/style: {session_flavor_hint.strip()}")
+    if isinstance(session_budget_max, (int, float)) and session_budget_max > 0:
+        lines.append(f"Budget cap: Rs {session_budget_max:,.0f}")
+    if isinstance(session_delivery_date, str) and session_delivery_date.strip():
+        lines.append(f"Delivery date: {session_delivery_date.strip()}")
+    if not lines:
+        return ""
+    if is_budget_refinement_message(user_message) or len(lines) >= 2:
+        return "\n".join(lines) + "\n\n"
+    return ""
+
+
 def _build_user_prompt(
     user_message: str,
     tool_results: dict[str, Any] | None,
     *,
     budget_max: float | None = None,
     currency: str = "LKR",
+    session_search_query: str | None = None,
+    session_occasion: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_flavor_hint: str | None = None,
+    session_delivery_date: str | None = None,
 ) -> str:
     """Combine user turn and MCP payload for response synthesis."""
     context = _format_tool_results_context(tool_results)
     budget_line = _budget_prompt_line(budget_max, currency)
+    session_line = _session_context_prompt_lines(
+        session_search_query=session_search_query,
+        session_occasion=session_occasion,
+        session_recipient_hint=session_recipient_hint,
+        session_flavor_hint=session_flavor_hint,
+        session_budget_max=budget_max,
+        session_delivery_date=session_delivery_date,
+        user_message=user_message,
+    )
     return (
         f"Customer message:\n{user_message}\n\n"
+        f"{session_line}"
         f"{budget_line}"
         f"tool_results (sole source of truth for catalog facts):\n{context}"
     )
@@ -636,12 +1029,26 @@ def _generate_reply_sync(
     intent_metadata: IntentMetadata | None = None,
     system_instruction: str | None = None,
     intent: str | None = None,
+    delivery_context_relevant: bool = True,
+    session_occasion: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_flavor_hint: str | None = None,
+    session_budget_max: float | None = None,
+    session_delivery_date: str | None = None,
+    session_delivery_city: str | None = None,
 ) -> str:
     """Blocking Gemini call; run via asyncio.to_thread from generate_response."""
     instruction = system_instruction or build_response_system_instruction(
         intent_metadata,
         zep_memory_facts=zep_memory_facts,
         intent=intent,
+        delivery_context_relevant=delivery_context_relevant,
+        session_occasion=session_occasion,
+        session_recipient_hint=session_recipient_hint,
+        session_flavor_hint=session_flavor_hint,
+        session_budget_max=session_budget_max,
+        session_delivery_date=session_delivery_date,
+        session_delivery_city=session_delivery_city,
     )
     if system_instruction is not None and zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
@@ -660,6 +1067,66 @@ def _generate_reply_sync(
     return _parse_reply_response(response)
 
 
+def _carousel_strict_budget(
+    user_message: str,
+    budget_max: float | None,
+    *,
+    state: AgentState | None = None,
+) -> bool:
+    if budget_max is None or budget_max <= 0:
+        return False
+    from lib.chat.intent_heuristics import has_explicit_budget_constraint
+
+    pivot_meta = state.get("intent_metadata") if state else None
+    topic_pivot = bool(
+        isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"),
+    )
+    session_budget = state.get("session_budget_max") if state else None
+    return has_explicit_budget_constraint(
+        user_message,
+        session_budget if isinstance(session_budget, (int, float)) else None,
+        topic_pivot=topic_pivot,
+    )
+
+
+def _prepend_situational_empathy(
+    reply_text: str,
+    intent_metadata: IntentMetadata | None,
+) -> str:
+    if not intent_metadata or not intent_metadata.get("is_situational"):
+        return reply_text
+    head = reply_text.strip().lower()[:120]
+    if any(phrase in head for phrase in ("sorry", "hear that", "heartbroken", "going through")):
+        return reply_text
+    return f"I'm sorry to hear you're going through this. {reply_text.strip()}"
+
+
+def _prepend_budget_confirmation(
+    reply_text: str,
+    intent_metadata: IntentMetadata | None,
+    *,
+    budget_max: float | None,
+    currency: str,
+) -> str:
+    if not intent_metadata or not intent_metadata.get("budget_confirmation_pending"):
+        return reply_text
+    if budget_max is None or budget_max <= 0:
+        return reply_text
+    cap = format_currency(budget_max, currency)
+    if "keeping under" in reply_text.lower() or cap.lower() in reply_text.lower():
+        return reply_text
+    return f"Still keeping under {cap}?\n\n{reply_text.strip()}"
+
+
+def _emit_synthesis_status() -> None:
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        return
+    if writer is not None:
+        writer({"type": "status", "message": PUTTING_TOGETHER_RECOMMENDATIONS})
+
+
 def extract_search_products(
     tool_results: dict[str, Any] | None,
     *,
@@ -668,6 +1135,13 @@ def extract_search_products(
     user_message: str = "",
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
+    session_product_focus: str | None = None,
+    session_search_query: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_occasion: str | None = None,
+    session_delivery_city: str | None = None,
+    strict_budget: bool = False,
+    last_search_products: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return curated product dicts from kapruka_search_products tool_results, if any."""
     if not tool_results:
@@ -678,14 +1152,52 @@ def extract_search_products(
         return []
 
     products = _curated_search_results(search_payload)
-    return _budget_curated_products(
+    products = _budget_curated_products(
         products,
-        query=_discovery_curation_query(search_payload, user_message=user_message),
+        query=_discovery_curation_query(
+            search_payload,
+            user_message=user_message,
+            session_search_query=session_search_query,
+        ),
         budget_max=budget_max,
         currency=currency,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
+        session_recipient_hint=session_recipient_hint,
+        session_occasion=session_occasion,
+        strict_budget=strict_budget,
     )
+
+    def _with_card_descriptions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return enrich_carousel_product_descriptions(
+            items,
+            session_occasion=session_occasion,
+            session_recipient_hint=session_recipient_hint,
+            session_delivery_city=session_delivery_city,
+        )
+
+    if (
+        session_product_focus
+        and products
+        and not carousel_focus_guard(products, session_product_focus)
+        and last_search_products
+        and budget_max is not None
+        and budget_max > 0
+    ):
+        refined = refine_last_search_by_budget(
+            last_search_products,
+            budget_max=budget_max,
+            currency=currency,
+            session_product_focus=session_product_focus,
+            session_search_query=session_search_query,
+            session_recipient_hint=session_recipient_hint,
+            user_message=user_message,
+            hybrid_context=hybrid_context,
+        )
+        if refined:
+            return _with_card_descriptions(refined)
+    return _with_card_descriptions(products)
 
 
 def _build_cart_assistant_message(action: dict[str, Any]) -> str | None:
@@ -693,13 +1205,15 @@ def _build_cart_assistant_message(action: dict[str, Any]) -> str | None:
     status = action.get("status")
     if status == "clarify":
         question = action.get("clarifying_question")
-        return str(question).strip() if isinstance(question, str) and question.strip() else None
+        if isinstance(question, str) and question.strip():
+            return normalize_catalog_text(question.strip())
+        return None
     if status == "error":
         message = action.get("message")
         return str(message).strip() if isinstance(message, str) and message.strip() else None
     if status != "added":
         return None
-    name = str(action.get("product_name") or "item")
+    name = normalize_catalog_text(str(action.get("product_name") or "item"))
     quantity = action.get("quantity")
     if action.get("merged") and isinstance(quantity, int):
         return f"Updated your cart — {name} is now quantity {quantity}."
@@ -746,12 +1260,15 @@ def _format_product_line(product: dict[str, Any]) -> str:
     amount = price.get("amount")
     currency = price.get("currency") or "LKR"
     stock_level = product.get("stock_level")
-    if isinstance(stock_level, str) and stock_level.strip():
-        stock_note = f"in stock ({stock_level.strip().lower()})"
-    elif product.get("in_stock"):
-        stock_note = "in stock"
-    else:
+    if product.get("in_stock") is False:
         stock_note = "out of stock"
+    elif product.get("in_stock") is True:
+        if isinstance(stock_level, str) and stock_level.strip():
+            stock_note = f"in stock ({stock_level.strip().lower()})"
+        else:
+            stock_note = "in stock"
+    else:
+        stock_note = "stock not verified"
     if amount is not None:
         return f"'{name}' for {format_currency(float(amount), currency)}, {stock_note}"
     return f"'{name}', {stock_note}"
@@ -770,6 +1287,113 @@ def _apply_artificial_floral_honesty(
     if reply_already_discloses_artificial_floral(reply_text):
         return reply_text
     return f"{note}\n\n{reply_text}".strip()
+
+
+def _product_for_sweetness_note(
+    state: AgentState,
+    *,
+    user_message: str,
+    visible_products: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Pick the best catalog product for a sweetness-preference honesty note."""
+    matched = match_product_from_last_search(
+        user_message,
+        state.get("last_search_products"),
+        last_visible_products=state.get("last_visible_products"),
+        session_product_focus=state.get("session_product_focus"),
+    )
+    get_payload = (state.get("tool_results") or {}).get(GET_PRODUCT_TOOL)
+    if not is_valid_product_detail_payload(get_payload):
+        get_payload = None
+    product, _session_update = resolve_product_detail(
+        get_payload=get_payload,
+        matched=matched,
+        session_resolved=state.get("session_resolved_product"),
+    )
+    if product is not None:
+        return product
+    if visible_products:
+        return visible_products[0]
+    last_search = state.get("last_search_products") or []
+    if isinstance(last_search, list) and last_search:
+        first = last_search[0]
+        if isinstance(first, dict):
+            return first
+    return None
+
+
+def _discovery_sweetness_honesty_note(user_message: str) -> str | None:
+    """Generic sweetness guidance on discovery openers before a product is picked."""
+    if not is_sweetness_preference_turn(user_message):
+        return None
+    return (
+        "Kapruka does not list exact sweetness on every cake. "
+        "Ribbon cakes are typically buttercream-based; if low sugar matters, "
+        "call Kapruka support at +94-11-7551111 before ordering."
+    )
+
+
+def _should_skip_delivery_date_clarifier_with_carousel(
+    state: AgentState,
+    user_message: str,
+    clarifier: str,
+    *,
+    has_carousel: bool,
+) -> bool:
+    """Skip date gate copy when discovery already surfaced a carousel for this city."""
+    if not has_carousel:
+        return False
+    if clarifier.strip() != delivery_date_clarifying_question().strip():
+        return False
+    return should_defer_delivery_date(state, user_message)
+
+
+def _maybe_prepend_clarifier(
+    reply_text: str,
+    clarifier: str | None,
+    *,
+    state: AgentState,
+    user_message: str,
+    has_carousel: bool,
+) -> str:
+    if not isinstance(clarifier, str) or not clarifier.strip():
+        return reply_text
+    question = clarifier.strip()
+    if _should_skip_delivery_date_clarifier_with_carousel(
+        state,
+        user_message,
+        question,
+        has_carousel=has_carousel,
+    ):
+        return reply_text
+    if question.lower() in reply_text.lower():
+        return reply_text
+    return f"{question}\n\n{reply_text.strip()}"
+
+
+def _apply_sweetness_preference_note(
+    reply_text: str,
+    *,
+    user_message: str,
+    state: AgentState,
+    visible_products: list[dict[str, Any]] | None = None,
+) -> str:
+    """Append catalog honesty when shoppers ask about sweetness on the LLM path."""
+    if not is_sweetness_preference_turn(user_message):
+        return reply_text
+    product = _product_for_sweetness_note(
+        state,
+        user_message=user_message,
+        visible_products=visible_products,
+    )
+    note = product_preference_note(user_message, product) if product is not None else None
+    if note is None:
+        note = _discovery_sweetness_honesty_note(user_message)
+    if note is None:
+        return reply_text
+    if note.lower() in reply_text.lower():
+        return reply_text
+    return f"{reply_text.rstrip()}\n\n{note}"
 
 
 def _build_discovery_template_reply(
@@ -795,6 +1419,35 @@ def _build_discovery_template_reply(
     return body
 
 
+def _should_use_discovery_template_fast_path(
+    state: AgentState,
+    *,
+    user_message: str,
+    visible_products: list[dict[str, Any]] | None,
+) -> bool:
+    """Skip Gemini synthesis when planner was bypassed for confident discovery."""
+    if not visible_products:
+        return False
+    if state.get("intent") not in ("discovery", "general"):
+        return False
+    if state.get("agent_loop_exit_reason") not in ("finish", None):
+        return False
+    if state.get("agent_loop_iterations") not in (0, None):
+        return False
+    intent_metadata = state.get("intent_metadata")
+    if isinstance(intent_metadata, dict) and intent_metadata.get("is_situational"):
+        return False
+    hybrid_context = state.get("hybrid_context") or {}
+    currency = state.get("currency") or "LKR"
+    return is_confident_discovery_turn(
+        user_message,
+        hybrid_context,
+        currency=currency,
+        intent_metadata=intent_metadata if isinstance(intent_metadata, dict) else None,
+        state=dict(state),
+    )
+
+
 def build_products_carousel_html(
     tool_results: dict[str, Any] | None,
     *,
@@ -803,19 +1456,90 @@ def build_products_carousel_html(
     user_message: str = "",
     graph_context_available: bool = False,
     hybrid_context: dict[str, Any] | None = None,
+    session_product_focus: str | None = None,
+    session_occasion: str | None = None,
+    session_recipient_hint: str | None = None,
+    session_delivery_city: str | None = None,
+    last_search_products: list[dict[str, Any]] | None = None,
+    last_visible_products: list[dict[str, Any]] | None = None,
+    visible_products: list[dict[str, Any]] | None = None,
+    allow_stale_fallback: bool = True,
 ) -> str | None:
     """Render product carousel partial when search_products returned results."""
-    products = extract_search_products(
-        tool_results,
-        budget_max=budget_max,
-        currency=currency,
-        user_message=user_message,
-        graph_context_available=graph_context_available,
-        hybrid_context=hybrid_context,
-    )
+    products = visible_products
+    if products is None:
+        products = extract_search_products(
+            tool_results,
+            budget_max=budget_max,
+            currency=currency,
+            user_message=user_message,
+            graph_context_available=graph_context_available,
+            hybrid_context=hybrid_context,
+            session_product_focus=session_product_focus,
+            last_search_products=last_search_products,
+        )
+    if not products and allow_stale_fallback and last_visible_products:
+        products = last_visible_products
+    if not products and allow_stale_fallback and last_search_products:
+        if budget_max is not None and budget_max > 0:
+            refined = refine_last_search_by_budget(
+                last_search_products,
+                budget_max=budget_max,
+                currency=currency,
+                session_product_focus=session_product_focus,
+                user_message=user_message,
+                hybrid_context=hybrid_context,
+            )
+            if refined:
+                products = refined
+        if not products:
+            products = last_search_products
     if not products:
         return None
+    products = enrich_carousel_product_descriptions(
+        products,
+        session_occasion=session_occasion,
+        session_recipient_hint=session_recipient_hint,
+        session_delivery_city=session_delivery_city,
+    )
     return render_product_carousel(products)
+
+
+def _delivery_fee_reply_from_state(
+    state: AgentState,
+    user_message: str,
+) -> str | None:
+    """Build a verified delivery-fee line from tool_trace when available."""
+    if not is_delivery_fee_question(user_message):
+        return None
+    fee_invocation = _last_check_delivery_invocation(state.get("tool_trace"))
+    if fee_invocation is None:
+        return None
+    fee_delivery = fee_invocation.get("result")
+    if not isinstance(fee_delivery, dict) or not fee_delivery.get("available"):
+        return None
+    try:
+        from lib.kapruka.types import CheckDeliveryOutput
+
+        fee_output = CheckDeliveryOutput.model_validate(fee_delivery)
+        fee_city = _canonical_city_from_check_delivery_invocation(fee_invocation)
+        if not fee_city or fee_output.rate <= 0:
+            return None
+        if _is_city_only_check_delivery(fee_invocation):
+            return _build_verified_city_delivery_line(
+                city=fee_city,
+                rate=fee_output.rate,
+                currency=fee_output.currency,
+            )
+        return _build_verified_delivery_fee_line(
+            city=fee_city,
+            checked_date=fee_output.checked_date,
+            rate=fee_output.rate,
+            currency=fee_output.currency,
+        )
+    except Exception:
+        logger.debug("generate_response: delivery fee reply failed", exc_info=True)
+        return None
 
 
 def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> str | None:
@@ -843,6 +1567,32 @@ def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> st
             f"Let's check out your {count} cart {noun}. "
             "Next, tell me the delivery city for your order."
         )
+    if step == "delivery_city":
+        return (
+            "Let's continue checkout — which Kapruka delivery city should we send this to? "
+            "For example: Colombo 03, Kandy, or Galle."
+        )
+    if step == "delivery_date":
+        city = checkout.get("delivery_city") or "your city"
+        return (
+            f"When should we deliver to {city}? "
+            "Share a date (for example next Saturday or YYYY-MM-DD)."
+        )
+    if step == "recipient":
+        return (
+            "Who should receive this gift? Share their name and Sri Lankan mobile number "
+            "(for example Amaya, 0771234567)."
+        )
+    if step == "sender":
+        return (
+            "What name should appear on the gift card? "
+            "Say 'anonymous' if you prefer not to include your name."
+        )
+    if step == "review":
+        return (
+            "Please review your order details below. "
+            "Say 'confirm' when you're ready to pay securely."
+        )
     if step == "finalize":
         checkout_url = checkout.get("checkout_url")
         order_ref = checkout.get("order_ref")
@@ -859,10 +1609,12 @@ def render_assistant_html(
     message: str,
     *,
     products_html: str | None = None,
+    carousel_slot_id: str | None = None,
     checkout_review_html: str | None = None,
     checkout_payment_html: str | None = None,
     tracking_status_html: str | None = None,
     delivery_status_html: str | None = None,
+    rate_limit_banner_html: str | None = None,
 ) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
@@ -870,11 +1622,54 @@ def render_assistant_html(
     return template.render(
         message=message,
         products_html=products_html,
+        carousel_slot_id=carousel_slot_id,
         checkout_review_html=checkout_review_html,
         checkout_payment_html=checkout_payment_html,
         tracking_status_html=tracking_status_html,
         delivery_status_html=delivery_status_html,
+        rate_limit_banner_html=rate_limit_banner_html,
     )
+
+
+def render_carousel_oob_html(
+    products_html: str,
+    *,
+    carousel_slot_id: str,
+) -> str:
+    """Wrap carousel markup for OOB swap into the assistant message slot."""
+    return (
+        f'<div id="{carousel_slot_id}" class="assistant-products mt-4" '
+        f'data-slot="product-carousel" role="region" '
+        f'aria-label="Suggested products" hx-swap-oob="outerHTML">'
+        f"{products_html}</div>"
+    )
+
+
+def _assistant_response_fields(
+    message: str,
+    *,
+    products_html: str | None = None,
+    **render_kwargs: Any,
+) -> dict[str, Any]:
+    """Build response_html and optional carousel_html for SSE split delivery."""
+    if products_html:
+        slot_id = f"carousel-slot-{secrets.token_hex(4)}"
+        return {
+            "response_html": render_assistant_html(
+                message,
+                carousel_slot_id=slot_id,
+                **render_kwargs,
+            ),
+            "carousel_html": render_carousel_oob_html(
+                products_html,
+                carousel_slot_id=slot_id,
+            ),
+            "assistant_message": message,
+        }
+    return {
+        "response_html": render_assistant_html(message, **render_kwargs),
+        "assistant_message": message,
+    }
 
 
 def _extract_checkout_payload(tool_results: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -927,6 +1722,58 @@ async def generate_response(
             "assistant_message": welcome,
         }
 
+    if is_impossible_catalog_request(user_message):
+        reply = build_impossible_product_redirect(impossible_request_subject(user_message))
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+
+    off_topic_meta = dict(state.get("intent_metadata") or {})
+    if off_topic_meta.get("is_off_topic"):
+        redirect_kind = off_topic_meta.get("redirect_kind")
+        if redirect_kind == "impossible_product":
+            reply = build_impossible_product_redirect(impossible_request_subject(user_message))
+        else:
+            reply = build_off_topic_redirect_message(off_topic_topic(user_message))
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+
+    intent_metadata = state.get("intent_metadata") or {}
+    if isinstance(intent_metadata, dict) and intent_metadata.get("guest_checkout_info"):
+        reply = build_guest_checkout_reply(
+            cart_has_items=bool(intent_metadata.get("guest_checkout_cart_has_items")),
+        )
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+
+    if isinstance(intent_metadata, dict) and intent_metadata.get("duplicate_checkout_proceed"):
+        return {}
+
+    intent_metadata = state.get("intent_metadata") or {}
+    if isinstance(intent_metadata, dict) and intent_metadata.get("support_topic"):
+        reply = build_support_faq_reply(user_message)
+        fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if fee_reply:
+            reply = f"{reply}\n\n{fee_reply}"
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+    if is_support_question(user_message):
+        reply = build_support_faq_reply(user_message)
+        fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if fee_reply:
+            reply = f"{reply}\n\n{fee_reply}"
+        return {
+            "response_html": render_assistant_html(reply),
+            "assistant_message": reply,
+        }
+
     if _is_general_welcome_path(state):
         if is_farewell_message(user_message):
             farewell = build_farewell_message()
@@ -940,15 +1787,46 @@ async def generate_response(
             "assistant_message": welcome,
         }
 
-    clarifying_question = state.get("agent_clarifying_question")
-    if (
-        state.get("agent_loop_exit_reason") == "ask_user"
-        and isinstance(clarifying_question, str)
-        and clarifying_question.strip()
-    ):
+    clarifying_question = state.get("master_clarifying_question")
+    if isinstance(clarifying_question, str) and clarifying_question.strip():
         question = clarifying_question.strip()
+        return {
+            "response_html": render_assistant_html(question),
+            "assistant_message": question,
+        }
+
+    clarifying_question = state.get("agent_clarifying_question")
+    exit_reason = state.get("agent_loop_exit_reason")
+    intent_metadata = state.get("intent_metadata") or {}
+    situational_with_products = (
+        isinstance(intent_metadata, dict)
+        and intent_metadata.get("is_situational")
+        and _turn_search_has_products(state.get("tool_trace"))
+    )
+    pending_clarifier: str | None = None
+    if (
+        isinstance(clarifying_question, str)
+        and clarifying_question.strip()
+        and not situational_with_products
+        and (
+            exit_reason == "ask_user"
+            or (exit_reason is None and not _turn_has_fresh_search(state.get("tool_trace")))
+        )
+    ):
+        pending_clarifier = clarifying_question.strip()
+
+    has_carousel_products = _turn_search_has_products(state.get("tool_trace"))
+    if pending_clarifier and not has_carousel_products:
+        question = pending_clarifier
         tool_trace = state.get("tool_trace")
-        question, delivery_status_html = _apply_perishable_delivery_honesty(question, tool_trace)
+        delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
+        question, delivery_status_html = _apply_perishable_delivery_honesty(
+            question,
+            tool_trace,
+            user_message=user_message,
+            session_product_focus=state.get("session_product_focus"),
+            delivery_context_relevant=delivery_context_relevant,
+        )
         return {
             "response_html": render_assistant_html(
                 question,
@@ -966,7 +1844,10 @@ async def generate_response(
     ):
         tool_name = str(agent_tool_error["tool"])
         raw_message = str(agent_tool_error["message"])
-        error_code = _error_code_from_tool_trace(state.get("tool_trace"), tool_name)
+        error_code = agent_tool_error.get("error") or _error_code_from_tool_trace(
+            state.get("tool_trace"),
+            tool_name,
+        )
         order_number = extract_order_number(user_message)
         error_reply = build_agent_tool_error_message(
             tool=tool_name,
@@ -975,10 +1856,67 @@ async def generate_response(
             order_number=order_number,
             reference_kind=(classify_order_reference(order_number) if order_number else None),
         )
-        return {
-            "response_html": render_assistant_html(error_reply),
-            "assistant_message": error_reply,
-        }
+        last_search = list(state.get("last_search_products") or [])
+        if is_product_detail_turn(user_message):
+            matched = match_product_from_last_search(
+                user_message,
+                last_search,
+                last_visible_products=list(state.get("last_visible_products") or []),
+                session_product_focus=state.get("session_product_focus"),
+            )
+            if matched is not None:
+                product, _session_update = resolve_product_detail(
+                    get_payload=None,
+                    matched=matched,
+                    session_resolved=state.get("session_resolved_product"),
+                )
+                if product is not None:
+                    detail = summarize_product_from_carousel(product)
+                    error_reply = f"{error_reply}\n\nFrom our earlier results: {detail}"
+        tool_trace = state.get("tool_trace")
+        if is_delivery_fee_question(user_message) and _tool_trace_has_check_delivery(tool_trace):
+            delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
+            reply_text, delivery_status_html = _apply_perishable_delivery_honesty(
+                error_reply,
+                tool_trace,
+                user_message=user_message,
+                session_product_focus=state.get("session_product_focus"),
+                delivery_context_relevant=delivery_context_relevant,
+            )
+            return {
+                "response_html": render_assistant_html(
+                    reply_text,
+                    delivery_status_html=delivery_status_html,
+                ),
+                "assistant_message": reply_text,
+            }
+        error_code = agent_tool_error.get("error") or _error_code_from_tool_trace(
+            state.get("tool_trace"),
+            tool_name,
+        )
+        allow_stale = not _turn_has_fresh_search(state.get("tool_trace"))
+        if error_code in ("429", "rate_limit_exceeded"):
+            allow_stale = True
+        products_html = build_products_carousel_html(
+            _resolve_effective_tool_results(state),
+            budget_max=state.get("session_budget_max"),
+            currency=state.get("currency") or "LKR",
+            user_message=user_message,
+            graph_context_available=has_graph_hybrid_context(state.get("hybrid_context") or {}),
+            hybrid_context=state.get("hybrid_context") or {},
+            session_product_focus=state.get("session_product_focus"),
+            session_occasion=state.get("session_occasion"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            session_delivery_city=state.get("session_delivery_city_canonical"),
+            last_search_products=last_search or None,
+            allow_stale_fallback=allow_stale,
+        )
+        rate_limit_banner = _rate_limit_banner_html(agent_tool_error)
+        return _assistant_response_fields(
+            error_reply,
+            products_html=products_html,
+            rate_limit_banner_html=rate_limit_banner,
+        )
 
     if state.get("intent") == "tracking":
         tracking_reply = _build_tracking_assistant_message(tool_results)
@@ -1029,17 +1967,18 @@ async def generate_response(
     if state.get("intent") == "cart":
         action = dict(state.get("cart_action_result") or {})
         cart_reply = _build_cart_assistant_message(action)
-        if cart_reply:
-            cart_oob = _build_cart_oob_html(
-                action,
-                currency=state.get("currency") or "LKR",
-            )
-            assistant_html = render_assistant_html(cart_reply)
-            response_html = f"{cart_oob}{assistant_html}" if cart_oob else assistant_html
-            return {
-                "response_html": response_html,
-                "assistant_message": cart_reply,
-            }
+        if not cart_reply:
+            cart_reply = "I couldn't add that — try naming the product."
+        cart_oob = _build_cart_oob_html(
+            action,
+            currency=state.get("currency") or "LKR",
+        )
+        assistant_html = render_assistant_html(cart_reply)
+        response_html = f"{cart_oob}{assistant_html}" if cart_oob else assistant_html
+        return {
+            "response_html": response_html,
+            "assistant_message": cart_reply,
+        }
 
     if state.get("intent") == "checkout":
         checkout = _extract_checkout_payload(tool_results)
@@ -1095,39 +2034,223 @@ async def generate_response(
         if isinstance(search_payload, dict):
             error_message = search_payload.get("message")
             if search_payload.get("error") and isinstance(error_message, str):
-                return {
-                    "response_html": render_assistant_html(error_message),
-                    "assistant_message": error_message,
-                }
-            if search_payload.get("results") == []:
-                empty_reply = build_empty_search_reply(
-                    broaden_attempted=bool(state.get("search_broaden_applied")),
+                error_code = str(search_payload.get("error"))
+                error_reply = build_agent_tool_error_message(
+                    tool=SEARCH_PRODUCTS_TOOL,
+                    raw_message=error_message,
+                    error_code=error_code,
                 )
-                return {
-                    "response_html": render_assistant_html(empty_reply),
-                    "assistant_message": empty_reply,
-                }
+                allow_stale = error_code in ("429", "rate_limit_exceeded")
+                products_html = build_products_carousel_html(
+                    _resolve_effective_tool_results(state),
+                    budget_max=state.get("session_budget_max"),
+                    currency=state.get("currency") or "LKR",
+                    user_message=user_message,
+                    graph_context_available=has_graph_hybrid_context(
+                        state.get("hybrid_context") or {},
+                    ),
+                    hybrid_context=state.get("hybrid_context") or {},
+                    session_product_focus=state.get("session_product_focus"),
+                    session_occasion=state.get("session_occasion"),
+                    session_recipient_hint=state.get("session_recipient_hint"),
+                    session_delivery_city=state.get("session_delivery_city_canonical"),
+                    last_search_products=list(state.get("last_search_products") or []) or None,
+                    allow_stale_fallback=allow_stale,
+                )
+                rate_limit_banner = (
+                    _rate_limit_banner_html(
+                        {
+                            "error": error_code,
+                            "retry_after_seconds": search_payload.get("retry_after_seconds"),
+                        },
+                    )
+                    if allow_stale
+                    else None
+                )
+                return _assistant_response_fields(
+                    error_reply,
+                    products_html=products_html,
+                    rate_limit_banner_html=rate_limit_banner,
+                )
+            if search_payload.get("results") == []:
+                can_refine_from_last_search = bool(
+                    is_budget_refinement_message(user_message) and state.get("last_search_products")
+                )
+                if not can_refine_from_last_search:
+                    empty_reply = build_empty_search_reply(
+                        broaden_attempted=bool(state.get("search_broaden_applied")),
+                    )
+                    return {
+                        "response_html": render_assistant_html(empty_reply),
+                        "assistant_message": empty_reply,
+                    }
 
     currency = state.get("currency") or "LKR"
     metadata = dict(state.get("intent_metadata") or {})
     session_budget = state.get("session_budget_max")
     turn_budget = metadata.get("budget_max")
     budget_max: float | None = None
-    if isinstance(session_budget, (int, float)) and session_budget > 0:
-        budget_max = float(session_budget)
-    elif isinstance(turn_budget, (int, float)) and turn_budget > 0:
-        budget_max = float(turn_budget)
+    if _session_budget_applies(state, user_message):
+        if isinstance(session_budget, (int, float)) and session_budget > 0:
+            budget_max = float(session_budget)
+        elif isinstance(turn_budget, (int, float)) and turn_budget > 0:
+            budget_max = float(turn_budget)
     graph_context_available = has_graph_hybrid_context(state.get("hybrid_context") or {})
     hybrid_context = state.get("hybrid_context") or {}
-
-    products = extract_search_products(
-        tool_results,
-        budget_max=budget_max,
-        currency=currency,
-        user_message=user_message,
-        graph_context_available=graph_context_available,
-        hybrid_context=hybrid_context,
+    session_product_focus = state.get("session_product_focus")
+    delivery_context_relevant = is_delivery_context_relevant_turn(dict(state), user_message)
+    last_search_products = list(state.get("last_search_products") or [])
+    last_visible_products = list(state.get("last_visible_products") or [])
+    pivot_meta = state.get("intent_metadata")
+    topic_pivot = bool(pivot_meta.get("topic_pivot")) if isinstance(pivot_meta, dict) else False
+    delivery_only = is_delivery_only_inquiry(
+        user_message,
+        intent_metadata=pivot_meta,
     )
+    if delivery_only or is_delivery_fee_question(user_message):
+        fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if fee_reply:
+            tool_trace = state.get("tool_trace")
+            invocation = _last_check_delivery_invocation(tool_trace)
+            prose = fee_reply
+            if invocation is not None and not _is_city_only_check_delivery(invocation):
+                delivery = invocation.get("result")
+                if isinstance(delivery, dict) and delivery.get("available"):
+                    city = _canonical_city_from_check_delivery_invocation(invocation)
+                    checked_date = delivery.get("checked_date")
+                    rate = delivery.get("rate")
+                    delivery_currency = delivery.get("currency") or "LKR"
+                    if city and isinstance(checked_date, str) and isinstance(rate, (int, float)):
+                        prose = _build_verified_dated_delivery_reply(
+                            city=city,
+                            checked_date=checked_date,
+                            rate=float(rate),
+                            currency=str(delivery_currency),
+                        )
+            fee_reply, delivery_status_html = _apply_perishable_delivery_honesty(
+                prose,
+                tool_trace,
+                user_message=user_message,
+                session_product_focus=session_product_focus,
+                delivery_context_relevant=delivery_context_relevant,
+            )
+            return _assistant_response_fields(
+                fee_reply,
+                products_html=None,
+                delivery_status_html=delivery_status_html,
+            )
+    fresh_search = _turn_has_fresh_search(state.get("tool_trace"))
+    allow_stale_fallback = not topic_pivot and not fresh_search and not delivery_only
+
+    if (
+        is_product_detail_turn(user_message)
+        and not delivery_only
+        and not is_delivery_fee_question(
+            user_message,
+        )
+    ):
+        matched = match_product_from_last_search(
+            user_message,
+            state.get("last_search_products"),
+            last_visible_products=last_visible_products or None,
+            session_product_focus=session_product_focus,
+        )
+        get_payload = (tool_results or {}).get(GET_PRODUCT_TOOL)
+        if not is_valid_product_detail_payload(get_payload):
+            get_payload = None
+        product, session_update = resolve_product_detail(
+            get_payload=get_payload,
+            matched=matched,
+            session_resolved=state.get("session_resolved_product"),
+        )
+        if product is not None:
+            detail_reply = summarize_product_from_carousel(product, user_message=user_message)
+            tool_trace = state.get("tool_trace")
+            detail_reply, delivery_status_html = _apply_perishable_delivery_honesty(
+                detail_reply,
+                tool_trace,
+                user_message=user_message,
+                session_product_focus=session_product_focus,
+                delivery_context_relevant=delivery_context_relevant,
+            )
+            products_html = build_products_carousel_html(
+                tool_results,
+                budget_max=budget_max,
+                currency=currency,
+                user_message=user_message,
+                graph_context_available=graph_context_available,
+                hybrid_context=hybrid_context,
+                session_product_focus=session_product_focus,
+                session_occasion=state.get("session_occasion"),
+                session_recipient_hint=state.get("session_recipient_hint"),
+                session_delivery_city=state.get("session_delivery_city_canonical"),
+                last_search_products=state.get("last_search_products"),
+            )
+            response_fields = _assistant_response_fields(
+                detail_reply,
+                products_html=products_html,
+                delivery_status_html=delivery_status_html,
+            )
+            if session_update is not None:
+                response_fields["session_resolved_product"] = session_update
+            return response_fields
+
+    visible_products: list[dict[str, Any]] | None = None
+    if (
+        is_budget_refinement_message(user_message)
+        and last_search_products
+        and budget_max is not None
+        and budget_max > 0
+    ):
+        refined = refine_last_search_by_budget(
+            last_search_products,
+            budget_max=budget_max,
+            currency=currency,
+            session_product_focus=session_product_focus,
+            session_search_query=state.get("session_search_query"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            user_message=user_message,
+            hybrid_context=hybrid_context,
+        )
+        if refined:
+            visible_products = refined
+
+    if visible_products is None:
+        strict_budget = _carousel_strict_budget(user_message, budget_max, state=state)
+        visible_products = extract_search_products(
+            tool_results,
+            budget_max=budget_max,
+            currency=currency,
+            user_message=user_message,
+            graph_context_available=graph_context_available,
+            hybrid_context=hybrid_context,
+            session_product_focus=session_product_focus,
+            session_search_query=state.get("session_search_query"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            session_occasion=state.get("session_occasion"),
+            session_delivery_city=state.get("session_delivery_city_canonical"),
+            strict_budget=strict_budget,
+            last_search_products=last_search_products or None,
+        )
+        if (
+            visible_products
+            and not carousel_focus_guard(visible_products, session_product_focus)
+            and budget_max is not None
+            and budget_max > 0
+        ):
+            refined = refine_last_search_by_budget(
+                last_search_products,
+                budget_max=budget_max,
+                currency=currency,
+                session_product_focus=session_product_focus,
+                session_search_query=state.get("session_search_query"),
+                session_recipient_hint=state.get("session_recipient_hint"),
+                user_message=user_message,
+                hybrid_context=hybrid_context,
+            )
+            if refined:
+                visible_products = refined
+
     products_html = build_products_carousel_html(
         tool_results,
         budget_max=budget_max,
@@ -1135,27 +2258,124 @@ async def generate_response(
         user_message=user_message,
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
+        session_product_focus=session_product_focus,
+        last_search_products=last_search_products or None,
+        last_visible_products=last_visible_products or None,
+        visible_products=visible_products,
+        allow_stale_fallback=allow_stale_fallback,
     )
+
+    # Delivery fee fast-path: answer directly from check_delivery when the user asks
+    # about delivery cost and a verified check_delivery result is available.
+    if is_delivery_fee_question(user_message) and not visible_products:
+        fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if fee_reply:
+            return _assistant_response_fields(
+                fee_reply,
+                products_html=None if delivery_only else products_html,
+            )
+
+    effective_tool_results = _suppress_delivery_tool_results(
+        tool_results,
+        delivery_context_relevant=delivery_context_relevant,
+    )
+    strict_budget = _carousel_strict_budget(user_message, budget_max, state=state)
+
+    if _should_use_discovery_template_fast_path(
+        state,
+        user_message=user_message,
+        visible_products=visible_products,
+    ):
+        reply_text = _build_discovery_template_reply(
+            visible_products,
+            user_message=user_message,
+        )
+        if reply_text:
+            logger.debug(
+                "generate_response: confident discovery template fast-path (%d products)",
+                len(visible_products),
+            )
+            reply_text = normalize_catalog_text(reply_text)
+            reply_text = _prepend_budget_confirmation(
+                reply_text,
+                intent_metadata,
+                budget_max=budget_max,
+                currency=currency,
+            )
+            clarifying = state.get("agent_clarifying_question")
+            reply_text = _maybe_prepend_clarifier(
+                reply_text,
+                clarifying if isinstance(clarifying, str) else None,
+                state=state,
+                user_message=user_message,
+                has_carousel=bool(visible_products or products_html),
+            )
+            tool_trace = state.get("tool_trace")
+            reply_text = delivery_claim_guard(
+                reply_text,
+                tool_trace,
+                user_message=user_message,
+                delivery_city_status=state.get("delivery_city_status"),
+                delivery_city_confirmed=bool(state.get("session_delivery_city_confirmed")),
+                delivery_context_relevant=delivery_context_relevant,
+                state=dict(state),
+            )
+            reply_text, delivery_status_html = _apply_perishable_delivery_honesty(
+                reply_text,
+                tool_trace,
+                user_message=user_message,
+                session_product_focus=session_product_focus,
+                delivery_context_relevant=delivery_context_relevant,
+            )
+            reply_text = _apply_sweetness_preference_note(
+                reply_text,
+                user_message=user_message,
+                state=state,
+                visible_products=visible_products,
+            )
+            return _assistant_response_fields(
+                reply_text,
+                products_html=None if delivery_only else products_html,
+                delivery_status_html=delivery_status_html,
+            )
 
     client = genai_client
     model = select_model(state)
+    _emit_synthesis_status()
     user_prompt = _build_user_prompt(
         user_message,
         _cap_search_products_for_llm_context(
-            tool_results,
+            effective_tool_results,
             budget_max=budget_max,
             currency=currency,
             user_message=user_message,
             graph_context_available=graph_context_available,
             hybrid_context=hybrid_context,
+            session_product_focus=session_product_focus,
+            session_search_query=state.get("session_search_query"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            strict_budget=strict_budget,
         ),
         budget_max=budget_max,
         currency=currency,
+        session_search_query=state.get("session_search_query"),
+        session_occasion=state.get("session_occasion"),
+        session_recipient_hint=state.get("session_recipient_hint"),
+        session_flavor_hint=state.get("session_flavor_hint"),
+        session_delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
     )
 
     zep_memory_facts = state.get("zep_memory_facts")
-    intent_metadata = state.get("intent_metadata")
+    if zep_memory_facts:
+        zep_memory_facts = scope_memory_facts_for_turn(
+            zep_memory_facts,
+            user_message,
+            is_budget_refinement=is_budget_refinement_message(user_message),
+        )
     intent = state.get("intent")
+    session_delivery_city = state.get("session_delivery_city_canonical") or state.get(
+        "delivery_city_canonical",
+    )
     try:
         reply_text = await asyncio.to_thread(
             _generate_reply_sync,
@@ -1163,53 +2383,151 @@ async def generate_response(
             model=model,
             user_prompt=user_prompt,
             zep_memory_facts=zep_memory_facts,
-            intent_metadata=intent_metadata,
+            intent_metadata=pivot_meta,
             intent=intent,
+            delivery_context_relevant=delivery_context_relevant,
+            session_occasion=state.get("session_occasion"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            session_flavor_hint=state.get("session_flavor_hint"),
+            session_budget_max=budget_max,
+            session_delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
+            session_delivery_city=session_delivery_city
+            if isinstance(session_delivery_city, str)
+            else None,
         )
     except Exception as exc:
         if not is_resource_exhausted(exc):
             raise
-        reply_text = _build_discovery_template_reply(products, user_message=user_message)
+        reply_text = _build_discovery_template_reply(visible_products, user_message=user_message)
         logger.warning(
             "generate_response: Gemini rate limited; template fallback (%d products)",
-            len(products),
+            len(visible_products),
             exc_info=True,
         )
 
     if not reply_text:
-        reply_text = _build_discovery_template_reply(products, user_message=user_message) or (
-            "I could not generate a response. Please try again."
+        template = _build_discovery_template_reply(
+            visible_products,
+            user_message=user_message,
         )
+        reply_text = template or "I could not generate a response. Please try again."
 
-    reply_text = decode_html_entities(reply_text)
+    reply_text = normalize_catalog_text(reply_text)
+    # Prepend Sunday-ambiguity clarification before other post-processing
+    if isinstance(pivot_meta, dict) and pivot_meta.get("delivery_date_ambiguous"):
+        clarification = pivot_meta.get("delivery_date_clarification") or ""
+        if clarification and clarification.lower() not in reply_text.lower():
+            reply_text = f"{clarification}\n\n{reply_text.strip()}"
+    reply_text = _prepend_budget_confirmation(
+        reply_text,
+        pivot_meta,
+        budget_max=budget_max,
+        currency=currency,
+    )
+    reply_text = _prepend_situational_empathy(reply_text, pivot_meta)
+    clarifying = state.get("agent_clarifying_question")
+    reply_text = _maybe_prepend_clarifier(
+        reply_text,
+        clarifying if isinstance(clarifying, str) else None,
+        state=state,
+        user_message=user_message,
+        has_carousel=bool(visible_products or products_html),
+    )
     tool_trace = state.get("tool_trace")
     reply_text = delivery_claim_guard(
         reply_text,
         tool_trace,
         user_message=user_message,
+        delivery_city_status=state.get("delivery_city_status"),
+        delivery_city_confirmed=bool(state.get("session_delivery_city_confirmed")),
+        delivery_context_relevant=delivery_context_relevant,
+        state=dict(state),
     )
+    if delivery_context_relevant:
+        reply_text = _apply_verified_dated_delivery_template(reply_text, tool_trace)
     reply_text = carousel_consistency_guard(
         reply_text,
-        products,
+        visible_products,
+        user_message=user_message,
+        budget_max=budget_max,
+        currency=currency,
+        strict_budget=strict_budget,
+    )
+    reply_text = stock_consistency_guard(
+        reply_text,
+        visible_products,
         user_message=user_message,
     )
     reply_text = _apply_artificial_floral_honesty(
         reply_text,
-        products,
+        visible_products,
         user_message=user_message,
     )
-    reply_text, delivery_status_html = _apply_perishable_delivery_honesty(reply_text, tool_trace)
+    reply_text = _apply_sweetness_preference_note(
+        reply_text,
+        user_message=user_message,
+        state=state,
+        visible_products=visible_products,
+    )
+    reply_text, delivery_status_html = _apply_perishable_delivery_honesty(
+        reply_text,
+        tool_trace,
+        user_message=user_message,
+        session_product_focus=session_product_focus,
+        delivery_context_relevant=delivery_context_relevant,
+    )
+
+    if (
+        pending_clarifier
+        and has_carousel_products
+        and not _should_skip_delivery_date_clarifier_with_carousel(
+            state,
+            user_message,
+            pending_clarifier,
+            has_carousel=True,
+        )
+    ):
+        context_clarifier = build_context_aware_clarifier(
+            pending_clarifier,
+            session_occasion=state.get("session_occasion"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            session_flavor_hint=state.get("session_flavor_hint"),
+            session_budget_max=budget_max,
+            session_delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
+            session_delivery_city=state.get("session_delivery_city_canonical")
+            or state.get("delivery_city_canonical"),
+        )
+        if context_clarifier.lower() not in reply_text.lower():
+            reply_text = f"{reply_text.rstrip()}\n\n{context_clarifier}"
+
+    if delivery_only:
+        products_html = None
+        visible_products = None
 
     logger.info(
         "generate_response: rendered assistant reply (%d chars, carousel=%s)",
         len(reply_text),
         bool(products_html),
     )
-    return {
-        "response_html": render_assistant_html(
-            reply_text,
-            products_html=products_html,
-            delivery_status_html=delivery_status_html,
-        ),
-        "assistant_message": reply_text,
-    }
+    updates: dict[str, Any] = _assistant_response_fields(
+        reply_text,
+        products_html=products_html,
+        delivery_status_html=delivery_status_html,
+    )
+    if visible_products:
+        updates["last_visible_products"] = visible_products
+    if topic_pivot:
+        updates["last_visible_products"] = visible_products or None
+        updates["last_search_products"] = visible_products or None
+    if isinstance(pivot_meta, dict) and (
+        pivot_meta.get("budget_confirmation_pending") or pivot_meta.get("delivery_date_ambiguous")
+    ):
+        cleared = dict(pivot_meta)
+        cleared["budget_confirmation_pending"] = False
+        cleared["delivery_date_ambiguous"] = False
+        updates["intent_metadata"] = cast(IntentMetadata, cleared)
+    effective_results = _resolve_effective_tool_results(state)
+    get_payload = (effective_results or {}).get(GET_PRODUCT_TOOL)
+    if is_valid_product_detail_payload(get_payload):
+        updates["session_resolved_product"] = normalize_resolved_product(get_payload)
+    return updates

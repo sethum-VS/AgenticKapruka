@@ -2,187 +2,156 @@
 
 {% block title %}{{ title | default("Chat — AgenticKapruka") }}{% endblock %}
 
-{% block head_extra %}
-<script src="/static/js/chat-helpers.js"></script>
-<script src="/static/js/lazy-image.js"></script>
-<script src="/static/js/payment-countdown.js"></script>
-{% endblock %}
+{% block head_extra %}{% endblock %}
 
-{% block header_start %}
-<div class="flex min-w-0 items-center gap-3">
-  <span
-    class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-kapruka-600 text-sm font-semibold text-white"
-    aria-hidden="true"
-  >K</span>
-  <div class="min-w-0">
-    <h1 class="text-base font-semibold text-commerce-ink">Kapruka Gift Assistant</h1>
-    <p class="text-xs text-commerce-muted">Discover gifts, cakes, and flowers across Sri Lanka</p>
-  </div>
-</div>
-{% endblock %}
+{% block body %}
+{% include "components/sidebar_nav.html" %}
 
-{% block content %}
-<main
-  id="app"
-  class="mx-auto flex w-full max-w-3xl min-h-0 flex-1 flex-col px-4 py-6 sm:px-6"
-  x-data="chatHelpers()"
->
+<main class="relative ml-0 flex h-screen flex-1 flex-col bg-canvas md:ml-[280px]">
+  <header
+    class="sticky top-0 z-40 flex h-[72px] w-full items-center justify-between border-b border-surface-variant bg-white/80 px-margin-page py-stack-sm backdrop-blur-md"
+  >
+    <div class="flex min-w-0 items-center">
+      <button
+        type="button"
+        class="mr-4 text-primary md:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-lg p-1"
+        aria-label="Open navigation menu"
+        data-testid="mobile-menu-button"
+        @click="sidebarOpen = true"
+      >
+        <span class="material-symbols-outlined text-[24px]" aria-hidden="true">menu</span>
+      </button>
+      <h1 class="truncate text-headline-md font-headline-md font-extrabold text-primary">
+        Kapruka Gift Assistant
+      </h1>
+    </div>
+    <div class="flex shrink-0 items-center gap-3">
+      {% include "components/cart_drawer_trigger.html" %}
+      {% include "components/currency_selector.html" %}
+    </div>
+  </header>
+
   <div
-    id="chat-messages"
-    x-ref="messages"
-    class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto"
-    role="log"
-    aria-live="polite"
-    aria-label="Chat messages"
+    id="app"
+    class="mx-auto flex w-full max-w-4xl min-h-0 flex-1 flex-col"
+    x-data="chatHelpers()"
   >
     <div
-      id="chat-empty-state"
-      class="flex flex-1 flex-col items-center justify-center px-4 py-12 text-center"
+      id="chat-messages"
+      x-ref="messages"
+      class="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-margin-page py-8 pb-[140px]"
+      role="log"
+      aria-live="polite"
+      aria-label="Chat messages"
     >
-      <div class="card-commerce max-w-md p-8">
-        <p class="mb-1 text-sm font-medium uppercase tracking-wide text-kapruka-600">
-          Welcome
-        </p>
-        <h2 class="mb-2 text-xl font-semibold text-commerce-ink">
-          What would you like to send today?
-        </h2>
-        <p class="mb-6 text-sm leading-relaxed text-commerce-muted">
-          Ask me to find birthday cakes, fresh flowers, thoughtful combos, or check delivery
-          to any city in Sri Lanka.
-        </p>
+      {% include "chat/empty_state.html" %}
+    </div>
+  </div>
 
-        <p class="mb-3 text-xs font-medium uppercase tracking-wide text-commerce-muted">
-          Try asking
-        </p>
-        <ul class="flex flex-col gap-2 text-left" role="list">
-          <li>
-            <button
-              type="button"
-              data-chat-suggestion="Birthday cake for mom in Colombo"
-              class="block w-full rounded-lg border border-commerce-parchment bg-commerce-cream px-4 py-3 text-left text-sm text-commerce-ink transition hover:border-kapruka-300 hover:bg-kapruka-50 focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
-            >
-              Birthday cake for mom in Colombo
-            </button>
-          </li>
-          <li>
-            <button
-              type="button"
-              data-chat-suggestion="Fresh roses delivery to Galle tomorrow"
-              class="block w-full rounded-lg border border-commerce-parchment bg-commerce-cream px-4 py-3 text-left text-sm text-commerce-ink transition hover:border-kapruka-300 hover:bg-kapruka-50 focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
-            >
-              Fresh roses delivery to Galle tomorrow
-            </button>
-          </li>
-          <li>
-            <button
-              type="button"
-              data-chat-suggestion="Gift ideas under Rs. 5,000"
-              class="block w-full rounded-lg border border-commerce-parchment bg-commerce-cream px-4 py-3 text-left text-sm text-commerce-ink transition hover:border-kapruka-300 hover:bg-kapruka-50 focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
-            >
-              Gift ideas under Rs. 5,000
-            </button>
-          </li>
-          <li>
-            <button
-              type="button"
-              data-chat-suggestion="Track order VIMP34456CB2"
-              class="block w-full rounded-lg border border-commerce-parchment bg-commerce-cream px-4 py-3 text-left text-sm text-commerce-ink transition hover:border-kapruka-300 hover:bg-kapruka-50 focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
-            >
-              Track order VIMP34456CB2
-            </button>
-          </li>
-        </ul>
-      </div>
+  <div
+    class="absolute bottom-0 left-0 z-[60] w-full border-t border-surface-variant bg-white/95 p-4 backdrop-blur-md"
+  >
+    <div class="mx-auto max-w-4xl">
+      <form
+        id="chat-form"
+        hx-post="/chat/stream"
+        hx-ext="sse"
+        sse-connect="/chat/stream"
+        hx-trigger="submit"
+        hx-indicator="#chat-loading"
+        class="relative"
+        {% if debug_trace %}data-chat-debug="true"{% endif %}
+      >
+        <div
+          id="chat-sse-listener"
+          sse-swap="message,status,carousel,done"
+          hx-target="#chat-messages"
+          hx-swap="beforeend"
+          hidden
+          aria-hidden="true"
+        ></div>
+        <div
+          class="flex items-end gap-2 rounded-xl border border-outline-variant/40 bg-canvas p-2 transition-colors focus-within:border-primary"
+        >
+          <label for="chat-message" class="sr-only">Message</label>
+          <textarea
+            id="chat-message"
+            x-ref="input"
+            name="message"
+            rows="1"
+            required
+            placeholder="Type a message…"
+            class="max-h-32 min-h-[44px] w-full resize-none border-0 bg-transparent py-2.5 text-body-md font-body-md text-on-surface placeholder:text-outline outline-none focus:border-0 focus:outline-none focus:ring-0"
+            style="min-height: 44px;"
+          ></textarea>
+          <button
+            type="submit"
+            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary text-on-primary transition-colors hover:bg-primary-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            aria-label="Send message"
+          >
+            <span class="material-symbols-outlined material-symbols-filled text-[20px]" aria-hidden="true">send</span>
+          </button>
+        </div>
+
+        <div
+          id="chat-loading"
+          class="htmx-indicator absolute -top-8 left-0 flex items-center gap-2 text-label-sm text-on-surface-variant"
+          aria-live="polite"
+          aria-label="Sending message"
+        >
+          <svg
+            class="h-4 w-4 animate-spin text-primary"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <circle
+              class="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              stroke-width="4"
+            ></circle>
+            <path
+              class="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            ></path>
+          </svg>
+          <span data-testid="chat-loading-text">Sending…</span>
+        </div>
+      </form>
+      <p class="mt-2 text-center text-[11px] text-outline">
+        Kapruka Gift Assistant can make mistakes. Verify important information.
+      </p>
     </div>
   </div>
 </main>
 {% endblock %}
 
-{% block footer %}
-<footer class="border-t border-commerce-parchment bg-white/80 backdrop-blur-sm">
-  <div class="mx-auto max-w-3xl px-4 py-4 sm:px-6">
-    <form
-      id="chat-form"
-      hx-post="/chat/stream"
-      hx-ext="sse"
-      sse-connect="/chat/stream"
-      hx-trigger="submit"
-      hx-indicator="#chat-loading"
-      class="relative"
-      {% if debug_trace %}data-chat-debug="true"{% endif %}
-    >
-      <div
-        id="chat-sse-listener"
-        sse-swap="message,status"
-        hx-target="#chat-messages"
-        hx-swap="beforeend"
-        hidden
-        aria-hidden="true"
-      ></div>
-      <div class="flex items-end gap-3">
-        <label for="chat-message" class="sr-only">Message</label>
-        <textarea
-          id="chat-message"
-          x-ref="input"
-          name="message"
-          rows="2"
-          required
-          placeholder="Ask about gifts, cakes, flowers, or delivery…"
-          class="min-h-[2.75rem] flex-1 resize-none rounded-xl border border-commerce-parchment bg-white px-4 py-3 text-sm text-commerce-ink placeholder:text-commerce-muted focus:border-kapruka-500 focus:outline-none focus:ring-2 focus:ring-kapruka-500/20"
-        ></textarea>
-        <button type="submit" class="btn-primary shrink-0 px-5 py-3">
-          Send
-        </button>
-      </div>
-
-      <div
-        id="chat-loading"
-        class="htmx-indicator absolute -top-8 left-0 flex items-center gap-2 text-xs text-commerce-muted"
-        aria-live="polite"
-        aria-label="Sending message"
-      >
-        <svg
-          class="h-4 w-4 animate-spin text-kapruka-600"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <circle
-            class="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            stroke-width="4"
-          ></circle>
-          <path
-            class="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-          ></path>
-        </svg>
-        <span>Sending…</span>
-      </div>
-    </form>
-  </div>
-</footer>
-<script>
-  (function () {
-    const form = document.getElementById("chat-form");
-    if (!form) {
-      return;
-    }
-    form.dataset.chatStreamPath = form.getAttribute("sse-connect") || "/chat/stream";
-    form.removeAttribute("hx-post");
-    form.removeAttribute("hx-trigger");
-    form.removeAttribute("sse-connect");
-    form.removeAttribute("hx-ext");
-    form.dataset.chatSseReady = "true";
-  })();
-</script>
+{% block pre_alpine_scripts %}
+<script defer src="/static/js/chat-helpers.js"></script>
+<script defer src="/static/js/lazy-image.js"></script>
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/chat-sse.js"></script>
+<script defer src="/static/js/payment-countdown.js"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    const textarea = document.getElementById("chat-message");
+    if (!textarea) {
+      return;
+    }
+    textarea.addEventListener("input", function () {
+      this.style.height = "auto";
+      this.style.height = `${this.scrollHeight}px`;
+      if (this.value === "") {
+        this.style.height = "44px";
+      }
+    });
+  });
+</script>
+<script defer src="/static/js/chat-sse.js"></script>
 {% endblock %}

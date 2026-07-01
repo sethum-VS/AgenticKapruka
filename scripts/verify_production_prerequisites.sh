@@ -119,6 +119,49 @@ else
 fi
 
 echo
+echo "Neo4j GraphRAG indexes"
+if [[ -n "${NEO4J_URI:-}" ]]; then
+  if PYTHONPATH=. .venv/bin/python - <<'PY' 2>/dev/null; then
+import asyncio
+import sys
+
+from app.config import get_settings
+from lib.neo4j.client import Neo4jClient
+from lib.neo4j.vector_search import has_category_vector_index, has_occasion_vector_index
+
+
+async def main() -> int:
+    settings = get_settings()
+    client = await Neo4jClient.connect(
+        settings.neo4j_uri,
+        settings.neo4j_user,
+        settings.neo4j_password,
+    )
+    try:
+        category_ok = await has_category_vector_index(client)
+        occasion_ok = await has_occasion_vector_index(client)
+    finally:
+        await client.close()
+    if category_ok and occasion_ok:
+        return 0
+    if not category_ok:
+        print("missing Category vector index", file=sys.stderr)
+    if not occasion_ok:
+        print("missing Occasion vector index", file=sys.stderr)
+    return 1
+
+
+raise SystemExit(asyncio.run(main()))
+PY
+    check "Neo4j Category + Occasion vector indexes" ok
+  else
+    check "Neo4j vector indexes (run python scripts/bootstrap_neo4j.py)" fail
+  fi
+else
+  check "NEO4J_URI not set (skip GraphRAG index verification)" warn
+fi
+
+echo
 echo "Summary: ${PASS} ok, ${WARN} warn, ${FAIL} fail"
 if [[ "${FAIL}" -gt 0 ]]; then
   echo "Fix failures before first deploy. See docs/DEPLOY.md" >&2

@@ -29,6 +29,15 @@ CheckoutStep = Literal[
     "finalize",
 ]
 CurrencyCode = Literal["LKR", "USD", "GBP", "AUD", "CAD", "EUR"]
+ActiveFlow = Literal[
+    "checkout_active",
+    "awaiting_delivery_date",
+    "awaiting_clarification",
+    "carousel_context",
+    "delivery_resolution",
+    "free_discovery",
+]
+MasterFlowDecision = Literal["proceed", "clarify", "pivot", "redirect", "checkout_exit"]
 
 
 class ToolInvocation(TypedDict):
@@ -60,8 +69,21 @@ class AgentState(TypedDict):
     zep_thread_id: str | None
     currency: CurrencyCode | None
     session_budget_max: float | None
+    session_budget_currency: CurrencyCode | None
     session_delivery_city_canonical: str | None
+    session_delivery_date: str | None
+    session_product_focus: str | None
+    session_situational: bool | None
+    session_flavor_hint: str | None
+    session_search_query: str | None
+    session_occasion: str | None
+    session_recipient_hint: str | None
     session_awaiting_delivery_date: bool | None
+    session_awaiting_clarification_dimension: Literal["product", "occasion", "budget"] | None
+    specificity_score: float | None
+    specificity_band: Literal["proceed", "clarify", "ambiguous"] | None
+    session_delivery_city_confirmed: bool | None
+    session_shipment_address_raw: str | None
     delivery_city_raw: str | None
     delivery_city_canonical: str | None
     delivery_city_status: DeliveryCityStatus | None
@@ -70,8 +92,17 @@ class AgentState(TypedDict):
     delivery_context_ready: bool | None
     checkout_state: CheckoutStep | None
     response_html: str | None
+    carousel_html: str | None
     assistant_message: str | None
     zep_memory_facts: list[str] | None
     last_search_products: list[dict[str, Any]] | None
+    last_visible_products: list[dict[str, Any]] | None
+    session_resolved_product: dict[str, Any] | None
     search_broaden_applied: bool | None
     cart_action_result: dict[str, Any] | None
+    master_flow_invoked: bool | None
+    master_flow_decision: MasterFlowDecision | None
+    master_clarifying_question: str | None
+    master_flow_mismatch_reason: str | None
+    active_flow: ActiveFlow | None
+    checkout_paused: bool | None

@@ -12,8 +12,10 @@ from google.genai.client import Client as GenaiClient
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.config import Settings, get_settings
+from lib.embeddings.embedding_cache import get_cached_embedding, set_cached_embedding
 from lib.genai.client import create_genai_client
 from lib.genai.errors import is_resource_exhausted
+from lib.redis.client import RedisClient
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +23,8 @@ EMBEDDING_MODEL = "gemini-embedding-2"
 EMBEDDING_DIMENSION = 768
 # gemini-embedding-2 is served from the global Vertex endpoint (not regional).
 EMBEDDING_LOCATION = "global"
-# Pace requests to stay under per-minute global_embed_content quotas on new projects.
-_EMBED_REQUEST_INTERVAL_SEC = 1.5
+# Pace uncached embed API calls; Redis cache avoids this on repeat queries.
+_EMBED_REQUEST_INTERVAL_SEC = 0.35
 
 _embedding_client: GenaiClient | None = None
 _last_embed_request_at: float = 0.0
@@ -104,16 +106,31 @@ async def embed_texts(
     *,
     settings: Settings | None = None,
     client: GenaiClient | None = None,
+    redis_client: RedisClient | None = None,
 ) -> list[list[float]]:
     """Embed texts via gemini-embedding-2; returns one 768-dim vector per input."""
     if not texts:
         return []
 
+    if redis_client is not None and len(texts) == 1:
+        stripped = texts[0].strip()
+        if stripped:
+            cached = await get_cached_embedding(redis_client, stripped)
+            if cached is not None:
+                return [cached]
+
     cfg = settings or get_settings()
     embedding_client = client or _get_embedding_client(settings=cfg)
-    return await asyncio.to_thread(
+    vectors = await asyncio.to_thread(
         _embed_texts_sync,
         texts,
         client=embedding_client,
         output_dimensionality=EMBEDDING_DIMENSION,
     )
+
+    if redis_client is not None and len(texts) == 1 and vectors:
+        stripped = texts[0].strip()
+        if stripped:
+            await set_cached_embedding(redis_client, stripped, vectors[0])
+
+    return vectors

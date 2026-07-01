@@ -71,6 +71,21 @@ class Settings(BaseSettings):
         le=1.0,
         description="Minimum cross-encoder score to keep Occasion/Category traversal nodes",
     )
+    master_flow_enabled: bool = Field(
+        default=True,
+        description="Enable flow-state supervisor after analyze_intent on conflict triggers",
+    )
+    master_flow_long_session_turns: int = Field(
+        default=8,
+        ge=2,
+        description="Human turn count before long-session drift can trigger master_flow",
+    )
+    master_flow_confidence_threshold: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="Minimum Flash confidence before master_flow patches are applied",
+    )
     kapruka_lora_endpoint_id: str | None = Field(
         default=None,
         description=(

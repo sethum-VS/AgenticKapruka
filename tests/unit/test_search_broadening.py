@@ -11,6 +11,34 @@ from lib.chat.search_broadening import (
 )
 
 
+def test_broaden_strip_occasion_category_anniversary_flowers() -> None:
+    args = {"q": "anniversary flowers", "category": "Flowers", "currency": "LKR"}
+    broadened = broaden_search_args(args, "strip_occasion_category")
+    assert broadened is not None
+    assert broadened["q"] == "anniversary flowers"
+    assert "category" not in broadened
+
+
+def test_broaden_strip_occasion_category_noop_without_category() -> None:
+    args = {"q": "anniversary flowers", "currency": "LKR"}
+    assert broaden_search_args(args, "strip_occasion_category") is None
+
+
+def test_broaden_strip_occasion_category_noop_without_anniversary() -> None:
+    args = {"q": "fresh roses bouquet", "category": "Flowers", "currency": "LKR"}
+    assert broaden_search_args(args, "strip_occasion_category") is None
+
+
+def test_first_applicable_broaden_step_strip_category_before_simplify() -> None:
+    args = {
+        "q": "anniversary flowers",
+        "category": "Flowers",
+        "currency": "LKR",
+        "max_price": 30.0,
+    }
+    assert first_applicable_broaden_step(args) == "strip_occasion_category"
+
+
 def test_broaden_gift_voucher_fallback_rewrites_gift_query() -> None:
     args = {"q": "gift ideas under 5000", "currency": "LKR", "max_price": 5000.0}
     broadened = broaden_search_args(args, "gift_voucher_fallback")
@@ -29,9 +57,9 @@ def test_broaden_gift_voucher_fallback_noop_when_already_voucher() -> None:
     assert broaden_search_args(args, "gift_voucher_fallback") is None
 
 
-def test_first_applicable_broaden_step_gift_query_prefers_voucher_fallback() -> None:
-    args = {"q": "gift ideas", "currency": "LKR", "max_price": 5000.0}
-    assert first_applicable_broaden_step(args) == "gift_voucher_fallback"
+def test_first_applicable_broaden_step_simplify_before_voucher_fallback() -> None:
+    args = {"q": "birthday cake for mom in Kandy", "currency": "LKR", "max_price": 5000.0}
+    assert first_applicable_broaden_step(args) == "simplify_q"
 
 
 def test_broaden_simplify_q_skips_birthday_category_filter() -> None:
@@ -52,6 +80,11 @@ def test_broaden_strip_city_removes_in_kandy() -> None:
     broadened = broaden_search_args(args, "strip_city")
     assert broadened is not None
     assert broadened["q"] == "cake for mom"
+
+
+def test_broaden_drop_max_price_skipped_when_preserve_max_price() -> None:
+    args = {"q": "cake", "currency": "LKR", "max_price": 30.0, "sort": "price_asc"}
+    assert first_applicable_broaden_step(args, preserve_max_price=True) is None
 
 
 def test_broaden_drop_max_price() -> None:
@@ -101,9 +134,10 @@ def test_apply_first_broaden_returns_one_step() -> None:
 
 def test_broaden_ladder_order_constant() -> None:
     assert BROADEN_LADDER == (
-        "gift_voucher_fallback",
+        "strip_occasion_category",
         "simplify_q",
         "strip_city",
+        "gift_voucher_fallback",
         "drop_max_price",
     )
 

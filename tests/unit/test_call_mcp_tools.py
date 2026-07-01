@@ -11,8 +11,13 @@ from graphs.nodes.call_mcp_tools import call_mcp_tools, select_tool_calls
 from graphs.state import AgentState
 from lib.kapruka.errors import KaprukaNotFoundError
 from lib.kapruka.service import KaprukaService
-from lib.kapruka.tool_executor import canonical_tool_args_for_dedup, invoke_tool
-from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
+from lib.kapruka.tool_executor import (
+    canonical_tool_args_for_dedup,
+    enrich_get_product_args,
+    invoke_tool,
+    normalize_planner_tool_args,
+)
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
@@ -574,3 +579,95 @@ def test_canonical_tool_args_for_dedup_normalizes_query_alias() -> None:
     left = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"q": "cakes"})
     right = canonical_tool_args_for_dedup(SEARCH_PRODUCTS_TOOL, {"query": "cakes"})
     assert left == right
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_list_delivery_cities() -> None:
+    """kapruka_list_delivery_cities is wired through invoke_tool."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.list_delivery_cities.return_value = ["Colombo 03", "Colombo 07"]
+
+    result = await invoke_tool(
+        LIST_CITIES_TOOL,
+        {"query": "Colombo"},
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+    )
+
+    assert "error" not in result
+    assert result["total_matched"] == 2
+    assert [city["name"] for city in result["cities"]] == ["Colombo 03", "Colombo 07"]
+    mock_service.list_delivery_cities.assert_awaited_once()
+
+
+def test_normalize_check_delivery_city_aliases() -> None:
+    """delivery_city / city_name / destination map to city; stray q is stripped."""
+    args = normalize_planner_tool_args(
+        CHECK_DELIVERY_TOOL,
+        {"delivery_city": "Colombo 03", "q": "cakes", "date": "2026-06-15"},
+    )
+    assert args["city"] == "Colombo 03"
+    assert "delivery_city" not in args
+    assert "q" not in args
+    assert args["delivery_date"] == "2026-06-15"
+
+
+def test_enrich_get_product_resolves_from_carousel() -> None:
+    """Product name in tool args resolves to carousel product_id."""
+    state: AgentState = {
+        "last_search_products": [
+            {"id": "cake00ka002034", "name": "Chocolate Birthday Cake"},
+        ],
+    }
+    enriched, error = enrich_get_product_args(
+        {"q": "Chocolate Birthday Cake"},
+        state,
+    )
+    assert error is None
+    assert enriched["product_id"] == "cake00ka002034"
+
+
+def test_enrich_get_product_resolves_possessive_name_from_carousel() -> None:
+    state: AgentState = {
+        "last_search_products": [
+            {"id": "cake00amma001", "name": "Ammas Delightful Creation"},
+        ],
+    }
+    enriched, error = enrich_get_product_args(
+        {"q": "Amma's Delightful Creation"},
+        state,
+    )
+    assert error is None
+    assert enriched["product_id"] == "cake00amma001"
+
+
+def test_enrich_get_product_unresolved_returns_error() -> None:
+    state: AgentState = {"last_search_products": []}
+    _enriched, error = enrich_get_product_args({"q": "mystery item"}, state)
+    assert error is not None
+    assert error.get("error") == "product_id_unresolved"
+
+
+def test_enrich_get_product_replaces_numeric_hallucinated_id_from_carousel() -> None:
+    """Planner numeric product_id should resolve to carousel match on detail turns."""
+    from langchain_core.messages import HumanMessage
+
+    carousel = [
+        {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "summary": "Pastel ribbon cake.",
+        },
+    ]
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content="How much does the Springtime Birthday Ribbon Cake weigh?",
+            ),
+        ],
+        "last_search_products": carousel,
+        "last_visible_products": carousel,
+    }
+    enriched, error = enrich_get_product_args({"product_id": "12345"}, state)
+    assert error is None
+    assert enriched["product_id"] == "CAKE00KA001685"

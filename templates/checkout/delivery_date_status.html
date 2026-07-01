@@ -5,7 +5,7 @@
   data-testid="delivery-date-available"
   data-available="true"
 >
-  <p class="font-medium">Delivery available on {{ result.checked_date }}</p>
+  <p class="font-medium">Delivery available on {{ result.checked_date | format_delivery_date }}</p>
   <p>Flat delivery rate: {{ result.rate | format_currency(result.currency) }} per order.</p>
   {% if result.perishable_warning %}
   <p class="mt-1 text-amber-800">{{ result.perishable_warning }}</p>
@@ -17,12 +17,12 @@
   data-testid="delivery-date-unavailable"
   data-available="false"
 >
-  <p class="font-medium">Delivery not available on {{ result.checked_date }}</p>
+  <p class="font-medium">Delivery not available on {{ result.checked_date | format_delivery_date }}</p>
   {% if result.reason %}
   <p>{{ result.reason }}</p>
   {% endif %}
   {% if result.next_available_date %}
-  <p class="mt-1">Next available date: <strong>{{ result.next_available_date }}</strong></p>
+  <p class="mt-1">Next available date: <strong>{{ result.next_available_date | format_delivery_date }}</strong></p>
   {% endif %}
 </div>
 {% endif %}

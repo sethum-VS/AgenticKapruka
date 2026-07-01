@@ -41,8 +41,38 @@ def test_chunk_text_splits_words() -> None:
 
 
 @pytest.mark.asyncio
+async def test_iter_chat_sse_events_skips_catalog_status_for_tracking_intent() -> None:
+    """Tracking turns must not emit misleading Searching our catalog status."""
+    mock_graph = MagicMock()
+
+    async def empty_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        if False:
+            yield ("updates", {})
+
+    mock_graph.astream = empty_astream
+
+    events: list[str] = []
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={"intent": "tracking", "messages": []},
+        config={"configurable": {"thread_id": "t-track"}},
+        user_html='<div id="user">track</div>',
+        stream_id="track1",
+    ):
+        events.append(event)
+
+    assert len(events) == 2
+    assert 'data: <div id="user">track</div>' in events[0]
+    assert not any("Searching our catalog" in event for event in events)
+
+
+@pytest.mark.asyncio
 async def test_iter_chat_sse_events_yields_thinking_bubble_on_stream_start() -> None:
-    """User turn is followed by pending bubble and early Searching Kapruka status SSE."""
+    """User turn is followed by pending bubble and early Searching our catalog status SSE."""
     mock_graph = MagicMock()
 
     async def empty_astream(
@@ -67,11 +97,11 @@ async def test_iter_chat_sse_events_yields_thinking_bubble_on_stream_start() -> 
 
     assert len(events) >= 3
     assert 'data: <div id="user">hi</div>' in events[0]
-    assert "Searching Kapruka…" in events[1]
+    assert "Searching our catalog…" in events[1]
     assert 'id="assistant-stream-abc123"' in events[1]
     assert 'hx-swap-oob="outerHTML"' not in events[1]
     assert events[2].startswith("event: status\n")
-    assert "Searching Kapruka…" in events[2]
+    assert "Searching our catalog…" in events[2]
     assert 'hx-swap-oob="outerHTML"' in events[2]
 
 
@@ -103,7 +133,7 @@ async def test_iter_chat_sse_events_maps_custom_status_to_status_sse() -> None:
 
     status_events = [event for event in events if event.startswith("event: status\n")]
     assert len(status_events) == 2
-    assert "Searching Kapruka…" in status_events[0]
+    assert "Searching our catalog…" in status_events[0]
     assert "Checking delivery…" in status_events[1]
     assert 'id="assistant-stream-status1"' in status_events[0]
     assert 'hx-swap-oob="outerHTML"' in status_events[0]
@@ -143,13 +173,14 @@ async def test_iter_chat_sse_events_yields_user_then_assistant_chunks() -> None:
 
     assert len(events) >= 5
     assert 'data: <div id="user">hi</div>' in events[0]
-    assert "Searching Kapruka…" in events[1]
+    assert "Searching our catalog…" in events[1]
     assert events[2].startswith("event: status\n")
-    assert "Searching Kapruka…" in events[2]
+    assert "Searching our catalog…" in events[2]
     assert any("assistant-stream-" in event for event in events[3:])
-    assert "Hello from Kapruka assistant." in events[-1]
-    assert 'aria-label="Assistant message"' in events[-1]
-    assert 'hx-swap-oob="delete"' in events[-1]
+    assert any("Hello from Kapruka assistant." in event for event in events)
+    assert any('aria-label="Assistant message"' in event for event in events)
+    assert any('hx-swap-oob="delete"' in event for event in events)
+    assert events[-1].startswith("event: done\n")
 
 
 @pytest.mark.asyncio
@@ -187,6 +218,70 @@ async def test_iter_chat_sse_events_yields_timeout_partial_on_wall_clock_exceed(
 
 
 @pytest.mark.asyncio
+async def test_iter_chat_sse_events_emits_carousel_event_when_split() -> None:
+    """Carousel markup streams on a dedicated SSE event after the text bubble."""
+    from graphs.nodes.generate_response import (
+        build_products_carousel_html,
+        render_assistant_html,
+        render_carousel_oob_html,
+    )
+
+    products_html = build_products_carousel_html(
+        {
+            "kapruka_search_products": {
+                "results": [
+                    {
+                        "id": "cake00ka002034",
+                        "name": "Chocolate Birthday Cake",
+                        "price": {"amount": 4500, "currency": "LKR"},
+                        "in_stock": True,
+                    }
+                ]
+            }
+        }
+    )
+    assert products_html is not None
+    slot_id = "carousel-slot-test"
+    assistant_html = render_assistant_html("Here are cakes.", carousel_slot_id=slot_id)
+    carousel_oob = render_carousel_oob_html(products_html, carousel_slot_id=slot_id)
+
+    mock_graph = MagicMock()
+
+    async def fake_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        yield (
+            "updates",
+            {
+                "generate_response": {
+                    "response_html": assistant_html,
+                    "carousel_html": carousel_oob,
+                    "assistant_message": "Here are cakes.",
+                },
+            },
+        )
+
+    mock_graph.astream = fake_astream
+
+    events: list[str] = []
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={},
+        config={"configurable": {"thread_id": "t-carousel"}},
+        user_html="<p>user</p>",
+        stream_id="carousel1",
+    ):
+        events.append(event)
+
+    carousel_events = [event for event in events if event.startswith("event: carousel\n")]
+    assert len(carousel_events) == 1
+    assert 'data-testid="product-carousel"' in carousel_events[0]
+    assert 'hx-swap-oob="outerHTML"' in carousel_events[0]
+
+
+@pytest.mark.asyncio
 async def test_iter_chat_sse_events_emits_error_event_on_graph_failure() -> None:
     """Unhandled graph errors yield a user-visible SSE error fragment."""
     mock_graph = MagicMock()
@@ -212,7 +307,7 @@ async def test_iter_chat_sse_events_emits_error_event_on_graph_failure() -> None
         collected.append(event)
 
     assert collected
-    assert "Searching Kapruka…" in collected[1]
-    assert "Something went wrong" in collected[-1]
-    assert sum("Something went wrong" in event for event in collected) == 1
-    assert 'hx-swap-oob="delete"' in collected[-1]
+    assert "Searching our catalog…" in collected[1]
+    assert any("Something went wrong" in event for event in collected)
+    assert any('hx-swap-oob="delete"' in event for event in collected)
+    assert collected[-1].startswith("event: done\n")

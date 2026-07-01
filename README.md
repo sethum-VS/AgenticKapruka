@@ -4,7 +4,7 @@
 [![Language: Python](https://img.shields.io/badge/Language-Python%203.12+-blue.svg)](https://www.python.org/)
 [![UI: HTMX](https://img.shields.io/badge/UI-HTMX%20%2B%20Tailwind-38B2AC.svg)](https://htmx.org/)
 [![Agent: LangGraph](https://img.shields.io/badge/Agent-LangGraph-1C3C3C.svg)](https://langchain-ai.github.io/langgraph/)
-[![Version](https://img.shields.io/badge/Version-0.0.8.0-informational.svg)](VERSION)
+[![Version](https://img.shields.io/badge/Version-0.0.15.2-informational.svg)](VERSION)
 
 An agentic shopping assistant for [Kapruka](https://www.kapruka.com), Sri Lanka's largest e-commerce platform. Customers browse gifts, get personalized recommendations, complete multi-step checkout in natural language, and track deliveries — all through a single chat interface backed by live Kapruka product data.
 
@@ -16,10 +16,14 @@ AgenticKapruka combines conversational AI (Google Gemini on Vertex AI), a knowle
 
 | Capability | What it means for shoppers |
 | --- | --- |
-| **Natural-language discovery** | Ask for gifts by occasion, budget, or recipient — the assistant searches Kapruka's live catalog and shows product carousels in chat. |
+| **Concierge chat workspace** | Purple sidebar nav, suggestion chips, fixed composer, and a **New Session** control that rotates the chat thread while preserving cart items. |
+| **Natural-language discovery** | Ask for gifts by occasion, budget, or recipient — a bounded agent loop searches Kapruka's live catalog and shows curated product carousels in chat. |
+| **Smart clarifying questions** | Vague requests ("gift ideas") trigger specificity scoring before search — the assistant asks for product type, occasion, or budget instead of guessing. |
+| **Carousel references** | Say "add the first one" or "that cake" to cart the product from the last carousel without repeating the name. |
 | **Personalized suggestions** | Past preferences (currency, occasions, gift types) are remembered across sessions via Zep memory and Neo4j category graphs. |
 | **Guided checkout** | Cart, delivery city/date, recipient, sender, and order review run as a deterministic step-by-step flow inside the conversation. |
 | **Order tracking** | Provide an order number and receive live delivery status from Kapruka. |
+| **Support FAQ handoff** | Returns, refunds, cancellations, and quality issues route to official Kapruka policy links and support phone — not invented policy text. |
 | **Multi-currency** | Prices display in LKR, USD, GBP, AUD, CAD, or EUR based on session preference. |
 
 Full product walkthrough: [docs/tutorial-first-conversation.md](docs/tutorial-first-conversation.md)
@@ -50,6 +54,7 @@ graph TD
         ShoppingGraph[Shopping Graph]
         CheckoutGraph[Checkout Sub-Graph]
         IntentNode[analyze_intent]
+        MasterFlow[master_flow]
         HybridRAG[retrieve_hybrid_context]
         MCPTools[call_mcp_tools]
         Generate[generate_response]
@@ -76,9 +81,10 @@ graph TD
     Routes --> Templates
     Routes --> ShoppingGraph
     ShoppingGraph --> IntentNode
-    IntentNode -->|discovery| HybridRAG
-    IntentNode -->|checkout| CheckoutGraph
-    IntentNode -->|tracking| MCPTools
+    IntentNode --> MasterFlow
+    MasterFlow -->|discovery| HybridRAG
+    MasterFlow -->|checkout| CheckoutGraph
+    MasterFlow -->|tracking| MCPTools
     HybridRAG --> MCPTools
     CheckoutGraph --> Generate
     MCPTools --> Generate
@@ -105,24 +111,35 @@ graph TD
 
 Each customer message triggers a LangGraph run that classifies intent, retrieves context, calls Kapruka tools when needed, and streams an HTML reply.
 
-### Intent Classification
+### Intent Classification and Routing Guards
 
-Gemini 2.5 Flash classifies every message into one of four intents:
+Keyword guards and Gemini 2.5 Flash classify every message into one of five intents:
 
-- **discovery** — browsing, searching, product questions
-- **checkout** — cart, delivery, recipient, payment
+- **discovery** — browsing, searching, product questions (default shopping path)
+- **cart** — "add … to cart", carousel ordinal references ("the first one")
+- **checkout** — cart review, delivery, recipient, payment
 - **tracking** — order status and delivery progress
-- **general** — greetings, thanks, off-topic
+- **general** — greetings, thanks, off-topic, impossible catalog requests, support FAQ
 
-Routing is deterministic after classification: checkout messages enter the checkout sub-graph; tracking skips graph retrieval and goes straight to MCP tools.
+Before search runs, a **request specificity scorer** (`lib/chat/request_specificity.py`) gates vague gift queries. Scores below the proceed threshold produce a clarifying question (product type, occasion, or budget) instead of a blind catalog search. Budgeted gift-idea chips and explicit product IDs bypass the gate.
+
+After intent classification, a **flow-state supervisor** (`lib/chat/master_flow.py`, `graphs/nodes/master_flow.py`) runs on conflict triggers — for example, delivery-only questions with a stale carousel, checkout vs discovery mismatch, or long-session budget drift. It may reset discovery context, pause or exit checkout, or emit a clarifying question before HybridRAG runs. Post-supervisor routing is centralized in `lib/chat/routing.py`.
+
+Routing is deterministic after classification: checkout enters the checkout sub-graph; cart resolves carousel references then executes the add; tracking skips graph retrieval and goes straight to MCP tools; support FAQ and off-topic turns short-circuit to curated reply copy.
 
 ### HybridRAG Context Retrieval
 
 For discovery intents, the system embeds the user's query (Vertex AI `gemini-embedding-2`), vector-searches Neo4j gift-category ontology, traverses related occasions and product types, and merges Zep-stored preferences (currency, occasions, past interests). The result guides MCP search parameters — for example, narrowing to "birthday cakes" instead of searching the entire catalog.
 
+### Bounded Agent Loop and Product Curation
+
+Discovery turns that pass specificity and delivery preflight enter a **bounded ReAct agent loop** (`agent_loop`, max 3 iterations). A Flash-tier planner chooses MCP tool calls (`search_products`, `get_product`, `check_delivery`, etc.). Results pass through **product curation** filters — birthday cake focus, chocolate vs floral demotion, recipient-aware ranking, gift-noise removal (grocery/snacks), budget banding, and anniversary graph hints — before the carousel renders.
+
+Long searches rotate customer-facing status copy ("Searching our catalog…", "Curating options for your budget…") via SSE.
+
 ### Kapruka MCP Tool Execution
 
-Live Kapruka data flows through a unified service facade with per-IP rate limiting and read caching in Redis:
+Live Kapruka data flows through a unified service facade with per-IP rate limiting, automatic retry on rate-limit responses, and read caching in Redis:
 
 | Tool | Purpose |
 | --- | --- |
@@ -187,7 +204,8 @@ pip install -e '.[dev]'
 gcloud auth application-default login
 docker run -d --name agentic-kapruka-redis -p 6379:6379 redis/redis-stack-server:latest
 # Edit NEO4J_*, ZEP_API_KEY, SESSION_SECRET in .env
-python scripts/bootstrap_neo4j.py   # first time: schema, ingest, embed, vector index
+# Required for GraphRAG curation quality — run before first local chat/eval session:
+python scripts/bootstrap_neo4j.py   # first time: schema, ingest, embed, vector index (required for local GraphRAG / product curation quality)
 uvicorn app.main:app --reload
 ```
 
@@ -236,6 +254,7 @@ Structured documentation follows the [Diataxis](https://diataxis.fr/) framework 
 | [docs/reference-http-api.md](docs/reference-http-api.md) | Reference | Integrators |
 | [docs/reference-environment.md](docs/reference-environment.md) | Reference | DevOps |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | How-to | DevOps |
+| [DESIGN.md](DESIGN.md) | Reference | UI tokens, layout, accessibility |
 
 Contributor conventions: [AGENTS.md](AGENTS.md)
 
@@ -249,7 +268,7 @@ lib/          Business logic — Kapruka MCP, Redis, Neo4j, Zep, checkout, chat
 graphs/       LangGraph shopping and checkout orchestration
 templates/    Jinja2 HTML partials (chat, cart, checkout components)
 static/       Compiled CSS, HTMX/Alpine.js client scripts
-tests/        Unit, integration, browser, and e2e tests (107 test modules)
+tests/        Unit, integration, browser, and e2e tests (143 test modules)
 scripts/      Deploy, Neo4j bootstrap, env bootstrap, Ralph loop
 evals/        RAGAS evaluation harness and golden dataset
 docs/         Diataxis documentation
@@ -274,9 +293,14 @@ graphs/
 ├── checkout_graph.py       # Deterministic checkout step machine
 ├── model_router.py         # Flash vs Pro model selection
 └── nodes/
-    ├── analyze_intent.py
-    ├── retrieve_hybrid_context.py
+    ├── analyze_intent.py           # Routing guards, specificity gate, topic pivots
+    ├── master_flow.py              # Flow-state supervisor (conflict triggers)
+    ├── retrieve_hybrid_context.py  # Neo4j + Zep hybrid context
+    ├── resolve_delivery_context.py # City/date preflight before agent loop
+    ├── agent_loop.py               # Bounded ReAct planner + curation
     ├── call_mcp_tools.py
+    ├── resolve_cart_product.py     # Ordinal/deictic carousel references
+    ├── execute_cart_action.py
     ├── generate_response.py
     ├── run_checkout_graph.py
     ├── load_zep_memory.py
@@ -288,7 +312,9 @@ lib/
 ├── redis/                  # Sessions, cart, cache, rate limits, checkpointer
 ├── zep/                    # Memory threads, preferences, facts
 ├── checkout/               # Payment, delivery, recipient, chat parsing
-├── chat/                   # SSE streaming, session, page context
+├── chat/                   # SSE streaming, session rotation, specificity,
+│                           # master_flow, routing, product curation,
+│                           # support FAQ, off-topic guards
 ├── analytics/              # NetworkX Louvain recommendation worker
 └── genai/                  # Vertex AI Gemini client factory
 ```
@@ -340,7 +366,9 @@ Work happens on branch `ralph/sprint-1`. One PRD item per commit: `feat(PRD-XXX)
 | Kapruka integration | 8 MCP tools | 25+ | Rate-limited, cached reads |
 | Neo4j GraphRAG | 6 modules | 10+ | Ontology + vector search |
 | Checkout flow | 7 steps | 30+ | Deterministic state machine |
-| Chat streaming | SSE + HTMX | 15+ | Browser harness tests |
+| Chat streaming | SSE + HTMX + status copy | 20+ | Browser harness tests |
+| Discovery curation | specificity + agent loop + curation | 15+ | Budget, pivot, carousel ref tests |
+| Concierge UI | sidebar, cart drawer split | 10+ | Playwright + snapshot tests |
 | Deployment | Cloud Run + CI | 5+ | Scripted deploy + dry-run |
 
-**Version:** 0.0.8.0 | **Python:** 3.12+ | **Production target:** Google Cloud Run
+**Version:** 0.0.15.2 | **Python:** 3.12+ | **Production target:** Google Cloud Run

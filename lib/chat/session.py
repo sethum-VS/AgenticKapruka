@@ -83,3 +83,13 @@ def resolve_chat_thread_id(request: Request) -> tuple[str, str | None]:
             return thread_id, None
     thread_id = secrets.token_urlsafe(32)
     return thread_id, _sign_thread_id(thread_id)
+
+
+def rotate_chat_thread(request: Request) -> tuple[str | None, str, str]:
+    """Start a fresh chat thread while preserving the prior id for cart migration."""
+    prior_thread_id: str | None = None
+    existing = request.cookies.get(SESSION_COOKIE_NAME)
+    if existing:
+        prior_thread_id = verify_signed_session_cookie(existing)
+    new_thread_id = secrets.token_urlsafe(32)
+    return prior_thread_id, new_thread_id, _sign_thread_id(new_thread_id)

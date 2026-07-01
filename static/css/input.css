@@ -8,34 +8,63 @@
   }
 
   body {
-    @apply bg-commerce-cream text-commerce-ink;
+    @apply bg-canvas text-on-surface font-body-md;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
 @layer components {
   .btn-primary {
-    @apply rounded-lg bg-kapruka-600 px-4 py-2 text-white transition-colors hover:bg-kapruka-700;
+    @apply rounded-lg bg-primary px-4 py-2 text-sm font-label-md text-on-primary transition-colors hover:bg-primary-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30;
   }
 
   .btn-secondary {
-    @apply rounded-lg border border-commerce-muted/30 bg-white px-4 py-2 text-commerce-ink transition-colors hover:bg-commerce-parchment;
+    @apply rounded-lg border border-outline-variant/40 bg-canvas px-4 py-2 text-sm text-on-surface transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20;
+  }
+
+  .btn-cta {
+    @apply rounded-lg bg-secondary-container px-4 py-3 text-sm font-label-md text-primary transition-colors hover:bg-[#e5a610] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary-container/40;
   }
 
   .card-commerce {
-    @apply rounded-xl border border-commerce-parchment bg-white shadow-sm;
+    @apply rounded-xl border border-outline-variant/30 bg-canvas shadow-sm;
   }
 
   .chip-filter {
-    @apply rounded-full border border-commerce-muted/30 bg-white px-3 py-1 text-sm text-commerce-ink transition-colors hover:bg-commerce-parchment;
+    @apply rounded-full border border-outline-variant/30 bg-canvas px-3 py-1 text-sm text-on-surface transition-colors hover:bg-surface;
   }
 
   .chip-active {
-    @apply rounded-full border border-kapruka-600 bg-kapruka-600 px-3 py-1 text-sm font-medium text-white;
+    @apply rounded-full border border-primary bg-primary px-3 py-1 text-sm font-medium text-on-primary;
+  }
+
+  .chip-suggestion {
+    @apply min-h-[44px] cursor-pointer rounded-full border border-transparent bg-surface-muted px-4 py-2.5 text-label-sm font-label-sm text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20;
+  }
+
+  .material-symbols-outlined {
+    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+    line-height: 1;
+    user-select: none;
+  }
+
+  .material-symbols-filled {
+    font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 24;
   }
 
   /* Assistant bubble typography (standalone Tailwind — no @tailwindcss/typography plugin). */
   .prose-assistant {
-    @apply max-w-none text-sm leading-relaxed text-commerce-ink;
+    @apply max-w-none text-body-md leading-relaxed text-text-main;
   }
 
   .prose-assistant :where(p) {
@@ -55,10 +84,14 @@
   }
 
   .prose-assistant :where(a) {
-    @apply font-medium text-kapruka-600 underline decoration-kapruka-600/30 underline-offset-2;
+    @apply font-medium text-primary underline decoration-primary/30 underline-offset-2;
   }
 
   .prose-assistant :where(strong) {
-    @apply font-semibold text-commerce-ink;
+    @apply font-semibold text-on-surface;
+  }
+
+  #chat-loading:not(.htmx-request) {
+    display: none;
   }
 }

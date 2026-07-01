@@ -10,6 +10,10 @@ _STRUCTURED_ERROR = re.compile(
     re.DOTALL,
 )
 _SIMPLE_ERROR = re.compile(r"^Error:\s*(?P<message>.+)$", re.DOTALL)
+_RATE_LIMIT_PHRASE = re.compile(
+    r"\brate\s*limit(?:ed)?\b",
+    re.IGNORECASE,
+)
 _RETRY_AFTER_SECONDS = re.compile(
     r"retry(?:\s*-\s*after|\s+after)\s+(\d+)\s*seconds?",
     re.IGNORECASE,
@@ -86,6 +90,12 @@ def parse_mcp_error(result_str: str) -> None:
     simple = _SIMPLE_ERROR.match(text)
     if simple is not None:
         message = simple.group("message").strip()
+        if _RATE_LIMIT_PHRASE.search(message):
+            raise KaprukaRateLimitError(
+                "429",
+                message,
+                retry_after_seconds=_parse_retry_after_seconds(message),
+            )
         raise KaprukaError("unknown", message)
 
     if text.lower().startswith("error executing tool"):

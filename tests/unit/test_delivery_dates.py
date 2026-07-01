@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from lib.chat.delivery_dates import (
+    ambiguous_weekday_clarifying_question,
     delivery_date_clarifying_question,
+    is_ambiguous_weekday_phrase,
     is_delivery_date_only_message,
     normalize_delivery_date,
     parse_relative_delivery_date,
@@ -60,6 +63,24 @@ def test_normalize_delivery_date_from_user_message_when_args_past() -> None:
     assert resolved == "2026-06-13"
 
 
+def test_normalize_delivery_date_july_5th_from_message() -> None:
+    """Named month/day in user message resolves to ISO (P0 delivery date bug)."""
+    saturday = date(2026, 6, 27)
+    resolved = normalize_delivery_date({}, "Please deliver on July 5th", today=saturday)
+    assert resolved == "2026-07-05"
+
+
+def test_normalize_delivery_date_prefers_message_over_stale_args() -> None:
+    """Explicit date in message wins over stale session/planner args."""
+    saturday = date(2026, 6, 27)
+    resolved = normalize_delivery_date(
+        {"delivery_date": "2026-06-28"},
+        "delivery on July 5 please",
+        today=saturday,
+    )
+    assert resolved == "2026-07-05"
+
+
 def test_normalize_delivery_date_missing_returns_none() -> None:
     """No date in args or message returns None."""
     assert normalize_delivery_date({"city": "Colombo"}, "deliver to Colombo", today=_FRIDAY) is None
@@ -102,5 +123,47 @@ def test_is_delivery_date_only_message_false_when_city_present() -> None:
     assert is_delivery_date_only_message("deliver to Kandy tomorrow", today=_FRIDAY) is False
 
 
-def test_is_delivery_date_only_message_false_without_date() -> None:
-    assert is_delivery_date_only_message("can you deliver?", today=_FRIDAY) is False
+def test_parse_relative_bare_saturday() -> None:
+    """Bare weekday resolves to the next occurrence."""
+    friday = date(2026, 6, 12)
+    assert parse_relative_delivery_date("Saturday", today=friday) == date(2026, 6, 13)
+
+
+# ── Phase 3: Ambiguous weekday phrase detection ───────────────────────────────
+
+_THURSDAY = date(2026, 6, 25)
+
+
+def test_is_ambiguous_weekday_phrase_sunday_on_thursday() -> None:
+    """On a Thursday, 'next Sunday' resolves same as 'this Sunday' — ambiguous."""
+    assert is_ambiguous_weekday_phrase("deliver next Sunday", today=_THURSDAY) is True
+
+
+def test_is_ambiguous_weekday_phrase_bare_sunday_on_thursday() -> None:
+    """Bare 'Sunday' on a Thursday is ambiguous."""
+    assert is_ambiguous_weekday_phrase("can you deliver Sunday?", today=_THURSDAY) is True
+
+
+def test_is_ambiguous_weekday_phrase_this_sunday_on_thursday() -> None:
+    """'this Sunday' on a Thursday where this == next is ambiguous."""
+    assert is_ambiguous_weekday_phrase("this Sunday please", today=_THURSDAY) is True
+
+
+def test_is_not_ambiguous_on_monday() -> None:
+    """On a Monday 'this Sunday' and 'next Sunday' resolve to different dates."""
+    monday = date(2026, 6, 22)
+    assert is_ambiguous_weekday_phrase("this Sunday please", today=monday) is False
+
+
+def test_is_not_ambiguous_for_saturday_on_thursday() -> None:
+    """On a Thursday, 'this Saturday' means tomorrow (unambiguous)."""
+    assert is_ambiguous_weekday_phrase("this Saturday", today=_THURSDAY) is False
+
+
+def test_ambiguous_weekday_clarifying_question_contains_dates() -> None:
+    """Clarifying question includes both candidate date strings."""
+    question = ambiguous_weekday_clarifying_question("next Sunday", today=_THURSDAY)
+    assert "sunday" in question.lower() or "Sunday" in question
+    assert re.search(r"\d{1,2}\s+\w+|\d{4}-\d{2}-\d{2}", question), (
+        f"Expected date in clarifying question: {question!r}"
+    )

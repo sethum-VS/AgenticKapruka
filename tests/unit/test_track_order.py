@@ -121,14 +121,14 @@ def test_track_order_output_coerces_mcp_value_currency_shape() -> None:
     """MCP Money payloads with value/currency coerce to a formatted display string."""
     payload = {**_TRACK_ORDER_JSON, "amount": {"value": "4970", "currency": "LKR"}}
     result = TrackOrderOutput.model_validate(payload)
-    assert result.amount == "LKR 4,970"
+    assert result.amount == "Rs. 4,970"
 
 
 def test_track_order_output_coerces_amount_currency_shape() -> None:
     """MCP Money payloads with amount/currency coerce to a formatted display string."""
     payload = {**_TRACK_ORDER_JSON, "amount": {"amount": 15500.0, "currency": "LKR"}}
     result = TrackOrderOutput.model_validate(payload)
-    assert result.amount == "LKR 15,500"
+    assert result.amount == "Rs. 15,500"
 
 
 def test_track_order_output_amount_string_passthrough() -> None:
@@ -146,7 +146,7 @@ async def test_track_order_parses_money_shaped_amount_from_mcp(
 
     result = await track_order(mcp_client, order_number="VIMP34456CB2")
 
-    assert result.amount == "LKR 4,970"
+    assert result.amount == "Rs. 4,970"
 
 
 def test_track_order_recipient_strips_html_from_phone() -> None:

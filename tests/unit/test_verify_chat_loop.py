@@ -56,17 +56,24 @@ def test_cake_mom_colombo_fails_field_required() -> None:
     assert any("Field required" in item for item in failures)
 
 
-def test_gift_ideas_5000_requires_carousel_gift_and_budget() -> None:
+def test_gift_ideas_5000_requires_mixed_physical_gifts() -> None:
     scenario = TurnScenario(
         name="gift_ideas_5000",
         message="Gift ideas under Rs. 5,000",
         expect_carousel=True,
         max_first_carousel_price=5000.0,
-        expect_carousel_keywords=("gift", "voucher"),
+        expect_carousel_keywords=("hamper", "chocolate", "flower", "rose", "ferrero", "gift box"),
+        max_voucher_in_top_carousel_slots=2,
+        require_physical_gift_in_carousel=True,
+        top_carousel_slots=5,
         forbidden_substrings=_vcl._API_ERROR_FORBIDDEN,
     )
-    ok_html = _carousel_html("Kapruka Gift Voucher", first_price="4,500")
+    ok_html = _carousel_html("Birthday Gift Hamper", first_price="4,500")
     assert _evaluate_turn(scenario, ok_html) == []
+
+    voucher_only = _carousel_html("Kapruka Gift Voucher", first_price="4,500")
+    failures = _evaluate_turn(scenario, voucher_only)
+    assert any("physical gift" in item for item in failures)
 
     over_budget = _carousel_html("Gift Box", first_price="6,500")
     failures = _evaluate_turn(scenario, over_budget)
@@ -145,6 +152,26 @@ def test_roses_under_budget_forbids_negation_with_carousel() -> None:
     assert any("forbidden substring" in item for item in failures)
 
 
+def test_fresh_flowers_silk_disclaimer_when_silk_in_carousel() -> None:
+    scenario = TurnScenario(
+        name="fresh_flowers_silk",
+        message="I need fresh flowers for an anniversary",
+        expect_carousel=True,
+        expect_artificial_disclaimer_if_silk=True,
+    )
+    silk_html = (
+        "<p>Please note: some picks below are silk or artificial floral arrangements.</p>"
+        + _carousel_html("Kit Kat Silk Roses Bouquet", first_price="4,500")
+    )
+    assert _evaluate_turn(scenario, silk_html) == []
+
+    failures = _evaluate_turn(
+        scenario,
+        _carousel_html("Kit Kat Silk Roses Bouquet", first_price="4,500"),
+    )
+    assert any("artificial floral disclaimer" in item for item in failures)
+
+
 def test_customer_eval_scenarios_registered() -> None:
     names = {scenario.name for scenario in _vcl.SCENARIOS}
     expected = {
@@ -155,6 +182,9 @@ def test_customer_eval_scenarios_registered() -> None:
         "delivery_followup",
         "flowers_fruit_kandy",
         "track_vimp_regression",
+        "fresh_flowers_silk",
+        "place_order_with_cart",
+        "support_policy_wilted",
     }
     assert expected <= names
 

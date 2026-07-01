@@ -24,6 +24,8 @@ You want to use the assistant or verify flows end to end.
 | [Find and order gifts](howto-find-and-order-gifts.md) | How-to | You want to test product discovery |
 | [Complete checkout](howto-complete-checkout.md) | How-to | You want to test the purchase flow |
 | [Track delivery](howto-track-delivery.md) | How-to | You want to test order tracking |
+| [Chat QA report (2026-06-28)](chat-qa-report-20260628.md) | Reference | You want browse-matrix QA findings for the latest local session |
+| [Chat QA report (2026-06-27)](chat-qa-report-20260627.md) | Reference | You want prior QA baseline and regression notes |
 
 ### Engineers and operators
 
@@ -37,6 +39,7 @@ You want to run, extend, or deploy the system.
 | [Environment variables](reference-environment.md) | Reference | You are configuring secrets |
 | [Cloud Run deploy](DEPLOY.md) | How-to | You are shipping to production |
 | [AGENTS.md](../AGENTS.md) | Reference | You are contributing code |
+| [DESIGN.md](../DESIGN.md) | Reference | You are working on UI tokens or layout |
 
 ## By Diataxis quadrant
 
@@ -44,7 +47,7 @@ You want to run, extend, or deploy the system.
 | --- | --- | --- |
 | **Tutorial** | Learning-oriented — walk through a working example | [tutorial-first-conversation.md](tutorial-first-conversation.md) |
 | **How-to** | Task-oriented — accomplish a specific goal | [howto-find-and-order-gifts.md](howto-find-and-order-gifts.md), [howto-complete-checkout.md](howto-complete-checkout.md), [howto-track-delivery.md](howto-track-delivery.md), [howto-developer-setup.md](howto-developer-setup.md), [DEPLOY.md](DEPLOY.md) |
-| **Reference** | Information-oriented — complete technical facts | [reference-customer-capabilities.md](reference-customer-capabilities.md), [reference-http-api.md](reference-http-api.md), [reference-environment.md](reference-environment.md) |
+| **Reference** | Information-oriented — complete technical facts | [reference-customer-capabilities.md](reference-customer-capabilities.md), [reference-http-api.md](reference-http-api.md), [reference-environment.md](reference-environment.md), [DESIGN.md](../DESIGN.md) |
 | **Explanation** | Understanding-oriented — why things work this way | [explanation-product-overview.md](explanation-product-overview.md), [explanation-shopping-journey.md](explanation-shopping-journey.md), [explanation-architecture.md](explanation-architecture.md) |
 
 ## Entry points

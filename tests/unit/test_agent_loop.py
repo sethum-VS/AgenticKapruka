@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage
 
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.agent_loop import (
+    CONFIDENT_DISCOVERY_MAX_ITERATIONS,
     MAX_ITERATIONS,
     PLANNER_CATEGORY_NODE_LIMIT,
     PLANNER_SEARCH_RESULT_LIMIT,
@@ -19,6 +20,7 @@ from graphs.nodes.agent_loop import (
     AgentPlannerStep,
     _build_planner_system_instruction,
     _build_planner_user_prompt,
+    _delivery_check_pending,
     _max_iterations_for_state,
     agent_loop,
     build_planner_prior_iterations,
@@ -113,7 +115,7 @@ def test_summarize_search_products_caps_at_five_and_strips_heavy_fields() -> Non
     assert "variants" not in planner_blob
 
     for product in summarized_results:
-        assert set(product.keys()) <= {"id", "name", "price", "in_stock"}
+        assert set(product.keys()) <= {"id", "name", "price", "in_stock", "stock_level"}
         assert "image_url" not in product
 
 
@@ -501,25 +503,26 @@ def test_planner_user_prompt_includes_broad_gifts_ask_user_hint() -> None:
 
 
 def test_planner_user_prompt_budgeted_gift_ideas_prefers_search() -> None:
-    """Budgeted gift ideas bias planner toward kapruka_search_products before ask_user."""
+    """Budgeted gift ideas bias planner toward dual kapruka_search_products before ask_user."""
     state: AgentState = {
         "messages": [HumanMessage(content="Gift ideas under Rs. 5,000")],
         "intent_metadata": {"budget_max": 5000.0},
     }
     prompt = _build_planner_user_prompt(state)
-    assert "call_tool" in prompt.lower()
+    assert "kapruka_search_products" in prompt.lower()
     assert "gift voucher" in prompt.lower()
+    assert "gift hamper" in prompt.lower()
     assert "max_price=5000" in prompt
     assert "ask_user before" not in prompt.lower()
 
 
 def test_planner_system_instruction_budgeted_gifts_search_before_ask_user() -> None:
-    """System instruction directs budgeted gift queries to search before clarify."""
+    """System instruction directs budgeted gift queries to dual search before clarify."""
     from graphs.nodes.agent_loop import PLANNER_SYSTEM_INSTRUCTION
 
     assert "Budgeted gift queries" in PLANNER_SYSTEM_INSTRUCTION
     assert "gift voucher" in PLANNER_SYSTEM_INSTRUCTION
-    assert "before ask_user" in PLANNER_SYSTEM_INSTRUCTION
+    assert "gift hamper" in PLANNER_SYSTEM_INSTRUCTION
 
 
 @pytest.mark.asyncio
@@ -564,6 +567,7 @@ async def test_agent_loop_tool_error_exits_immediately() -> None:
     assert result["agent_tool_error"] == {
         "tool": CHECK_DELIVERY_TOOL,
         "message": "Choose a delivery date that is today or later.",
+        "error": "past_delivery_date",
     }
     assert len(result["tool_trace"]) == 1
     assert result["tool_trace"][0]["result"]["error"] == "past_delivery_date"
@@ -580,7 +584,7 @@ async def test_agent_loop_emits_status_events() -> None:
         AgentPlannerStep(
             action="call_tool",
             tool_name=CHECK_DELIVERY_TOOL,
-            tool_args={"city": "Kandy", "date": "2026-06-25"},
+            tool_args={"city": "Kandy", "delivery_date": "2026-07-01"},
             rationale="check delivery",
         ),
         AgentPlannerStep(action="finish", rationale="done"),
@@ -604,7 +608,9 @@ async def test_agent_loop_emits_status_events() -> None:
         for call in mock_writer.call_args_list
         if call.args and call.args[0].get("type") == "status"
     ]
-    assert "Searching Kapruka…" in status_messages
+    assert any(
+        msg in status_messages for msg in ("Searching our catalog…", "Searching Kapruka…")
+    ), f"Expected search status in {status_messages!r}"
     assert "Checking delivery…" in status_messages
 
 
@@ -692,6 +698,25 @@ def test_planner_user_prompt_skips_broad_cakes_hint_when_birthday_cake_named() -
     prompt = _build_planner_user_prompt(state)
     assert 'Broad "cakes" query' not in prompt
     assert 'q="birthday cake"' in prompt
+
+
+def test_planner_user_prompt_session_product_focus_floral_cake_hint() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="She loves floral designs")],
+        "session_product_focus": "cake",
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert "Session shopping focus: cake" in prompt
+    assert "floral birthday cake" in prompt.lower()
+
+
+def test_planner_user_prompt_includes_session_currency() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="under 30 dollars")],
+        "currency": "USD",
+    }
+    prompt = _build_planner_user_prompt(state)
+    assert "Session display currency: USD" in prompt
 
 
 def test_planner_system_instruction_includes_hybrid_soft_hints_only() -> None:
@@ -837,6 +862,67 @@ async def test_agent_loop_check_delivery_past_date_without_message_asks_user() -
     assert result["agent_clarifying_question"] == expected_question
     assert result["tool_trace"] == []
     mock_service.check_delivery.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_anniversary_flowers_drops_flowers_category_before_search() -> None:
+    """Anniversary flower browse must not filter MCP by Flowers category."""
+    mock_service = _mock_kapruka_service()
+    hit = SearchProductsOutput(
+        results=[
+            ProductResult(
+                id="CAKE00KA002059",
+                name="Happy Anniversary Pure Love Ribbon Cake With Fresh White Roses",
+                summary="Anniversary cake with roses.",
+                price=Money(amount=12600.0, currency="LKR"),
+                compare_at_price=None,
+                in_stock=True,
+                stock_level="low",
+                image_url="https://example.com/anniversary.jpg",
+                category=CategoryRef(id="cat_cakes", name="Cakes", slug="cakes"),
+                rating=None,
+                ships_internationally=True,
+                url="https://www.kapruka.com/anniversary-cake",
+            ),
+        ],
+        next_cursor=None,
+        applied_filters={"q": "anniversary flowers", "limit": 10, "in_stock_only": False},
+    )
+    mock_service.search_products.return_value = hit
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "anniversary flowers", "category": "Flowers"},
+            rationale="search anniversary flowers",
+        ),
+        AgentPlannerStep(
+            action="finish",
+            rationale="done",
+        ),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="what flowers do you have for anniversary?")],
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=planner_steps,
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert mock_service.search_products.call_count == 1
+    search_call = mock_service.search_products.await_args
+    assert search_call is not None
+    assert search_call.kwargs["q"] == "anniversary flowers"
+    assert search_call.kwargs.get("category") is None
+    assert result["last_search_products"] is not None
+    assert result["agent_loop_exit_reason"] == "finish"
 
 
 @pytest.mark.asyncio
@@ -1006,8 +1092,59 @@ async def test_agent_loop_check_delivery_injects_canonical_city_from_state() -> 
 
 
 @pytest.mark.asyncio
+async def test_agent_loop_check_delivery_missing_date_runs_city_only_for_gift_discovery() -> None:
+    """Gift discovery with city but no date runs city-only check_delivery instead of asking."""
+    mock_service = _mock_kapruka_service()
+    mock_service.search_products.return_value = _SEARCH_EMPTY
+    mock_service.check_delivery.return_value = {
+        "city": "Galle",
+        "available": True,
+        "rate": 300,
+    }
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=CHECK_DELIVERY_TOOL,
+            tool_args={"city": "Galle"},
+            rationale="check delivery",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="roses for Galle")],
+        "delivery_city_canonical": "Galle",
+        "intent_metadata": {"target_city": "Galle"},
+    }
+
+    with (
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
+        patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_exit_reason"] == "finish"
+    mock_service.check_delivery.assert_awaited_once()
+    delivery_trace = next(
+        invocation
+        for invocation in result["tool_trace"]
+        if invocation["name"] == CHECK_DELIVERY_TOOL
+    )
+    assert "delivery_date" not in delivery_trace["args"]
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_check_delivery_missing_date_still_asks_user() -> None:
-    """Canonical city present but no delivery date still prompts the customer."""
+    """Explicit delivery question without a date still prompts the customer."""
     mock_service = _mock_kapruka_service()
     planner_steps = [
         AgentPlannerStep(
@@ -1019,7 +1156,7 @@ async def test_agent_loop_check_delivery_missing_date_still_asks_user() -> None:
     ]
     state: AgentState = {
         **_base_state(),
-        "messages": [HumanMessage(content="roses for Galle")],
+        "messages": [HumanMessage(content="can you deliver to Galle?")],
         "delivery_city_canonical": "Galle",
     }
 
@@ -1200,6 +1337,18 @@ def test_max_iterations_for_state_keeps_three_for_discovery() -> None:
     assert _max_iterations_for_state(state, "discovery") == MAX_ITERATIONS
 
 
+def test_max_iterations_for_state_caps_confident_discovery() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom in Colombo")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:cakes"}],
+            "hints": {"occasion": "Birthday"},
+        },
+        "intent_metadata": {"target_city": "Colombo"},
+    }
+    assert _max_iterations_for_state(state, "discovery") == CONFIDENT_DISCOVERY_MAX_ITERATIONS
+
+
 @pytest.mark.asyncio
 async def test_agent_loop_utility_general_iteration_cap_at_two() -> None:
     """Utility/general turns without catalog need stop after two planner iterations."""
@@ -1234,3 +1383,580 @@ async def test_agent_loop_utility_general_iteration_cap_at_two() -> None:
     assert result["agent_loop_exit_reason"] == "max_iterations"
     assert len(result["tool_trace"]) == UTILITY_GENERAL_MAX_ITERATIONS
     assert mock_service.search_products.call_count == UTILITY_GENERAL_MAX_ITERATIONS
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_budget_refinement_exits_without_second_planner_iteration() -> None:
+    """Budget-only turns finish immediately after one contextual search."""
+    mock_service = _mock_kapruka_service()
+    greeting_card = ProductResult(
+        id="card001",
+        name="Greeting Card",
+        summary="Generic card.",
+        price=Money(amount=500.0, currency="LKR"),
+        compare_at_price=None,
+        in_stock=True,
+        stock_level="high",
+        image_url=None,
+        category=CategoryRef(id="cat_cards", name="Greeting Cards", slug="greeting-cards"),
+        rating=None,
+        ships_internationally=False,
+        url="https://www.kapruka.com/card",
+    )
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[greeting_card],
+        next_cursor=None,
+        applied_filters={"q": "gift voucher", "max_price": 6000.0},
+    )
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="Keep it under 6000 rupees.")],
+        "session_product_focus": "chocolate",
+        "session_search_query": "chocolate gift",
+        "session_budget_max": 6000.0,
+        "intent_metadata": {"budget_max": 6000.0},
+        "last_search_products": [
+            {
+                "id": "choc001",
+                "name": "Chocolate Truffles",
+                "price": {"amount": 4500.0, "currency": "LKR"},
+                "in_stock": True,
+            }
+        ],
+    }
+    planner_should_not_run = AgentPlannerStep(
+        action="call_tool",
+        tool_name=SEARCH_PRODUCTS_TOOL,
+        tool_args={"q": "gift voucher"},
+        rationale="should not run",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=[planner_should_not_run],
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_not_called()
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert mock_service.search_products.await_count == 1
+    assert result.get("session_search_query") == "chocolate gift"
+    assert result["last_search_products"] == state["last_search_products"]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_discovery_city_gift_searches_before_planner() -> None:
+    """Birthday cake + city without date searches catalog before delivery date gate."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "messages": [
+            HumanMessage(content="I need a birthday cake for my mom in Colombo"),
+        ],
+        "intent_metadata": {
+            "target_city": "Colombo",
+            "requires_delivery_validation": True,
+        },
+        "session_delivery_city_canonical": "Colombo 03",
+        "session_delivery_city_confirmed": True,
+    }
+    planner_should_not_run = AgentPlannerStep(
+        action="call_tool",
+        tool_name=CHECK_DELIVERY_TOOL,
+        tool_args={"city": "Colombo 03"},
+        rationale="verify delivery",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=[planner_should_not_run],
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_not_called()
+    assert mock_service.search_products.await_count == 1
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_situational_breakup_flowers_searches_on_turn_one() -> None:
+    """Breakup + apology flowers invokes kapruka_search_products before the planner."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "messages": [
+            HumanMessage(content="We just broke up and I need flowers to apologize to her."),
+        ],
+        "intent_metadata": {"is_situational": True},
+    }
+    planner_should_not_run = AgentPlannerStep(
+        action="ask_user",
+        rationale="Who are the flowers for?",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=[planner_should_not_run],
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_not_called()
+    assert mock_service.search_products.await_count == 1
+    search_call = mock_service.search_products.await_args
+    assert search_call is not None
+    assert search_call.kwargs["q"] == "apology flowers"
+    assert search_call.kwargs.get("category") == "Flowers"
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert len(result["tool_trace"]) == 1
+    assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
+
+
+def test_delivery_check_pending_false_on_breakup_with_session_city() -> None:
+    state: AgentState = {
+        "session_delivery_city_canonical": "Kandy",
+        "session_delivery_city_confirmed": True,
+        "session_delivery_date": "2026-06-28",
+    }
+    assert not _delivery_check_pending(
+        state,
+        [],
+        "We just broke up and I'm heartbroken.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_rate_limit_retry_succeeds_without_tool_error() -> None:
+    """Budget refinement retries rate-limited MCP search before surfacing tool_error."""
+    mock_service = _mock_kapruka_service()
+    rate_limited = {
+        "error": "rate_limit_exceeded",
+        "message": "Rate limit exceeded",
+        "retry_after_seconds": 1,
+    }
+    success = {
+        "results": [_SEARCH_HIT.model_dump(mode="json")],
+        "applied_filters": {"q": "birthday chocolate cake", "max_price": 6000.0},
+    }
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="Keep it under 6000 rupees.")],
+        "session_product_focus": "chocolate",
+        "session_occasion": "birthday",
+        "session_search_query": "chocolate gift",
+        "session_budget_max": 6000.0,
+        "intent_metadata": {"budget_max": 6000.0},
+    }
+
+    with (
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=AssertionError("planner should not run on budget refinement"),
+        ),
+        patch(
+            "graphs.nodes.agent_loop.invoke_tool",
+            new_callable=AsyncMock,
+            side_effect=[rate_limited, rate_limited, success],
+        ) as mock_invoke,
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result.get("agent_tool_error") is None
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert mock_invoke.await_count == 3
+
+
+def test_format_planner_hints_graph_degraded_adds_mcp_bias() -> None:
+    """graph_degraded=True adds an MCP discovery bias hint."""
+    from graphs.nodes.agent_loop import _format_planner_query_rewrite_hints
+
+    hints = _format_planner_query_rewrite_hints(
+        "anniversary flowers for wife",
+        graph_degraded=True,
+    )
+    assert hints, "Expected non-empty hints when graph_degraded=True"
+    assert "graphrag" in hints.lower() or "graph" in hints.lower(), (
+        f"Expected graph mention in hints: {hints!r}"
+    )
+
+
+def test_format_planner_hints_anniversary_occasion_adds_hint() -> None:
+    """Anniversary query adds product bias hint."""
+    from graphs.nodes.agent_loop import _format_planner_query_rewrite_hints
+
+    hints = _format_planner_query_rewrite_hints(
+        "anniversary gift ideas",
+        session_occasion="anniversary",
+    )
+    assert "anniversary" in hints.lower(), f"Expected anniversary hint: {hints!r}"
+    assert (
+        "greeting card" in hints.lower()
+        or "greeting" in hints.lower()
+        or "voucher" in hints.lower()
+    )
+
+
+def test_budgeted_gift_physical_queries_tea_colleague() -> None:
+    from graphs.nodes.agent_loop import _budgeted_gift_physical_queries
+
+    queries = _budgeted_gift_physical_queries(
+        "Gift ideas under Rs. 5,000 for a colleague who loves tea",
+    )
+    assert queries[0] == "tea gift"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_delivery_only_skips_planner() -> None:
+    """Delivery-only turns finish without Gemini planner or product search."""
+    mock_service = _mock_kapruka_service()
+    delivery_trace: ToolInvocation = {
+        "name": CHECK_DELIVERY_TOOL,
+        "args": {"city": "Colombo 05", "delivery_date": "2026-06-28"},
+        "result": {
+            "city": "Colombo 05",
+            "available": True,
+            "rate": 300.0,
+            "currency": "LKR",
+        },
+    }
+    state: AgentState = {
+        **_base_state(),
+        "messages": [
+            HumanMessage(
+                content=("Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"),
+            ),
+        ],
+        "intent_metadata": {
+            "requires_delivery_validation": True,
+            "target_city": "Colombo 05",
+        },
+        "session_delivery_city_canonical": "Colombo 05",
+        "session_delivery_date": "2026-06-28",
+        "tool_trace": [delivery_trace],
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on delivery-only"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result.get("agent_loop_iterations") == 0
+    assert result["intent"] == "general"
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_support_faq_skips_planner() -> None:
+    """Support FAQ turns skip the planner when routed through agent_loop."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "messages": [
+            HumanMessage(
+                content=("What is your return and refund policy if the cake arrives damaged?"),
+            ),
+        ],
+        "intent_metadata": {"support_topic": "quality"},
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on support FAQ"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result.get("agent_loop_iterations") == 0
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_cart_intent_skips_planner() -> None:
+    """Cart intent should not invoke the planner if it reaches agent_loop."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "intent": "cart",
+        "messages": [HumanMessage(content="Please add the second one to my cart")],
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on cart intent"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result.get("agent_loop_iterations") == 0
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_confident_discovery_skips_planner() -> None:
+    """Confident discovery turns search via build_discovery_search_args without Gemini."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [HumanMessage(content="chocolate gift for wife anniversary")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:chocolates", "score": 0.82}],
+            "hints": {"occasion": "Anniversary"},
+        },
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on confident discovery"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result.get("agent_loop_iterations") == 0
+    assert result["intent"] == "discovery"
+    assert len(result["tool_trace"]) == 1
+    assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
+    mock_service.search_products.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_budgeted_roses_skips_planner() -> None:
+    """Budgeted roses discovery uses deterministic search args without Gemini."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [HumanMessage(content="red roses under 5000")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:flowers", "score": 0.82}],
+        },
+        "intent_metadata": {"budget_max": 5000.0, "budget_currency": "LKR"},
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on budgeted roses"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result.get("agent_loop_iterations") == 0
+    assert len(result["tool_trace"]) == 1
+    search_args = result["tool_trace"][0]["args"]
+    assert search_args.get("q") == "red roses"
+    assert search_args.get("max_price") == 5000.0
+    mock_service.search_products.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_product_detail_fast_path_fetches_get_product() -> None:
+    """Weight/detail follow-ups should call kapruka_get_product without the planner."""
+    mock_service = _mock_kapruka_service()
+    get_payload = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+        "attributes": {"weight": "2.77"},
+    }
+    mock_service.get_product.return_value = get_payload
+    carousel = [
+        {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "summary": "Pastel ribbon cake.",
+        },
+        {
+            "id": "CAKE00KA001827",
+            "name": "Happy Birthday Symphony Ribbon Cake",
+            "summary": "Celebration centerpiece.",
+        },
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [
+            HumanMessage(
+                content=(
+                    "The Springtime one looks nice. How much does it weigh, and is it less sweet?"
+                ),
+            ),
+        ],
+        "last_search_products": carousel,
+        "last_visible_products": carousel,
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on product detail"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_done"] is True
+    assert result.get("agent_loop_iterations") == 0
+    assert any(entry["name"] == GET_PRODUCT_TOOL for entry in result["tool_trace"])
+    mock_service.get_product.assert_awaited_once()
+    assert result["tool_trace"][-1]["result"]["attributes"]["weight"] == "2.77"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_product_detail_fast_path_uses_session_resolved_without_carousel() -> None:
+    """Weight follow-ups can use persisted session_resolved_product when carousel is empty."""
+    mock_service = _mock_kapruka_service()
+    get_payload = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "price": {"amount": 5770.0, "currency": "LKR"},
+        "attributes": {"weight": "2.77"},
+    }
+    mock_service.get_product.return_value = get_payload
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [
+            HumanMessage(content="How much does the Springtime Birthday Ribbon Cake weigh?"),
+        ],
+        "session_resolved_product": {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "price": {"amount": 5770.0, "currency": "LKR"},
+        },
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on product detail"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert any(entry["name"] == GET_PRODUCT_TOOL for entry in result["tool_trace"])
+    mock_service.get_product.assert_awaited_once()
+    assert result["session_resolved_product"]["attributes"]["weight"] == "2.77"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_skips_confident_discovery_on_product_detail_turn() -> None:
+    """Product-detail turns must not re-run discovery search instead of get_product."""
+    mock_service = _mock_kapruka_service()
+    carousel = [
+        {
+            "id": "CAKE00KA001685",
+            "name": "Springtime Birthday Ribbon Cake",
+            "summary": "Pastel ribbon cake.",
+        },
+    ]
+    get_payload = {
+        "id": "CAKE00KA001685",
+        "name": "Springtime Birthday Ribbon Cake",
+        "attributes": {"weight": "2.77"},
+    }
+    mock_service.get_product.return_value = get_payload
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "hybrid_context": {
+            "hints": {"occasion": "birthday", "category": "Birthday"},
+        },
+        "messages": [
+            HumanMessage(content="How much does the Springtime Birthday Ribbon Cake weigh?"),
+        ],
+        "last_search_products": carousel,
+        "last_visible_products": carousel,
+    }
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        side_effect=AssertionError("planner should not run on product detail"),
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_service.search_products.assert_not_awaited()
+    mock_service.get_product.assert_awaited_once()
+    assert result["tool_trace"][-1]["name"] == GET_PRODUCT_TOOL
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_vector_hits_only_runs_planner() -> None:
+    """Vector hits without usable graph hints must not skip the planner."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "intent": "discovery",
+        "messages": [HumanMessage(content="something nice for mom")],
+        "hybrid_context": {
+            "vector_hits": [{"id": "category:gifts", "score": 0.82}],
+        },
+    }
+    planner_step = AgentPlannerStep(
+        action="call_tool",
+        tool_name=SEARCH_PRODUCTS_TOOL,
+        tool_args={"q": "gift for mom"},
+        refined_intent="discovery",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step_sync",
+        return_value=planner_step,
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_called()
+    assert result.get("agent_loop_iterations", 0) >= 1

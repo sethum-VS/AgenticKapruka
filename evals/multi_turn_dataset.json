@@ -171,6 +171,114 @@
         "expected_tools_any_turn": ["kapruka_search_products", "kapruka_check_delivery"]
       },
       "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-galle-roses-2turn",
+      "persona": "expat_sender",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Fresh roses to Galle tomorrow"},
+        {"role": "user", "content": "Girlfriend's birthday, romantic red roses"}
+      ],
+      "constraints": {
+        "preserved_terms": ["rose", "Galle"],
+        "expected_tools_any_turn": ["kapruka_search_products", "kapruka_check_delivery"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-013-long-session-budget-drift",
+      "persona": "budget_shopper",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Show me hampers"},
+        {"role": "user", "content": "Something for a colleague"},
+        {"role": "user", "content": "Corporate gift ideas"},
+        {"role": "user", "content": "Tea options"},
+        {"role": "user", "content": "Under 10000"},
+        {"role": "user", "content": "Colombo delivery"},
+        {"role": "user", "content": "Maybe vouchers instead"},
+        {"role": "user", "content": "What about fruit baskets"},
+        {"role": "user", "content": "Gift for my wife, budget 5000 rupees"}
+      ],
+      "constraints": {
+        "preserved_terms": ["wife", "5000"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-014-delivery-only-fee",
+      "persona": "expat_sender",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Red roses for anniversary"},
+        {"role": "user", "content": "What's the delivery fee to Colombo 03 on 2026-07-10?"}
+      ],
+      "constraints": {
+        "preserved_terms": ["Colombo", "delivery"],
+        "expected_tools_any_turn": ["kapruka_check_delivery"]
+      },
+      "final_expect_product_ui": false
+    },
+    {
+      "id": "mt-015-awaiting-date-redirect",
+      "persona": "busy_parent",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Birthday cake for my son in Kandy"},
+        {"role": "user", "content": "When can you deliver?"},
+        {"role": "user", "content": "Show me chocolate cakes instead"}
+      ],
+      "constraints": {
+        "preserved_terms": ["cake", "delivery"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-016-checkout-interrupt",
+      "persona": "budget_shopper",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Chocolate birthday cake"},
+        {"role": "user", "content": "Proceed to checkout"},
+        {"role": "user", "content": "What's the weather in Colombo?"}
+      ],
+      "constraints": {
+        "preserved_terms": ["checkout"],
+        "must_not_contain_in_final": ["delivery_city"]
+      },
+      "final_expect_checkout_ui": false
+    },
+    {
+      "id": "mt-017-clarification-dimension",
+      "persona": "budget_shopper",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "I need a gift"},
+        {"role": "user", "content": "Birthday roses"}
+      ],
+      "constraints": {
+        "preserved_terms": ["rose", "birthday"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
+    },
+    {
+      "id": "mt-018-checkout-exit-pivot",
+      "persona": "emotional_gifter",
+      "query_mode": "utility",
+      "turns": [
+        {"role": "user", "content": "Anniversary flowers"},
+        {"role": "user", "content": "Proceed to checkout"},
+        {"role": "user", "content": "Cancel checkout — find something else for my wife"}
+      ],
+      "constraints": {
+        "preserved_terms": ["wife"],
+        "expected_tools_any_turn": ["kapruka_search_products"]
+      },
+      "final_expect_product_ui": true
     }
   ]
 }

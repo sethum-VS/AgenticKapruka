@@ -102,6 +102,7 @@ async def test_chat_stream_end_to_end_assistant_message(chat_flow_env: RedisClie
     assert 'aria-label="Assistant message"' in body
     assert 'role="assistant"' in body or 'role="article"' in body
     assert "birthday cake" in body.lower()
+    assert "event: carousel\n" in body
     assert 'data-testid="product-carousel"' in body
     assert "Chocolate Fudge Birthday Cake" in body
     assert 'data-product-id="cake00ka002034"' in body

@@ -160,6 +160,9 @@ async def extract_preferences(
 def merge_preferences_into_hybrid_context(
     hybrid_context: dict[str, Any] | None,
     preferences: dict[str, str],
+    *,
+    user_message: str = "",
+    topic_pivot: bool = False,
 ) -> dict[str, Any]:
     """Merge extracted preferences into hybrid_context hints for MCP search."""
     merged: dict[str, Any] = dict(hybrid_context or {})
@@ -173,6 +176,9 @@ def merge_preferences_into_hybrid_context(
     if currency := preferences.get("currency"):
         hints["currency"] = currency
     if occasion := preferences.get("past_occasion"):
-        hints["occasion"] = occasion
+        lowered_message = user_message.lower()
+        occasion_in_message = occasion.lower() in lowered_message
+        if not topic_pivot and occasion_in_message:
+            hints["occasion"] = occasion
     merged["hints"] = hints
     return merged

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -16,7 +17,7 @@ from lib.neo4j.ontology import (
     REL_CATEGORY_TO_PRODUCT_TYPE,
     REL_OCCASION_TO_CATEGORY,
 )
-from lib.neo4j.traverse import traverse_from_categories
+from lib.neo4j.traverse import _traverse_from_categories_cypher, traverse_from_categories
 
 
 class _MockAsyncResult:
@@ -34,12 +35,13 @@ class _TraverseMockStore:
 
     def respond(self, cypher: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
         if cypher.startswith("MATCH (seed:Category)") and "rels*1" in cypher:
-            return self._traverse(parameters)
+            return self._traverse(parameters, cypher=cypher)
         return []
 
-    def _traverse(self, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+    def _traverse(self, parameters: dict[str, Any], *, cypher: str = "") -> list[dict[str, Any]]:
         category_ids = list(parameters.get("category_ids", []))
-        max_hops = int(parameters.get("max_hops", 2))
+        match = re.search(r"rels\*1\.\.(\d+)", cypher)
+        max_hops = int(match.group(1)) if match else 2
         rel_types = set(parameters.get("rel_types", []))
         node_labels = set(parameters.get("node_labels", []))
         results: list[dict[str, Any]] = []
@@ -222,11 +224,24 @@ async def test_traverse_from_categories_empty_seeds_returns_empty() -> None:
 
 
 @pytest.mark.asyncio
+async def test_traverse_cypher_uses_literal_hop_depth() -> None:
+    cypher = _traverse_from_categories_cypher(2)
+    assert "$max_hops" not in cypher
+    assert "rels*1..2" in cypher
+
+    one_hop = _traverse_from_categories_cypher(1)
+    assert "rels*1..1" in one_hop
+
+
+@pytest.mark.asyncio
 async def test_traverse_from_categories_rejects_invalid_max_hops() -> None:
     store = _TraverseMockStore()
     client = _client_with_store(store)
 
     with pytest.raises(ValueError, match="max_hops"):
         await traverse_from_categories(client, ["category:flowers"], max_hops=0)
+
+    with pytest.raises(ValueError, match="max_hops"):
+        await traverse_from_categories(client, ["category:flowers"], max_hops=3)
 
     await client.close()

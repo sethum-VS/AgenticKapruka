@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -40,7 +40,16 @@ async def test_analyze_intent_shopping_turn_skips_gemini() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     expected_metadata: IntentMetadata = _preprocessor.process("birthday cake for mom")
-    assert result == {"intent": "discovery", "intent_metadata": expected_metadata}
+    assert result == {
+        "intent": "discovery",
+        "intent_metadata": expected_metadata,
+        "specificity_score": 75.0,
+        "specificity_band": "proceed",
+        "agent_clarifying_question": None,
+        "session_product_focus": "cake",
+        "session_occasion": "birthday",
+        "session_recipient_hint": "mom",
+    }
     mock_client.models.generate_content.assert_not_called()
 
 
@@ -82,7 +91,11 @@ async def test_analyze_intent_tracking_guard_skips_gemini() -> None:
     result = await analyze_intent(state, genai_client=mock_client)
 
     expected_metadata: IntentMetadata = _preprocessor.process("where is order VIMP123?")
-    assert result == {"intent": "tracking", "intent_metadata": expected_metadata}
+    assert result == {
+        "intent": "tracking",
+        "intent_metadata": expected_metadata,
+        "session_awaiting_clarification_dimension": None,
+    }
     mock_client.models.generate_content.assert_not_called()
 
 
@@ -98,6 +111,28 @@ async def test_analyze_intent_proceed_checkout_skips_gemini() -> None:
 
     expected_metadata: IntentMetadata = _preprocessor.process(PROCEED_CHECKOUT_MESSAGE)
     assert result == {"intent": "checkout", "intent_metadata": expected_metadata}
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_suppresses_duplicate_proceed_at_delivery_city() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content=PROCEED_CHECKOUT_MESSAGE)],
+        "session_id": "sess-intent-005b",
+        "checkout_state": "delivery_city",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    expected_metadata: IntentMetadata = _preprocessor.process(PROCEED_CHECKOUT_MESSAGE)
+    assert result == {
+        "intent": "general",
+        "intent_metadata": {
+            **expected_metadata,
+            "duplicate_checkout_proceed": True,
+        },
+    }
     mock_client.models.generate_content.assert_not_called()
 
 
@@ -125,6 +160,32 @@ async def test_analyze_intent_checkout_trigger_skips_gemini() -> None:
     }
 
     result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent"] == "checkout"
+    mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_place_order_with_cart_routes_checkout() -> None:
+    mock_client = MagicMock()
+    mock_redis = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="place the order")],
+        "session_id": "sess-intent-place-order",
+    }
+
+    with patch(
+        "graphs.nodes.analyze_intent.get_cart",
+        new_callable=AsyncMock,
+    ) as mock_get_cart:
+        mock_get_cart.return_value = [
+            MagicMock(product_id="cake001", quantity=1),
+        ]
+        result = await analyze_intent(
+            state,
+            genai_client=mock_client,
+            redis_client=mock_redis,
+        )
 
     assert result["intent"] == "checkout"
     mock_client.models.generate_content.assert_not_called()
@@ -181,6 +242,125 @@ async def test_analyze_intent_keeps_prior_session_budget_when_turn_has_none() ->
 
 
 @pytest.mark.asyncio
+async def test_analyze_intent_persists_session_product_focus() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom")],
+        "session_id": "sess-intent-focus",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["session_product_focus"] == "cake"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_persists_session_flavor_hint_for_chocolate_cake() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="chocolate birthday cake for mom")],
+        "session_id": "sess-intent-flavor",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["session_product_focus"] == "cake"
+    assert result["session_flavor_hint"] == "chocolate"
+    assert result["intent_metadata"].get("session_flavor_hint") == "chocolate"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_keeps_prior_product_focus_on_floral_follow_up() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="She loves floral designs")],
+        "session_id": "sess-intent-focus-carry",
+        "session_product_focus": "cake",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["session_product_focus"] == "cake"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_rehydrates_session_delivery_date() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Colombo 03 please")],
+        "session_id": "sess-intent-date",
+        "session_delivery_date": "2026-06-21",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["delivery_date"] == "2026-06-21"
+    assert result["session_delivery_date"] == "2026-06-21"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_vague_gift_asks_preferences() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="any gift ideas?")],
+        "session_id": "sess-vague-gift",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("agent_clarifying_question")
+    assert result.get("session_awaiting_clarification_dimension") == "product"
+    assert result.get("specificity_band") == "clarify"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_cakes_followup_after_product_clarify_proceeds() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="cakes")],
+        "session_id": "sess-cakes-followup",
+        "session_awaiting_clarification_dimension": "product",
+        "session_product_focus": "gift",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("agent_clarifying_question") is None
+    assert result.get("session_awaiting_clarification_dimension") is None
+    assert result.get("specificity_band") == "proceed"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_budgeted_gift_chip_proceeds_to_search() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Gift ideas under Rs. 5,000")],
+        "session_id": "sess-budget-chip",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("agent_clarifying_question") is None
+    assert result.get("session_awaiting_clarification_dimension") is None
+    assert result["intent_metadata"].get("budgeted_gift_discovery") is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_usd_session_rs_chip_uses_lkr_budget() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Gift ideas under Rs. 5,000")],
+        "session_id": "sess-budget-currency",
+        "currency": "USD",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["session_budget_max"] == 5000.0
+    assert result["session_budget_currency"] == "LKR"
+
+
+@pytest.mark.asyncio
 async def test_analyze_intent_benchmark_eliminates_separate_intent_llm_call() -> None:
     """Phase 2: one fewer Gemini call — analyze_intent is guard-only for shopping turns."""
     mock_client = MagicMock()
@@ -192,3 +372,162 @@ async def test_analyze_intent_benchmark_eliminates_separate_intent_llm_call() ->
     await analyze_intent(state, genai_client=mock_client)
 
     assert mock_client.models.generate_content.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_weather_routes_general_off_topic() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="What's the weather in Colombo?")],
+        "session_id": "sess-off-topic",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent"] == "general"
+    assert result["intent_metadata"]["is_off_topic"] is True
+    assert result["intent_metadata"]["target_city"] is None
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_support_policy_routes_general_with_topic() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [
+            HumanMessage(content="What's your return policy if flowers arrive wilted?"),
+        ],
+        "session_id": "sess-support-policy",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent"] == "general"
+    assert result["intent_metadata"]["support_topic"] == "quality"
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_topic_pivot_clears_session_budget() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Nevermind. Cakes.")],
+        "session_id": "sess-pivot-budget",
+        "session_budget_max": 6000.0,
+        "session_budget_currency": "LKR",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("session_budget_max") is None
+    assert result.get("session_budget_currency") is None
+    assert result.get("last_visible_products") is None
+    assert result.get("last_search_products") is None
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_topic_pivot_clears_hybrid_hints_and_search_query() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Nevermind. Cakes.")],
+        "session_id": "sess-pivot-context",
+        "session_search_query": "anniversary gift hamper",
+        "hybrid_context": {
+            "hints": {"occasion": "Anniversary", "category": "Birthday"},
+            "occasions": ["Anniversary"],
+        },
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("session_search_query") is None
+    assert result.get("last_visible_products") is None
+    assert result.get("last_search_products") is None
+    assert result["intent_metadata"]["topic_pivot"] is True
+    hints = result["hybrid_context"]["hints"]
+    assert "occasion" not in hints
+    assert "category" not in hints
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_occasion_change_sets_budget_confirmation_pending() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Show me some anniversary gifts")],
+        "session_id": "sess-occasion-pivot",
+        "session_occasion": "birthday",
+        "session_budget_max": 6000.0,
+        "session_budget_currency": "LKR",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("session_occasion") == "anniversary"
+    assert result.get("session_budget_max") == 6000.0
+    assert result["intent_metadata"].get("budget_confirmation_pending") is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_natural_budget_gift_clears_polluted_session() -> None:
+    """Long-session cake context must not steer wife+budget gift discovery."""
+    mock_client = MagicMock()
+    polluted_cakes = [
+        {"id": "CAKE001", "name": "Birthday Symphony Cake", "price": {"amount": 6500}},
+    ]
+    state: AgentState = {
+        "messages": [HumanMessage(content="wife, budget around 5000 rupees")],
+        "session_id": "sess-budget-gift-pivot",
+        "session_product_focus": "cake",
+        "session_occasion": "birthday",
+        "session_recipient_hint": "mom",
+        "session_search_query": "birthday cake for mom in Colombo",
+        "last_visible_products": polluted_cakes,
+        "last_search_products": polluted_cakes,
+        "hybrid_context": {
+            "hints": {"occasion": "Birthday", "category": "Cakes"},
+            "occasions": ["Birthday"],
+        },
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent_metadata"].get("budgeted_gift_discovery") is True
+    assert result.get("session_product_focus") == "gift"
+    assert result.get("session_occasion") is None
+    assert result.get("session_recipient_hint") == "wife"
+    assert result.get("session_search_query") is None
+    assert result.get("last_visible_products") is None
+    assert result.get("last_search_products") is None
+    hints = result["hybrid_context"]["hints"]
+    assert "occasion" not in hints
+    assert "category" not in hints
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_category_change_sets_budget_confirmation_pending() -> None:
+    """Chocolate → flowers category change with active budget triggers confirmation."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Show me some flower bouquets")],
+        "session_id": "sess-category-change",
+        "session_product_focus": "chocolate",
+        "session_budget_max": 5000.0,
+        "session_budget_currency": "LKR",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent_metadata"].get("budget_confirmation_pending") is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_category_change_no_confirmation_when_no_budget() -> None:
+    """Category change without an active budget does not set confirmation pending."""
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Show me some flower bouquets")],
+        "session_id": "sess-no-budget-change",
+        "session_product_focus": "chocolate",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert not result["intent_metadata"].get("budget_confirmation_pending")

@@ -233,7 +233,7 @@ async def test_tracking_turn_with_money_shaped_amount_renders_without_crash(
 
     assert result["intent"] == "tracking"
     assert 'data-testid="order-tracking-status"' in (result.get("response_html") or "")
-    assert "LKR 4,970" in (result.get("response_html") or "")
+    assert "Rs. 4,970" in (result.get("response_html") or "")
     mock_service.track_order.assert_awaited_once()
 
 
@@ -349,7 +349,7 @@ async def test_cakes_after_ask_user_renders_carousel_not_stale_clarifying(
     assert first.get("agent_clarifying_question")
 
     second = await graph.ainvoke(append_message_state("cakes"), config)
-    html = second.get("response_html") or ""
+    html = (second.get("response_html") or "") + (second.get("carousel_html") or "")
     assert 'data-testid="product-carousel"' in html
     assert 'data-product-id="cake00ka002034"' in html
     assert "previous search for 'gifts'" not in (second.get("assistant_message") or "").lower()
@@ -445,3 +445,48 @@ async def test_search_turn_then_add_to_cart_resolves_from_checkpoint(
     assert cart[0].quantity == 1
     assert 'hx-swap-oob="outerHTML"' in (second.get("response_html") or "")
     mock_service.get_product.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_add_that_to_cart_resolves_deictic_from_checkpoint(
+    checkpointer: AsyncRedisSaver,
+    redis_client: RedisClient,
+) -> None:
+    """Deictic add-to-cart resolves from last_visible_products without cold MCP search."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[_BLUSH_ROSES_PRODUCT],
+        next_cursor=None,
+        applied_filters={"q": "blush roses", "limit": 10, "in_stock_only": False},
+    )
+    mock_service.get_product.return_value = _BLUSH_GET_PRODUCT
+
+    deps = ShoppingGraphDeps(
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        genai_client=build_mock_genai_client(
+            search_query="blush roses",
+            assistant_message="Here are some blush rose combos.",
+        ),
+        redis_client=redis_client,
+    )
+    graph = build_shopping_graph(checkpointer=checkpointer, deps=deps)
+    config: dict[str, Any] = {"configurable": {"thread_id": "thread-cart-that"}}
+
+    first = await graph.ainvoke(
+        initial_shopping_state(
+            message="blush roses combo",
+            session_id=_SESSION_ID,
+            thread_id="thread-cart-that",
+        ),
+        config,
+    )
+    assert first.get("last_visible_products") or first.get("last_search_products")
+
+    second = await graph.ainvoke(
+        append_message_state("Add that to my cart"),
+        config,
+    )
+    action = second.get("cart_action_result") or {}
+    assert action.get("status") == "added"
+    assert mock_service.search_products.await_count == 1

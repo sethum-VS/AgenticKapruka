@@ -18,6 +18,11 @@ def test_classify_utility_for_transactional_search() -> None:
     assert classify_query_mode("Show me birthday cakes under 5000 rupees") == "utility"
 
 
+def test_classify_utility_for_transactional_apology() -> None:
+    message = "I'm sorry — I ordered the wrong cake. Can you help me find a replacement?"
+    assert classify_query_mode(message) == "utility"
+
+
 def test_classify_situational_for_breakup() -> None:
     message = "I broke up with my girlfriend and feel heartbroken"
     assert classify_query_mode(message) == "situational"
@@ -52,6 +57,8 @@ def test_extract_target_city_for_deliver_to_kandy() -> None:
 def test_extract_target_city_colombo_zone_without_delivery_verb() -> None:
     assert extract_target_city("Birthday cake for my mom in Colombo 05") == "Colombo 05"
     assert extract_target_city("Birthday cake for my mom in Colombo") == "Colombo"
+    assert extract_target_city("Colombo 03") == "Colombo 03"
+    assert extract_target_city("Colombo 03 please") == "Colombo 03"
 
 
 def test_query_preprocessor_extracts_colombo_zone_on_first_turn() -> None:
@@ -68,6 +75,8 @@ def test_query_preprocessor_utility_transactional() -> None:
         "requires_delivery_validation": False,
         "target_city": None,
         "budget_max": 5000.0,
+        "budget_currency": "LKR",
+        "vernacular_score_hint": 0.0,
     }
 
 
@@ -93,7 +102,40 @@ def test_query_preprocessor_perishable_gift_with_city_requires_delivery() -> Non
     assert metadata["requires_delivery_validation"] is True
 
 
+def test_query_preprocessor_roses_galle_tomorrow_requires_delivery() -> None:
+    metadata = _preprocessor.process("Fresh roses to Galle tomorrow")
+    assert metadata["target_city"] == "Galle"
+    assert metadata["requires_delivery_validation"] is True
+
+
 def test_classify_situational_for_valentine_nerves() -> None:
     message = "Valentine's surprise for my partner — I'm nervous"
     assert classify_query_mode(message) == "situational"
     assert _preprocessor.process(message)["is_situational"] is True
+
+
+def test_is_delivery_context_relevant_turn_breakup_without_delivery_tokens() -> None:
+    from lib.chat.query_preprocessor import is_delivery_context_relevant_turn
+
+    state = {
+        "session_delivery_city_canonical": "Kandy",
+        "session_delivery_date": "2026-06-28",
+        "intent_metadata": {"is_situational": True},
+    }
+    assert not is_delivery_context_relevant_turn(
+        state,
+        "We just broke up and I'm heartbroken.",
+    )
+
+
+def test_is_delivery_context_relevant_turn_delivery_question() -> None:
+    from lib.chat.query_preprocessor import is_delivery_context_relevant_turn
+
+    state = {
+        "session_delivery_city_canonical": "Kandy",
+        "intent_metadata": {},
+    }
+    assert is_delivery_context_relevant_turn(
+        state,
+        "can you deliver to Kandy this Sunday?",
+    )

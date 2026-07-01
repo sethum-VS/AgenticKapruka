@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,9 +12,9 @@ from graphs.nodes.call_mcp_tools import select_tool_calls
 from graphs.nodes.retrieve_hybrid_context import (
     _fetch_graph_hybrid_context,
     retrieve_hybrid_context,
-    route_after_analyze_intent,
 )
 from graphs.state import AgentState, Intent
+from lib.chat.routing import route_after_analyze_intent
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import VECTOR_CONFIDENCE_THRESHOLD
 from lib.neo4j.traverse import TraversalResult
@@ -173,6 +174,76 @@ def test_route_after_analyze_intent_defaults_to_retrieve_when_intent_missing() -
     assert route_after_analyze_intent(state) == "retrieve_hybrid_context"
 
 
+def test_route_after_analyze_intent_duplicate_proceed_skips_checkout_graph() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="Proceed to checkout")],
+        "intent": "general",
+        "intent_metadata": {"duplicate_checkout_proceed": True},
+        "session_id": "sess-route-dup-proceed",
+    }
+    assert route_after_analyze_intent(state) == "generate_response"
+
+
+def test_route_after_analyze_intent_support_topic_skips_hybrid_context() -> None:
+    state: AgentState = {
+        "messages": [
+            HumanMessage(content="What's your return policy if flowers arrive wilted?"),
+        ],
+        "intent": "general",
+        "intent_metadata": {"support_topic": "quality"},
+        "session_id": "sess-route-support",
+    }
+    assert route_after_analyze_intent(state) == "generate_response"
+
+
+def test_route_after_analyze_intent_support_with_delivery_routes_preflight() -> None:
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content="What's the delivery fee to Colombo and what's your return policy?",
+            ),
+        ],
+        "intent": "general",
+        "intent_metadata": {
+            "support_topic": "returns",
+            "requires_delivery_validation": True,
+            "target_city": "Colombo 03",
+        },
+        "session_id": "sess-route-support-delivery",
+    }
+    assert route_after_analyze_intent(state) == "resolve_delivery_context"
+
+
+def test_route_after_analyze_intent_delivery_only_routes_preflight() -> None:
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content=("Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"),
+            ),
+        ],
+        "intent": "discovery",
+        "specificity_band": "clarify",
+        "agent_clarifying_question": "What type of gift — flowers, cake, voucher, or hamper?",
+        "intent_metadata": {
+            "requires_delivery_validation": True,
+            "target_city": "Colombo 05",
+        },
+        "session_id": "sess-route-delivery-only",
+    }
+    assert route_after_analyze_intent(state) == "resolve_delivery_context"
+
+
+def test_route_after_analyze_intent_specificity_clarify_skips_hybrid_context() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="I want to buy something nice")],
+        "intent": "discovery",
+        "specificity_band": "clarify",
+        "agent_clarifying_question": ("What type of gift — flowers, cake, voucher, or hamper?"),
+        "session_id": "sess-route-specificity",
+    }
+    assert route_after_analyze_intent(state) == "generate_response"
+
+
 @pytest.mark.parametrize("intent", ["discovery", "general"])
 def test_route_after_analyze_intent_product_id_skips_hybrid_context(intent: Intent) -> None:
     """Product ID in message bypasses retrieve_hybrid_context (and future agent_loop)."""
@@ -311,6 +382,58 @@ async def test_fetch_graph_hybrid_context_skips_low_confidence_occasion_hop() ->
 
 
 @pytest.mark.asyncio
+async def test_fetch_graph_hybrid_context_continues_when_occasion_search_fails() -> None:
+    """Occasion index failure should not abort category vector hits."""
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    category_hits = [VectorSearchHit(id="category:cakes", score=0.82)]
+    embed_fn = AsyncMock(return_value=[[0.1] * 768])
+
+    with (
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.vector_search",
+            new=AsyncMock(return_value=category_hits),
+        ) as mock_category_search,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.occasion_vector_search",
+            new=AsyncMock(side_effect=RuntimeError("occasion index missing")),
+        ) as mock_occasion_search,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.fetch_category_ids_for_occasions",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.fetch_category_display_names",
+            new=AsyncMock(return_value={"category:cakes": "Cakes"}),
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.traverse_from_categories",
+            new=AsyncMock(return_value=TraversalResult(nodes=())),
+        ) as mock_traverse,
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.build_graph_hybrid_context",
+            return_value={"hints": {"category": "Cakes"}},
+        ) as mock_build,
+    ):
+        result = await _fetch_graph_hybrid_context(
+            "birthday cake",
+            neo4j_client=neo4j_client,
+            embed_fn=embed_fn,
+        )
+
+    mock_category_search.assert_awaited_once()
+    mock_occasion_search.assert_awaited_once()
+    mock_traverse.assert_awaited_once_with(
+        neo4j_client,
+        ["category:cakes"],
+        max_hops=2,
+    )
+    build_kwargs = mock_build.call_args.kwargs
+    assert build_kwargs["vector_hits"] == category_hits
+    assert build_kwargs["direct_occasion_hits"] == []
+    assert result == {"hints": {"category": "Cakes"}}
+
+
+@pytest.mark.asyncio
 async def test_retrieve_hybrid_context_pruned_graph_hints_only_for_planner() -> None:
     """Hybrid context merges into state as soft hints — discovery MCP args are not auto-built."""
     pruned_graph_context = {
@@ -401,3 +524,92 @@ async def test_retrieve_hybrid_context_adds_birthday_dessert_exclude_hints() -> 
 
     assert "Chocolate" in updates["hybrid_context"]["hints"]["exclude_categories"]
     assert updates["hybrid_context"]["hints"]["occasion"] == "Birthday"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_skips_past_occasion_on_topic_pivot() -> None:
+    state: AgentState = {
+        "messages": [HumanMessage(content="Nevermind. Cakes.")],
+        "intent": "discovery",
+        "intent_metadata": {"topic_pivot": True},
+        "zep_memory_facts": ["User celebrated wife's anniversary last year"],
+    }
+
+    result = await retrieve_hybrid_context(state)
+
+    hints = result["hybrid_context"].get("hints") or {}
+    assert "occasion" not in hints or hints.get("occasion") != "anniversary"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_parallelizes_zep_and_graph() -> None:
+    """Zep preference fetch runs concurrently with Neo4j graph retrieval."""
+    zep_client = AsyncMock()
+    neo4j_client = AsyncMock(spec=Neo4jClient)
+    zep_started = asyncio.Event()
+    graph_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_extract_preferences(
+        _client: object,
+        _thread_id: str,
+    ) -> dict[str, str]:
+        zep_started.set()
+        await release.wait()
+        return {"favorite_category": "Birthday"}
+
+    async def slow_graph_fetch(
+        _query: str,
+        *,
+        neo4j_client: Neo4jClient,
+        embed_fn: object,
+    ) -> dict[str, object]:
+        graph_started.set()
+        await release.wait()
+        return {"hints": {"category": "Cakes"}, "vector_hits": [{"id": "category:cakes"}]}
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="birthday cake for mom")],
+        "intent": "discovery",
+        "zep_thread_id": "thread-parallel",
+    }
+
+    with (
+        patch(
+            "graphs.nodes.retrieve_hybrid_context.extract_preferences",
+            side_effect=slow_extract_preferences,
+        ),
+        patch(
+            "graphs.nodes.retrieve_hybrid_context._fetch_graph_hybrid_context",
+            side_effect=slow_graph_fetch,
+        ),
+    ):
+        task = asyncio.create_task(
+            retrieve_hybrid_context(state, zep_client=zep_client, neo4j_client=neo4j_client),
+        )
+        await asyncio.wait_for(zep_started.wait(), timeout=1.0)
+        await asyncio.wait_for(graph_started.wait(), timeout=1.0)
+        release.set()
+        result = await task
+
+    assert result["hybrid_context"]["preferences"]["favorite_category"] == "Birthday"
+    assert "vector_hits" in result["hybrid_context"]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_hybrid_context_wires_anniversary_hints() -> None:
+    """Anniversary query populates exclude_categories from enrich_anniversary_hints."""
+    state: AgentState = {
+        "messages": [HumanMessage(content="anniversary flowers for my wife")],
+        "intent": "discovery",
+        "session_id": "sess-anniversary-hints",
+    }
+
+    updates = await retrieve_hybrid_context(state)
+
+    hints = updates["hybrid_context"].get("hints") or {}
+    exclude = str(hints.get("exclude_categories") or "")
+    assert exclude, "Expected anniversary exclude_categories hint"
+    assert any(kw in exclude.lower() for kw in ("greeting", "card", "voucher")), (
+        f"Expected greeting/voucher in exclude_categories: {exclude!r}"
+    )

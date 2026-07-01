@@ -19,13 +19,13 @@ from lib.kapruka.service import KaprukaService
 _CLIENT_IP = "203.0.113.42"
 
 
-def test_route_after_resolve_clarify_when_question_set() -> None:
+def test_route_after_resolve_clarify_routes_to_agent_loop() -> None:
     state: AgentState = {
         "messages": [],
         "session_id": "sess-resolve-route",
         "agent_clarifying_question": "Which Colombo zone?",
     }
-    assert route_after_resolve_delivery_context(state) == "generate_response"
+    assert route_after_resolve_delivery_context(state) == "agent_loop"
 
 
 def test_route_after_resolve_product_id_fast_path() -> None:
@@ -44,6 +44,23 @@ def test_route_after_resolve_defaults_to_agent_loop() -> None:
         "delivery_context_ready": True,
     }
     assert route_after_resolve_delivery_context(state) == "agent_loop"
+
+
+def test_route_after_resolve_delivery_only_skips_agent_loop() -> None:
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content=("Can you deliver to Colombo 05 this Sunday? What's the delivery fee?"),
+            ),
+        ],
+        "session_id": "sess-resolve-delivery-only",
+        "delivery_context_ready": True,
+        "intent_metadata": {
+            "requires_delivery_validation": True,
+            "target_city": "Colombo 05",
+        },
+    }
+    assert route_after_resolve_delivery_context(state) == "generate_response"
 
 
 @pytest.mark.asyncio
@@ -68,6 +85,24 @@ async def test_resolve_delivery_context_skips_when_no_city_signal() -> None:
 @pytest.mark.asyncio
 async def test_resolve_delivery_context_ambiguous_colombo_clarifies() -> None:
     service = AsyncMock(spec=KaprukaService)
+    preflight_output = {
+        "city": "Colombo",
+        "now": "2026-06-12T12:00:00+05:30",
+        "checked_date": "2026-06-12",
+        "available": True,
+        "rate": 500.0,
+        "currency": "LKR",
+        "reason": None,
+        "next_available_date": None,
+        "perishable_warning": None,
+    }
+
+    class _MockOutput:
+        def model_dump(self) -> dict[str, object]:
+            return preflight_output
+
+    service.check_delivery.return_value = _MockOutput()
+
     state: AgentState = {
         "messages": [HumanMessage(content="Birthday cake for mom in Colombo")],
         "session_id": "sess-resolve-ambiguous",
@@ -96,8 +131,115 @@ async def test_resolve_delivery_context_ambiguous_colombo_clarifies() -> None:
 
     assert result["delivery_city_status"] == "ambiguous"
     assert result["agent_clarifying_question"] == ambiguous.customer_message
-    assert result["agent_loop_exit_reason"] == "ask_user"
+    assert result["delivery_context_ready"] is True
+    assert result.get("agent_loop_exit_reason") is None
+    tool_trace = result.get("tool_trace") or []
+    assert len(tool_trace) == 1
+    assert tool_trace[0]["name"] == "kapruka_check_delivery"
+    assert tool_trace[0]["args"] == {"city": "Colombo"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_delivery_context_ambiguous_colombo_soft_nudge_dated_preflight() -> None:
+    """Rich cake + bare Colombo runs dated check_delivery before zone clarify."""
+    service = AsyncMock(spec=KaprukaService)
+    preflight_output = {
+        "city": "Colombo",
+        "now": "2026-06-12T12:00:00+05:30",
+        "checked_date": "2026-06-15",
+        "available": True,
+        "rate": 500.0,
+        "currency": "LKR",
+        "reason": None,
+        "next_available_date": None,
+        "perishable_warning": None,
+    }
+
+    class _MockOutput:
+        def model_dump(self) -> dict[str, object]:
+            return preflight_output
+
+    service.check_delivery.return_value = _MockOutput()
+
+    state: AgentState = {
+        "messages": [
+            HumanMessage(
+                content=(
+                    "Mom's 65th birthday this Sunday in Colombo — chocolate cakes under Rs 8,000"
+                ),
+            ),
+        ],
+        "session_id": "sess-resolve-colombo-rich-cake",
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "en",
+            "requires_delivery_validation": True,
+            "target_city": "Colombo",
+            "budget_max": 8000.0,
+        },
+    }
+    ambiguous = CityResolution(
+        status="ambiguous",
+        candidates=["Colombo 01", "Colombo 02", "Colombo 03"],
+        customer_message="Colombo has several delivery zones. Which area?",
+    )
+
+    with (
+        patch(
+            "graphs.nodes.resolve_delivery_context.resolve_delivery_city",
+            new=AsyncMock(return_value=ambiguous),
+        ),
+        patch(
+            "graphs.nodes.resolve_delivery_context.normalize_delivery_date",
+            return_value="2026-06-15",
+        ),
+        patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
+    ):
+        result = await resolve_delivery_context(
+            state,
+            kapruka_service=service,
+            client_ip=_CLIENT_IP,
+        )
+
+    service.check_delivery.assert_awaited_once_with(
+        _CLIENT_IP,
+        city="Colombo",
+        delivery_date="2026-06-15",
+        product_id=None,
+    )
+    tool_trace = result.get("tool_trace") or []
+    assert len(tool_trace) == 1
+    assert tool_trace[0]["name"] == "kapruka_check_delivery"
+    assert tool_trace[0]["args"] == {"city": "Colombo", "delivery_date": "2026-06-15"}
+    service = AsyncMock(spec=KaprukaService)
+    state: AgentState = {
+        "messages": [HumanMessage(content="Can you deliver to Colombo this Sunday?")],
+        "session_id": "sess-resolve-delivery-intent",
+        "intent_metadata": {
+            "is_situational": False,
+            "detected_vernacular": "en",
+            "requires_delivery_validation": True,
+            "target_city": "Colombo",
+            "budget_max": None,
+        },
+    }
+    ambiguous = CityResolution(
+        status="ambiguous",
+        candidates=["Colombo 01", "Colombo 02"],
+        customer_message="Colombo has several delivery zones. Which area?",
+    )
+    with patch(
+        "graphs.nodes.resolve_delivery_context.resolve_delivery_city",
+        new=AsyncMock(return_value=ambiguous),
+    ):
+        result = await resolve_delivery_context(
+            state,
+            kapruka_service=service,
+            client_ip=_CLIENT_IP,
+        )
+
     assert result["delivery_context_ready"] is False
+    assert result["agent_loop_exit_reason"] == "ask_user"
 
 
 @pytest.mark.asyncio
@@ -185,7 +327,7 @@ async def test_resolve_delivery_context_preflight_check_delivery_on_city_resolve
             client_ip=_CLIENT_IP,
         )
 
-    service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy")
+    service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy", product_id=None)
     tool_trace = result.get("tool_trace") or []
     assert len(tool_trace) == 1
     assert tool_trace[0]["name"] == "kapruka_check_delivery"
@@ -194,12 +336,30 @@ async def test_resolve_delivery_context_preflight_check_delivery_on_city_resolve
 
 
 @pytest.mark.asyncio
-async def test_resolve_delivery_context_preflight_skipped_when_date_present() -> None:
-    """Preflight is skipped when the user message already names a delivery date."""
+async def test_resolve_delivery_context_dated_preflight_when_date_present() -> None:
+    """Dated preflight runs kapruka_check_delivery when city and date are both known."""
     service = AsyncMock(spec=KaprukaService)
+    preflight_output = {
+        "city": "Galle",
+        "now": "2026-06-12T12:00:00+05:30",
+        "checked_date": "2026-06-13",
+        "available": True,
+        "rate": 500.0,
+        "currency": "LKR",
+        "reason": None,
+        "next_available_date": None,
+        "perishable_warning": None,
+    }
+
+    class _MockOutput:
+        def model_dump(self) -> dict[str, object]:
+            return preflight_output
+
+    service.check_delivery.return_value = _MockOutput()
+
     state: AgentState = {
         "messages": [HumanMessage(content="roses for Galle tomorrow")],
-        "session_id": "sess-resolve-preflight-skip",
+        "session_id": "sess-resolve-preflight-dated",
         "intent_metadata": {
             "is_situational": False,
             "detected_vernacular": "en",
@@ -227,8 +387,15 @@ async def test_resolve_delivery_context_preflight_skipped_when_date_present() ->
             client_ip=_CLIENT_IP,
         )
 
-    service.check_delivery.assert_not_awaited()
-    assert result.get("tool_trace") in (None, [])
+    service.check_delivery.assert_awaited_once_with(
+        _CLIENT_IP,
+        city="Galle",
+        delivery_date="2026-06-13",
+        product_id=None,
+    )
+    tool_trace = result.get("tool_trace") or []
+    assert len(tool_trace) == 1
+    assert tool_trace[0]["args"] == {"city": "Galle", "delivery_date": "2026-06-13"}
 
 
 @pytest.mark.asyncio
@@ -277,7 +444,7 @@ async def test_resolve_delivery_context_preflight_on_delivery_followup_with_sess
             client_ip=_CLIENT_IP,
         )
 
-    service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy")
+    service.check_delivery.assert_awaited_once_with(_CLIENT_IP, city="Kandy", product_id=None)
     tool_trace = result.get("tool_trace") or []
     assert len(tool_trace) == 1
     assert tool_trace[0]["args"] == {"city": "Kandy"}

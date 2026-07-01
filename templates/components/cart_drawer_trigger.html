@@ -1,0 +1,19 @@
+{# Cart icon button — lives in the header; shares Alpine scope with cart_drawer_panel. #}
+{% set cart_item_count = cart_item_count | default(0) %}
+<button
+  type="button"
+  class="relative flex h-11 w-11 items-center justify-center rounded-lg text-primary transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+  aria-label="Open shopping cart"
+  :aria-expanded="open"
+  data-testid="cart-icon"
+  @click="openDrawer()"
+>
+  <span class="material-symbols-outlined text-[22px]" aria-hidden="true">shopping_cart</span>
+  <span
+    x-show="itemCount > 0"
+    x-text="itemCount"
+    class="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-secondary-container px-1 text-label-sm font-label-sm font-semibold tabular-nums text-primary"
+    data-testid="cart-badge"
+    {% if cart_item_count > 0 %}aria-label="{{ cart_item_count }} items in cart"{% else %}aria-hidden="true"{% endif %}
+  >{% if cart_item_count > 0 %}{{ cart_item_count }}{% endif %}</span>
+</button>

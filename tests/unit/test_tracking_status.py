@@ -104,7 +104,7 @@ def test_build_tracking_status_html_coerces_money_shaped_amount() -> None:
     payload = {**_TRACK_ORDER_JSON, "amount": {"value": "4970", "currency": "LKR"}}
     html = build_tracking_status_html({TRACK_ORDER_TOOL: payload})
     assert html is not None
-    assert "LKR 4,970" in html
+    assert "Rs. 4,970" in html
     assert 'data-testid="tracking-amount"' in html
 
 

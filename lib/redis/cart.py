@@ -173,3 +173,27 @@ async def update_quantity(
 async def clear_cart(redis_client: RedisClient, session_id: str) -> None:
     """Delete all items for session_id."""
     await redis_client.client.delete(cart_key(session_id))
+
+
+async def migrate_cart(
+    redis_client: RedisClient,
+    from_session_id: str,
+    to_session_id: str,
+) -> None:
+    """Copy cart line items to a new session id (used when rotating chat thread_id)."""
+    if not from_session_id or from_session_id == to_session_id:
+        return
+    items = await get_cart(redis_client, from_session_id)
+    if not items:
+        return
+    for item in items:
+        await add_item(
+            redis_client,
+            to_session_id,
+            product_id=item.product_id,
+            name=item.name,
+            price_amount=item.price_amount,
+            price_currency=item.price_currency,
+            quantity=item.quantity,
+            icing_text=item.icing_text,
+        )

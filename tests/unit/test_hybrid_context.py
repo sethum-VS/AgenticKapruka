@@ -15,7 +15,10 @@ from lib.neo4j.hybrid_context import (
     build_graph_hybrid_context,
     discovery_tool_manifest,
     enrich_birthday_cake_hints,
+    enrich_flower_fruit_negative_hints,
+    has_strong_hybrid_hints,
     is_birthday_cake_intent,
+    is_confident_discovery_turn,
     occasion_rewrite_needed,
     requires_discovery_delivery_check,
     rerank_and_prune_traversal,
@@ -45,6 +48,15 @@ def _occasion_node(
     )
 
 
+# MS MARCO MiniLM outputs raw logits (~-12 to +12), not 0–1 relevance scores.
+# Unit tests inject normalized scores; integration tests assert real logit scale.
+_MOCK_RERANKER_SCORES = [0.91, 0.44, 0.12]
+_RECORDED_MS_MARCO_LOGITS: dict[str, list[float]] = {
+    "birthday cake for mom in Colombo": [-9.89, -6.61, -4.04, -1.16],
+    "red roses under 5000": [-8.2, -5.1, -3.4],
+}
+
+
 class _SequenceReranker(CrossEncoderService):
     """Return predetermined scores in pair order for unit tests."""
 
@@ -55,6 +67,15 @@ class _SequenceReranker(CrossEncoderService):
     def score_pairs(self, query: str, texts: list[str]) -> list[float]:
         assert len(texts) == len(self._scores)
         return list(self._scores)
+
+
+def test_reranker_mock_scores_document_normalized_test_scale() -> None:
+    """Unit reranker mocks use 0–1 scores; production MS MARCO emits logits (see integration)."""
+    assert all(0.0 <= score <= 1.0 for score in _MOCK_RERANKER_SCORES)
+    recorded = _RECORDED_MS_MARCO_LOGITS["birthday cake for mom in Colombo"]
+    assert all(score < 0 for score in recorded), (
+        "MS MARCO logits for ontology text are typically negative"
+    )
 
 
 def test_hints_use_highest_reranker_score_not_vector_or_weight() -> None:
@@ -129,12 +150,12 @@ def test_reranker_prunes_low_scoring_traversal_nodes() -> None:
 
 
 def test_reranker_omits_hints_below_threshold() -> None:
-    """No hints when every Occasion/Category candidate scores below threshold."""
+    """No hints when reranker and vector hits are both below confidence."""
     reranker = _SequenceReranker([0.2, 0.1])
 
     context = build_graph_hybrid_context(
         "gift ideas",
-        vector_hits=[VectorSearchHit(id="category:gifts", score=0.8)],
+        vector_hits=[VectorSearchHit(id="category:gifts", score=0.5)],
         direct_occasion_hits=[VectorSearchHit(id="occasion:wedding", score=0.3)],
         display_names={"category:gifts": "Gifts"},
         traversal=TraversalResult(nodes=()),
@@ -144,6 +165,109 @@ def test_reranker_omits_hints_below_threshold() -> None:
 
     assert context.get("hints") == {}
     assert context["vector_hits"][0]["id"] == "category:gifts"
+
+
+def test_vector_fallback_hints_when_reranker_scores_low() -> None:
+    """High-confidence vector hits seed hints when reranker rejects all candidates."""
+    reranker = _SequenceReranker([0.2, 0.1])
+
+    context = build_graph_hybrid_context(
+        "gift ideas",
+        vector_hits=[VectorSearchHit(id="category:gifts", score=0.82)],
+        direct_occasion_hits=[VectorSearchHit(id="occasion:wedding", score=0.3)],
+        display_names={"category:gifts": "Gifts"},
+        traversal=TraversalResult(nodes=()),
+        reranker=reranker,
+        reranker_threshold=DEFAULT_RERANKER_THRESHOLD,
+    )
+
+    assert context["hints"]["category"] == "Gifts"
+    assert "occasion" not in context["hints"]
+
+
+def test_reranker_relative_ranking_on_ms_marco_logits() -> None:
+    """Raw MS MARCO logits still yield hints via relative top-1 ranking."""
+    traversal = TraversalResult(
+        nodes=(
+            _occasion_node(
+                occasion_id="occasion:birthday",
+                display_name="Birthday",
+                weight=1.5,
+            ),
+        ),
+    )
+    logits = [-9.89, -6.61, -4.04]
+    reranker = _SequenceReranker(logits)
+
+    context = build_graph_hybrid_context(
+        "birthday cake for mom in Colombo",
+        vector_hits=[
+            VectorSearchHit(id="category:mother", score=0.868),
+            VectorSearchHit(id="category:cakes", score=0.72),
+        ],
+        direct_occasion_hits=[],
+        display_names={"category:mother": "Mother", "category:cakes": "Cakes"},
+        traversal=traversal,
+        reranker=reranker,
+        reranker_threshold=DEFAULT_RERANKER_THRESHOLD,
+    )
+
+    assert context["hints"].get("category") == "Cakes"
+    assert context["hints"].get("occasion") == "Birthday"
+
+
+def test_reranker_strips_city_before_scoring() -> None:
+    """Location tokens must not be passed to the cross-encoder."""
+    _SequenceReranker([-4.0, -6.0])
+    captured: list[str] = []
+
+    class _CapturingReranker(_SequenceReranker):
+        def score_pairs(self, query: str, texts: list[str]) -> list[float]:
+            captured.append(query)
+            return super().score_pairs(query, texts)
+
+    rerank_and_prune_traversal(
+        "birthday cake for mom in Colombo",
+        TraversalResult(nodes=()),
+        vector_hits=[VectorSearchHit(id="category:cakes", score=0.9)],
+        direct_occasion_hits=[VectorSearchHit(id="occasion:birthday", score=0.9)],
+        display_names={"category:cakes": "Cakes"},
+        reranker=_CapturingReranker([-4.0, -6.0]),
+        threshold=DEFAULT_RERANKER_THRESHOLD,
+    )
+
+    assert captured == ["birthday cake for mom"]
+
+
+def test_vendor_occasions_excluded_from_hint_pool() -> None:
+    """Hotel/vendor occasion nodes must not enter the rerank candidate pool."""
+    traversal = TraversalResult(
+        nodes=(
+            _occasion_node(
+                occasion_id="occasion:amari-colombo",
+                display_name="Amari Colombo",
+                weight=2.0,
+            ),
+            _occasion_node(
+                occasion_id="occasion:birthday",
+                display_name="Birthday",
+                weight=1.0,
+            ),
+        ),
+    )
+    reranker = _SequenceReranker([-9.89])
+
+    _, _, occasion_hint = rerank_and_prune_traversal(
+        "birthday cake for mom",
+        traversal,
+        vector_hits=[],
+        direct_occasion_hits=[],
+        display_names={},
+        reranker=reranker,
+        threshold=DEFAULT_RERANKER_THRESHOLD,
+    )
+
+    assert occasion_hint == "Birthday"
 
 
 def test_discovery_tool_manifest_includes_check_delivery_for_city_metadata() -> None:
@@ -270,6 +394,40 @@ def test_build_discovery_search_args_parses_under_price_budget() -> None:
     assert args["category"] == "Birthday"
 
 
+def test_build_discovery_search_args_tea_gift_under_budget() -> None:
+    """Tea gift queries must search for tea, not generic gift/chocolate."""
+    args = build_discovery_search_args(
+        "tea gift under Rs 5000",
+        {},
+        currency="LKR",
+    )
+    assert "tea" in args["q"].lower()
+    assert args.get("max_price") == 5000.0
+    assert args.get("sort") == "relevance"
+
+
+def test_build_discovery_search_args_gift_ideas_tea_colleague_uses_relevance_sort() -> None:
+    args = build_discovery_search_args(
+        "Gift ideas under Rs. 5,000 for a colleague who loves tea",
+        {},
+        currency="LKR",
+    )
+    assert "tea" in args["q"].lower()
+    assert args.get("max_price") == 5000.0
+    assert args.get("sort") == "relevance"
+
+
+def test_build_discovery_search_args_wife_birthday_chocolate_prefers_chocolate_gift() -> None:
+    args = build_discovery_search_args(
+        "wife birthday chocolate under 6000",
+        {"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "chocolate birthday cake"
+    assert args["max_price"] == 6000.0
+
+
 def test_is_birthday_cake_intent_detects_explicit_and_occasion_cake() -> None:
     assert is_birthday_cake_intent("Birthday cake for mom in Colombo")
     assert is_birthday_cake_intent("cake for mom's birthday")
@@ -284,6 +442,27 @@ def test_enrich_birthday_cake_hints_demotes_desserts_for_birthday_cake() -> None
     assert context["hints"]["occasion"] == "Birthday"
     assert "Chocolate" in context["hints"]["exclude_categories"]
     assert "Desserts" in context["hints"]["exclude_categories"]
+
+
+def test_enrich_birthday_cake_hints_skips_chocolate_exclusion_when_flavor_requested() -> None:
+    context = enrich_birthday_cake_hints(
+        "chocolate birthday cake for mom Colombo 8000",
+        {"hints": {"occasion": "Birthday"}},
+    )
+    exclude = context["hints"]["exclude_categories"]
+    assert "Chocolate" not in exclude
+    assert "Desserts" in exclude
+
+
+def test_build_discovery_search_args_chocolate_birthday_mom_colombo() -> None:
+    args = build_discovery_search_args(
+        "chocolate birthday cake for mom in Colombo budget 8000 LKR",
+        {"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+    assert "chocolate" in args["q"].lower()
+    assert args["max_price"] == 8000.0
+    assert args["sort"] == "price_asc"
 
 
 def test_enrich_birthday_cake_hints_skips_chocolate_flowers_combo() -> None:
@@ -464,3 +643,334 @@ def test_enrich_flower_fruit_negative_hints_skips_without_graph_context() -> Non
         {"hints": {"category": "Flowers"}},
     )
     assert "exclude_categories" not in context.get("hints", {})
+
+
+def test_is_broad_cakes_query_matches_bare_cakes_only() -> None:
+    from lib.neo4j.hybrid_context import is_broad_cakes_query
+
+    assert is_broad_cakes_query("cakes")
+    assert is_broad_cakes_query("Nevermind. Cakes.")
+    assert not is_broad_cakes_query("cake for mom")
+    assert not is_broad_cakes_query("birthday cake for mom")
+
+
+def test_build_budget_refinement_search_args_flowers_budget_uses_roses_q() -> None:
+    from lib.neo4j.hybrid_context import build_budget_refinement_search_args
+
+    args = build_budget_refinement_search_args(
+        {
+            "session_product_focus": "flowers",
+            "session_budget_max": 5000.0,
+            "intent_metadata": {"budget_max": 5000.0},
+        },
+        "Keep it under 5000 rupees.",
+        currency="LKR",
+    )
+    assert args is not None
+    assert args["q"] == "roses"
+    assert args["max_price"] == 5000.0
+
+
+def test_build_budget_refinement_search_args_uses_session_query() -> None:
+    from lib.neo4j.hybrid_context import build_budget_refinement_search_args
+
+    args = build_budget_refinement_search_args(
+        {
+            "session_search_query": "chocolate gift",
+            "session_product_focus": "chocolate",
+            "session_budget_max": 6000.0,
+            "intent_metadata": {"budget_max": 6000.0},
+        },
+        "under 6000",
+        currency="LKR",
+    )
+    assert args is not None
+    assert args["q"] == "chocolate gift"
+    assert args["max_price"] == 6000.0
+
+
+def test_build_budget_refinement_skips_when_budgeted_gift_discovery() -> None:
+    from lib.neo4j.hybrid_context import build_budget_refinement_search_args
+
+    args = build_budget_refinement_search_args(
+        {
+            "session_search_query": "birthday cake for mom",
+            "session_product_focus": "cake",
+            "session_budget_max": 5000.0,
+            "intent_metadata": {
+                "budget_max": 5000.0,
+                "budgeted_gift_discovery": True,
+            },
+        },
+        "wife, budget around 5000 rupees",
+        currency="LKR",
+    )
+    assert args is None
+
+
+def test_build_budget_refinement_search_args_birthday_chocolate_bias() -> None:
+    from lib.neo4j.hybrid_context import build_budget_refinement_search_args
+
+    args = build_budget_refinement_search_args(
+        {
+            "session_search_query": "chocolate gift",
+            "session_product_focus": "chocolate",
+            "session_occasion": "birthday",
+            "session_budget_max": 6000.0,
+            "intent_metadata": {"budget_max": 6000.0},
+        },
+        "Keep it under 6000 rupees.",
+        currency="LKR",
+    )
+    assert args is not None
+    assert args["q"] == "birthday chocolate cake"
+    assert args["category"] == "Birthday"
+    assert args["sort"] == "relevance"
+    assert args["max_price"] == 6000.0
+
+
+def test_merge_planner_search_args_budget_refinement() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "gift voucher"},
+        user_message="under 6000",
+        hybrid_context={},
+        currency="LKR",
+        state={
+            "session_search_query": "chocolate gift",
+            "session_product_focus": "chocolate",
+            "session_budget_max": 6000.0,
+            "intent_metadata": {"budget_max": 6000.0},
+        },
+    )
+    assert merged["q"] == "chocolate gift"
+    assert merged["max_price"] == 6000.0
+
+
+def test_build_discovery_search_args_anniversary_bias() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "Show me some anniversary gifts",
+        {"hints": {"occasion": "anniversary"}},
+        currency="LKR",
+    )
+    assert "anniversary" in args["q"].lower()
+
+
+def test_build_discovery_search_args_anniversary_flowers_drops_category_filter() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "what flowers do you have for anniversary?",
+        {"hints": {"category": "Flowers", "occasion": "Anniversary"}},
+        currency="LKR",
+    )
+
+    assert args["q"] == "anniversary flowers"
+    assert "category" not in args
+
+
+def test_merge_planner_search_args_anniversary_flowers_drops_flowers_category() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "anniversary flowers", "category": "Flowers"},
+        user_message="what flowers do you have for anniversary?",
+        hybrid_context={"hints": {"category": "Flowers", "occasion": "Anniversary"}},
+        currency="LKR",
+    )
+
+    assert merged["q"] == "anniversary flowers"
+    assert "category" not in merged
+
+
+def test_build_discovery_search_args_topic_pivot_bare_cakes_literal() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "Nevermind. Cakes.",
+        {"hints": {"occasion": "Anniversary"}},
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+    assert args["q"] == "cake"
+    assert "category" not in args
+
+
+def test_merge_planner_search_args_topic_pivot_bare_cakes() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "birthday cake", "category": "Birthday"},
+        user_message="Nevermind. Cakes.",
+        hybrid_context={"hints": {"occasion": "Anniversary"}},
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+    assert merged["q"] == "cake"
+    assert "category" not in merged
+
+
+def test_strip_location_from_search_query_for_galle() -> None:
+    from lib.neo4j.hybrid_context import strip_location_from_search_query
+
+    assert strip_location_from_search_query("Fresh roses for Galle tomorrow") == (
+        "Fresh roses tomorrow"
+    )
+    assert strip_location_from_search_query("red roses to Galle") == "red roses"
+
+
+def test_merge_planner_search_args_roses_galle_strips_city() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "roses for Galle", "currency": "LKR"},
+        user_message="Fresh roses for Galle tomorrow",
+        hybrid_context={},
+        currency="LKR",
+        intent_metadata={"target_city": "Galle"},
+    )
+    assert "Galle" not in merged["q"]
+    assert "roses" in merged["q"].lower()
+
+
+# P0-1 regression: mom-birthday + chocolate + budget must search "chocolate birthday cake"
+def test_build_discovery_search_args_mom_birthday_chocolate_budget_uses_chocolate_cake_q() -> None:
+    """P0-1: mom birthday + chocolate + budget must use chocolate birthday cake q."""
+    args = build_discovery_search_args(
+        "birthday gift for mom Colombo loves chocolate budget 8000",
+        {},
+        currency="LKR",
+    )
+    assert "chocolate birthday cake" in args["q"].lower(), (
+        f"Expected chocolate birthday cake, got {args['q']!r}"
+    )
+    assert args.get("category") == "Birthday"
+    assert args["max_price"] == 8000.0
+
+
+def test_build_discovery_search_args_mom_birthday_no_product_falls_back_to_happy_birthday_mom() -> (
+    None
+):
+    """P0-1: bare 'birthday gift for mom' with no product focus keeps Happy Birthday Mom."""
+    args = build_discovery_search_args(
+        "birthday gift for mom Colombo budget 8000",
+        {},
+        currency="LKR",
+    )
+    # No chocolate or cake in query — should fall back to generic
+    assert args["q"] == "Happy Birthday Mom"
+    assert args["max_price"] == 8000.0
+
+
+def test_build_discovery_search_args_mom_birthday_cake_uses_birthday_cake_q() -> None:
+    """P0-1: 'birthday gift for mom, cake' without chocolate → 'birthday cake' q."""
+    args = build_discovery_search_args(
+        "birthday gift for mom I want a cake budget 5000",
+        {},
+        currency="LKR",
+    )
+    assert "birthday cake" in args["q"].lower(), f"Got {args['q']!r}"
+    assert args.get("category") == "Birthday"
+
+
+def test_merge_planner_search_args_birthday_chocolate_gift_overrides_to_cake() -> None:
+    """P0-1: planner 'chocolate birthday gift' must override to chocolate birthday cake."""
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "chocolate birthday gift", "delivery_city": "Colombo"},
+        user_message="birthday gift for mom Colombo loves chocolate budget 8000",
+        hybrid_context={
+            "hints": {"exclude_categories": "Flower, Flowers, Bouquet, Floral"},
+            "product_count": 0,
+        },
+        currency="LKR",
+        intent_metadata={"budget_max": 8000.0, "budget_currency": "LKR"},
+    )
+    assert "cake" in merged["q"].lower(), (
+        f"Expected 'chocolate birthday cake' or similar, got {merged['q']!r}"
+    )
+    assert "condom" not in merged["q"].lower()
+
+
+def test_birthday_planner_q_needs_override_chocolate_gift_returns_true() -> None:
+    """P0-1: planner q 'chocolate birthday gift' needs override for birthday+chocolate query."""
+    from lib.neo4j.hybrid_context import _birthday_planner_q_needs_override
+
+    assert _birthday_planner_q_needs_override(
+        "chocolate birthday gift",
+        "birthday gift for mom Colombo loves chocolate budget 8000",
+    )
+
+
+def test_birthday_planner_q_needs_override_already_correct_returns_false() -> None:
+    """P0-1: planner q already set to 'chocolate birthday cake' should NOT be overridden."""
+    from lib.neo4j.hybrid_context import _birthday_planner_q_needs_override
+
+    assert not _birthday_planner_q_needs_override(
+        "chocolate birthday cake",
+        "birthday gift for mom Colombo loves chocolate budget 8000",
+    )
+
+
+def test_merge_planner_search_args_tea_strips_birthday_category() -> None:
+    """Tea queries must not inherit a stale Birthday category filter from hybrid hints."""
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "tea gift", "category": "Birthday", "max_price": 5000},
+        user_message="tea gift under Rs 5000",
+        hybrid_context={"hints": {"category": "Birthday"}},
+        currency="LKR",
+        intent_metadata={"budget_max": 5000.0, "budget_currency": "LKR"},
+    )
+    assert "tea" in merged["q"].lower()
+    assert "category" not in merged
+
+
+def test_has_strong_hybrid_hints_graph_vector_hits() -> None:
+    assert not has_strong_hybrid_hints({"vector_hits": [{"id": "category:cakes"}]})
+    assert has_strong_hybrid_hints({"hints": {"occasion": "Birthday"}})
+    assert not has_strong_hybrid_hints({})
+
+
+def test_is_confident_discovery_turn_birthday_cake_with_graph() -> None:
+    assert is_confident_discovery_turn(
+        "birthday cake for mom in Colombo",
+        {"vector_hits": [{"id": "category:cakes"}], "hints": {"occasion": "Birthday"}},
+        currency="LKR",
+    )
+
+
+def test_is_confident_discovery_turn_rejects_vague_gifts() -> None:
+    assert not is_confident_discovery_turn(
+        "show me gifts",
+        {"hints": {"category": "Birthday"}},
+        currency="LKR",
+    )
+
+
+def test_is_confident_discovery_turn_requires_strong_hints() -> None:
+    assert is_confident_discovery_turn(
+        "red roses under 5000",
+        {},
+        currency="LKR",
+    )
+    assert not is_confident_discovery_turn(
+        "show me gifts",
+        {"hints": {"category": "Birthday"}},
+        currency="LKR",
+    )
+    enriched = enrich_flower_fruit_negative_hints(
+        "red roses under 5000",
+        {"vector_hits": [{"id": "category:flowers", "score": 0.8}]},
+    )
+    assert "exclude_categories" in enriched.get("hints", {})
+    assert is_confident_discovery_turn(
+        "red roses under 5000",
+        enriched,
+        currency="LKR",
+    )

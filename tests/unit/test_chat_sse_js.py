@@ -18,6 +18,8 @@ def test_chat_sse_js_wires_post_stream_bridge() -> None:
     assert 'eventName = "message"' in source
     assert "swapStatusHtml" in source
     assert 'event.eventName === "status"' in source
+    assert 'event.eventName === "carousel"' in source
+    assert "swapCarouselHtml" in source
     assert "htmx.swap" in source
     assert 'HX-Request": "true"' in source
     assert "htmx:afterSwap" in source
@@ -39,7 +41,32 @@ def test_chat_sse_js_clears_loading_on_success_and_error() -> None:
     assert "elt.id !== CHAT_FORM_ID" in source
     assert "submitButton.disabled = false" in source
     assert "messageInput.readOnly = false" in source
-    assert 'indicator?.classList.remove("htmx-request")' in source
+    assert 'indicator?.classList.remove("htmx-request", "chat-loading")' in source
+    assert "clearTimeout(statusFlushTimer)" in source
+    assert "statusFlushTimer = null" in source
+    assert "statusShownAt = 0" in source
+    assert "hideLoadingIndicator" in source
+    assert "showLoadingIndicator" in source
+    assert "indicator.hidden = true" in source
+    assert 'indicator.setAttribute("aria-hidden", "true")' in source
+    assert '!form.classList.contains("htmx-request")' in source
+
+
+def test_chat_sse_js_hides_loading_indicator_on_deactivate() -> None:
+    """Deactivate clears loading text and hides the indicator instead of resetting Sending…."""
+    source = CHAT_SSE_JS.read_text()
+
+    assert 'span.textContent = ""' in source
+    assert "indicator.hidden = false" in source
+
+
+def test_chat_sse_js_uses_abort_controller_timeout() -> None:
+    source = CHAT_SSE_JS.read_text()
+
+    assert "AbortController" in source
+    assert "CHAT_STREAM_TIMEOUT_MS = 90_000" in source
+    assert "controller.abort()" in source
+    assert "signal: controller.signal" in source
 
 
 def test_chat_sse_js_removes_pending_bubble_on_stream_error() -> None:
@@ -50,3 +77,13 @@ def test_chat_sse_js_removes_pending_bubble_on_stream_error() -> None:
     assert '[id^="assistant-stream-"]' in source
     assert "removePendingAssistantBubbles();" in source
     assert "successful: false" in source
+
+
+def test_chat_sse_js_updates_loading_text_from_status_events() -> None:
+    """Status SSE payloads update #chat-loading span text and aria-label."""
+    source = CHAT_SSE_JS.read_text()
+
+    assert "updateLoadingStatusText" in source
+    assert 'data-testid="chat-loading-text"' in source
+    assert "parseStatusTextFromHtml" in source
+    assert 'DEFAULT_LOADING_TEXT = "Sending…"' in source

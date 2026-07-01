@@ -84,7 +84,7 @@ def test_check_delivery_endpoint_calls_mcp(page: Page, base_url: str) -> None:
     tool_score = score_mcp_tool_alignment(tools, ["kapruka_check_delivery"])
     constraint_score = score_constraint_fidelity(
         html,
-        must_contain=["Delivery available", "2026-12-25"],
+        must_contain=["Delivery available", "25 December 2026"],
     )
     assert tool_score.verdict == "pass", tool_score.reason
     assert constraint_score.verdict == "pass", constraint_score.reason

@@ -35,6 +35,21 @@ document.addEventListener("alpine:init", () => {
         input.value = suggestion;
         form.requestSubmit();
       });
+
+      const form = document.getElementById("chat-form");
+      const input = form?.querySelector("#chat-message");
+      if (form && input) {
+        input.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" || event.shiftKey) {
+            return;
+          }
+          event.preventDefault();
+          if (form.classList.contains("htmx-request")) {
+            return;
+          }
+          form.requestSubmit();
+        });
+      }
     },
 
     scrollToBottom() {

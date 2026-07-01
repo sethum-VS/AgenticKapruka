@@ -207,6 +207,11 @@ def summarize_node_update(node_name: str, update: dict[str, Any]) -> dict[str, A
             "intent_metadata": summarize_value(update.get("intent_metadata")),
             "model_tier": update.get("model_tier"),
             "tool_calls": summarize_value(update.get("tool_calls")),
+            "specificity_score": update.get("specificity_score"),
+            "specificity_band": update.get("specificity_band"),
+            "session_awaiting_clarification_dimension": update.get(
+                "session_awaiting_clarification_dimension",
+            ),
         }
     if node_name == "load_zep_memory":
         facts = update.get("zep_memory_facts") or []
@@ -217,7 +222,21 @@ def summarize_node_update(node_name: str, update: dict[str, Any]) -> dict[str, A
     if node_name == "run_checkout_graph":
         return {
             "checkout_state": update.get("checkout_state"),
+            "checkout_paused": update.get("checkout_paused"),
             "tool_results": summarize_value(update.get("tool_results")),
+        }
+    if node_name == "master_flow":
+        return {
+            "master_flow_invoked": update.get("master_flow_invoked"),
+            "master_flow_decision": update.get("master_flow_decision"),
+            "master_flow_skip_reason": update.get("master_flow_skip_reason"),
+            "master_clarifying_question": summarize_value(
+                update.get("master_clarifying_question"),
+            ),
+            "active_flow": update.get("active_flow"),
+            "master_flow_mismatch_reason": summarize_value(
+                update.get("master_flow_mismatch_reason"),
+            ),
         }
     if node_name == "zep_memory_write":
         return {"persisted": True}
@@ -298,6 +317,42 @@ def trace_route_decision(
     if reason:
         lines.append(f"reason: {reason}")
     _emit_block("ROUTE", "\n".join(lines))
+
+
+def trace_master_flow(
+    *,
+    skipped: bool,
+    skip_reason: str | None = None,
+    trigger_reason: str | None = None,
+    active_flow: str | None = None,
+    decision: str | None = None,
+    confidence: float | None = None,
+    mismatch_reason: str | None = None,
+    patches_applied: bool | None = None,
+) -> None:
+    """Log master flow supervisor invocation, skip, or patch outcome."""
+    if skipped:
+        logger.info("master_flow_skipped: %s", skip_reason or "no_trigger")
+    if not is_debug_trace_enabled():
+        return
+    lines: list[str] = []
+    if skipped:
+        lines.append(f"skipped: {skip_reason or 'no_trigger'}")
+    else:
+        lines.append("invoked: true")
+        if trigger_reason:
+            lines.append(f"trigger: {trigger_reason}")
+    if active_flow:
+        lines.append(f"active_flow: {active_flow}")
+    if decision:
+        lines.append(f"decision: {decision}")
+    if confidence is not None:
+        lines.append(f"confidence: {confidence:.2f}")
+    if mismatch_reason:
+        lines.append(f"mismatch: {mismatch_reason}")
+    if patches_applied is not None:
+        lines.append(f"patches_applied: {patches_applied}")
+    _emit_block("MASTER FLOW", "\n".join(lines))
 
 
 def trace_turn_complete(

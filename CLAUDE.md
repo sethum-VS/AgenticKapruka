@@ -32,5 +32,5 @@ See [AGENTS.md](AGENTS.md) for coding conventions and quality bar.
 - Pre-merge: CI must pass (Ruff, mypy, unit tests, Playwright E2E, Ragas eval)
 - Deploy trigger: automatic on push to `main` after CI jobs succeed
 - Deploy status: poll GitHub Actions `Main` workflow deploy job; then `curl -fsS "${SERVICE_URL}/health"`
-- Health check: `/health` — run `python scripts/bootstrap_neo4j.py` before first deploy if `neo4j_graphrag` is down
+- Health check: `/health` — run `python scripts/bootstrap_neo4j.py` before first deploy or local eval if `neo4j_graphrag` is down; also run locally before evals when hybrid context returns zero products
 - Prerequisites: `./scripts/verify_production_prerequisites.sh`

@@ -36,6 +36,14 @@ Cloud Run: attach a service account with `roles/aiplatform.user`.
 | --- | --- | --- | --- |
 | `KAPRUKA_MCP_URL` | URL | `https://mcp.kapruka.com/mcp` | Kapruka MCP JSON-RPC endpoint |
 
+## Flow-state supervisor (master_flow)
+
+| Variable | Type | Default | Description |
+| --- | --- | --- | --- |
+| `MASTER_FLOW_ENABLED` | bool | `true` | Run the flow supervisor after `analyze_intent` on conflict triggers |
+| `MASTER_FLOW_LONG_SESSION_TURNS` | int | `8` | Minimum human turns before long-session drift can invoke the supervisor |
+| `MASTER_FLOW_CONFIDENCE_THRESHOLD` | float | `0.75` | Minimum Flash confidence before supervisor patches apply to state |
+
 ## Production-only notes
 
 ### Redis (Memorystore)

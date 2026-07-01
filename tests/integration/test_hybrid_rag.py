@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -207,13 +208,14 @@ class _HybridRagMockStore:
             return rows
 
         if cypher.startswith("MATCH (seed:Category)") and "rels*1" in cypher:
-            return self._traverse(parameters)
+            return self._traverse(parameters, cypher=cypher)
 
         return []
 
-    def _traverse(self, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+    def _traverse(self, parameters: dict[str, Any], *, cypher: str = "") -> list[dict[str, Any]]:
         category_ids = list(parameters.get("category_ids", []))
-        max_hops = int(parameters.get("max_hops", 2))
+        match = re.search(r"rels\*1\.\.(\d+)", cypher)
+        max_hops = int(match.group(1)) if match else 2
         rel_types = set(parameters.get("rel_types", []))
         node_labels = set(parameters.get("node_labels", []))
         results: list[dict[str, Any]] = []
@@ -416,3 +418,24 @@ async def test_retrieve_hybrid_context_wedding_flowers_category_filter(
     assert hybrid_context["direct_occasion_hits"]
     assert any(hit["id"].startswith("occasion:") for hit in hybrid_context["direct_occasion_hits"])
     assert any(occasion["display_name"] == "Wedding" for occasion in hybrid_context["occasions"])
+
+
+@pytest.mark.neo4j_integration
+def test_ms_marco_reranker_outputs_logits_not_unit_interval() -> None:
+    """Document production CrossEncoder score scale — logits, not 0–1 relevance."""
+    from lib.embeddings.reranker import get_reranker
+
+    reranker = get_reranker()
+    scores = reranker.score_pairs(
+        "birthday cake for mom in Colombo",
+        [
+            "Kapruka Cakes — birthday cakes and celebration desserts",
+            "Amari Colombo — hotel dining and room packages",
+            "Birthday — cakes, gifts, and celebration ideas",
+        ],
+    )
+    assert len(scores) == 3
+    assert any(abs(score) > 1.0 for score in scores), (
+        f"Expected MS MARCO logits outside [0,1], got {scores}"
+    )
+    assert max(scores) - min(scores) > 0.5, "Reranker should discriminate ontology candidates"

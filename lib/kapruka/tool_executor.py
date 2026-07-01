@@ -3,24 +3,36 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from lib.kapruka.errors import KaprukaError
+from graphs.nodes.resolve_cart_product import match_products_by_phrase
+from graphs.state import AgentState
+from lib.chat.product_reference import (
+    _normalize_ordinal_phrase,
+    is_ordinal_phrase,
+    resolve_product_reference,
+)
+from lib.kapruka.errors import KaprukaError, KaprukaRateLimitError
 from lib.kapruka.service import KaprukaService
-from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
+from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.kapruka.tools.track_order import TOOL_NAME as TRACK_ORDER_TOOL
 from lib.kapruka.types import (
     CheckDeliveryInput,
+    DeliveryCity,
     GetProductInput,
     ListCategoriesInput,
+    ListDeliveryCitiesInput,
+    ListDeliveryCitiesOutput,
     SearchProductsInput,
     TrackOrderInput,
 )
+from lib.redis.rate_limit import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +43,7 @@ SUPPORTED_TOOL_NAMES: frozenset[str] = frozenset(
         LIST_CATEGORIES_TOOL,
         TRACK_ORDER_TOOL,
         CHECK_DELIVERY_TOOL,
+        LIST_CITIES_TOOL,
     },
 )
 
@@ -42,6 +55,7 @@ _TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     LIST_CATEGORIES_TOOL: ListCategoriesInput,
     TRACK_ORDER_TOOL: TrackOrderInput,
     CHECK_DELIVERY_TOOL: CheckDeliveryInput,
+    LIST_CITIES_TOOL: ListDeliveryCitiesInput,
 }
 
 _SERVICE_KWARG_EXCLUDE: dict[str, frozenset[str]] = {
@@ -50,6 +64,7 @@ _SERVICE_KWARG_EXCLUDE: dict[str, frozenset[str]] = {
     LIST_CATEGORIES_TOOL: frozenset({"response_format"}),
     TRACK_ORDER_TOOL: frozenset({"response_format"}),
     CHECK_DELIVERY_TOOL: frozenset({"response_format"}),
+    LIST_CITIES_TOOL: frozenset({"response_format"}),
 }
 
 
@@ -66,6 +81,18 @@ def normalize_planner_tool_args(name: str, args: dict[str, Any]) -> dict[str, An
             normalized["category"] = category_id.strip()
             normalized.pop("category_id", None)
     if name == CHECK_DELIVERY_TOOL:
+        city = normalized.get("city")
+        for alias in ("delivery_city", "city_name", "destination"):
+            alias_value = normalized.get(alias)
+            if (
+                (not isinstance(city, str) or not city.strip())
+                and isinstance(alias_value, str)
+                and alias_value.strip()
+            ):
+                normalized["city"] = alias_value.strip()
+                city = normalized["city"]
+            normalized.pop(alias, None)
+        normalized.pop("q", None)
         delivery_date = normalized.get("delivery_date")
         date_alias = normalized.get("date")
         if (
@@ -78,6 +105,116 @@ def normalize_planner_tool_args(name: str, args: dict[str, Any]) -> dict[str, An
     return normalized
 
 
+_NUMERIC_ONLY_PRODUCT_ID = re.compile(r"^\d+$")
+
+
+def _looks_like_invalid_product_id(product_id: str) -> bool:
+    """True for planner hallucinations such as bare numeric ids."""
+    return bool(_NUMERIC_ONLY_PRODUCT_ID.match(product_id.strip()))
+
+
+def enrich_get_product_args(
+    args: dict[str, Any],
+    state: AgentState,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Resolve product_id from carousel/session context before kapruka_get_product."""
+    enriched = dict(args)
+    product_id = enriched.get("product_id")
+    if isinstance(product_id, str) and product_id.strip():
+        pid = product_id.strip()
+        has_carousel = bool(state.get("last_search_products") or state.get("last_visible_products"))
+        if _looks_like_invalid_product_id(pid) and has_carousel:
+            enriched.pop("product_id", None)
+        elif not _looks_like_invalid_product_id(pid):
+            return enriched, None
+
+    last_search = [
+        item for item in (state.get("last_search_products") or []) if isinstance(item, dict)
+    ]
+    name_keys = ("q", "product_name", "name")
+    phrase = ""
+    for key in name_keys:
+        raw = enriched.get(key)
+        if isinstance(raw, str) and raw.strip():
+            phrase = raw.strip()
+            break
+
+    if not phrase:
+        session_focus = state.get("session_product_focus")
+        if isinstance(session_focus, str) and session_focus.strip():
+            phrase = session_focus.strip()
+
+    last_visible = [
+        item for item in (state.get("last_visible_products") or []) if isinstance(item, dict)
+    ]
+
+    from graphs.nodes.analyze_intent import _extract_latest_user_message
+    from lib.chat.product_detail import is_product_detail_turn, match_product_from_last_search
+
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if is_product_detail_turn(user_message):
+        matched = match_product_from_last_search(
+            user_message,
+            last_search or None,
+            last_visible_products=last_visible or None,
+            session_product_focus=state.get("session_product_focus"),
+        )
+        if matched is not None and matched.get("id") is not None:
+            resolved = {**enriched, "product_id": str(matched["id"])}
+            for key in name_keys:
+                resolved.pop(key, None)
+            return resolved, None
+        session_resolved = state.get("session_resolved_product")
+        if isinstance(session_resolved, dict) and session_resolved.get("id") is not None:
+            resolved = {**enriched, "product_id": str(session_resolved["id"])}
+            for key in name_keys:
+                resolved.pop(key, None)
+            return resolved, None
+
+    if phrase:
+        ordinal_phrase = _normalize_ordinal_phrase(phrase)
+        if is_ordinal_phrase(ordinal_phrase):
+            reference = resolve_product_reference(
+                ordinal_phrase,
+                last_visible_products=last_visible or None,
+                last_search_products=last_search or None,
+                session_product_focus=state.get("session_product_focus"),
+            )
+            if reference is not None and reference.get("status") == "resolved":
+                product = reference.get("product")
+                if isinstance(product, dict) and product.get("id") is not None:
+                    resolved = {**enriched, "product_id": str(product["id"])}
+                    for key in name_keys:
+                        resolved.pop(key, None)
+                    return resolved, None
+
+    if phrase and last_search:
+        for candidates in (last_visible, last_search):
+            if not candidates:
+                continue
+            for threshold in (0.6, 0.4):
+                matched, _tied, _question = match_products_by_phrase(
+                    phrase,
+                    candidates,
+                    threshold=threshold,
+                )
+                if matched is not None:
+                    matched_id = matched.get("id")
+                    if matched_id is not None:
+                        resolved = {**enriched, "product_id": str(matched_id)}
+                        for key in name_keys:
+                            resolved.pop(key, None)
+                        return resolved, None
+
+    if phrase or any(key in args for key in name_keys):
+        return enriched, {
+            "error": "product_id_unresolved",
+            "message": "Could not resolve product name to a Kapruka product id.",
+        }
+
+    return enriched, None
+
+
 def canonical_tool_args_for_dedup(name: str, args: dict[str, Any]) -> dict[str, Any]:
     """Normalize args for duplicate-tool detection (ignore session currency injection)."""
     canonical = normalize_planner_tool_args(name, dict(args))
@@ -86,11 +223,18 @@ def canonical_tool_args_for_dedup(name: str, args: dict[str, Any]) -> dict[str, 
     return canonical
 
 
-def inject_currency(name: str, args: dict[str, Any], currency: str) -> dict[str, Any]:
-    """Ensure price-bearing MCP tools receive the session currency."""
-    if name in _CURRENCY_TOOLS and "currency" not in args:
-        return {**args, "currency": currency}
-    return args
+def inject_currency(
+    name: str,
+    args: dict[str, Any],
+    currency: str,
+    *,
+    budget_currency: str | None = None,
+) -> dict[str, Any]:
+    """Ensure price-bearing MCP tools receive session or explicit budget currency."""
+    if name not in _CURRENCY_TOOLS or "currency" in args:
+        return args
+    effective = budget_currency if budget_currency else currency
+    return {**args, "currency": effective}
 
 
 def serialize_tool_result(result: Any) -> dict[str, Any]:
@@ -146,6 +290,13 @@ async def _dispatch_tool(
         return await service.track_order(client_ip, **kwargs)
     if name == CHECK_DELIVERY_TOOL:
         return await service.check_delivery(client_ip, **kwargs)
+    if name == LIST_CITIES_TOOL:
+        names = await service.list_delivery_cities(client_ip, **kwargs)
+        return ListDeliveryCitiesOutput(
+            cities=[DeliveryCity(name=name) for name in names],
+            total_matched=len(names),
+            showing=len(names),
+        )
     msg = f"Unsupported MCP tool: {name}"
     raise ValueError(msg)
 
@@ -157,12 +308,18 @@ async def invoke_tool(
     kapruka_service: KaprukaService,
     client_ip: str,
     currency: str = "LKR",
+    budget_currency: str | None = None,
 ) -> dict[str, Any]:
     """Validate args, invoke KaprukaService, and return a serialized MCP payload.
 
     On Kapruka MCP or local validation failure, returns ``{"error": code, "message": ...}``.
     """
-    enriched = inject_currency(name, normalize_planner_tool_args(name, dict(args)), currency)
+    enriched = inject_currency(
+        name,
+        normalize_planner_tool_args(name, dict(args)),
+        currency,
+        budget_currency=budget_currency,
+    )
 
     try:
         validated = _validate_tool_args(name, enriched)
@@ -173,6 +330,20 @@ async def invoke_tool(
 
     try:
         raw = await _dispatch_tool(kapruka_service, client_ip, name, validated)
+    except KaprukaRateLimitError as exc:
+        logger.warning("invoke_tool: %s rate limited", name, exc_info=True)
+        return {
+            "error": "rate_limit_exceeded",
+            "message": "I'm checking our catalog — one moment.",
+            "retry_after_seconds": exc.retry_after_seconds,
+        }
+    except RateLimitExceeded as exc:
+        logger.warning("invoke_tool: %s app rate limit", name, exc_info=True)
+        return {
+            "error": "rate_limit_exceeded",
+            "message": "I'm checking our catalog — one moment.",
+            "retry_after_seconds": exc.retry_after_seconds,
+        }
     except KaprukaError as exc:
         from app.middleware.errors import human_readable_message
 

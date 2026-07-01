@@ -54,7 +54,7 @@ def test_product_card_renders_required_fields() -> None:
     assert 'hx-target="#cart-panel"' in html
     assert 'hx-swap="outerHTML"' in html
     assert "Add to cart" in html
-    assert "hover:shadow-md" in html
+    assert "hover:border-primary" in html
     assert 'href="https://www.kapruka.com/cakes/chocolate-fudge"' in html
 
 

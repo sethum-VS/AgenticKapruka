@@ -76,6 +76,7 @@ ralph-iter.*
 # Local documents and release notes — maintained locally, not pushed to GitHub
 CHANGELOG.md
 AGENTS.md
+docs/chat-qa-report-*.md
 
 # Ralph loops — local agent workflow (not pushed to GitHub)
 scripts/ralph*.sh

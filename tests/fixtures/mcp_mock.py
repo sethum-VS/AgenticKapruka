@@ -221,7 +221,9 @@ def _check_delivery_payload(params: dict[str, Any]) -> dict[str, Any]:
     if isinstance(delivery_date, str) and delivery_date:
         payload["checked_date"] = delivery_date
     product_id = params.get("product_id")
-    if isinstance(product_id, str) and product_id.upper().startswith(("CAKE", "FLOWER", "COMBO")):
+    if isinstance(product_id, str) and product_id.upper().startswith(
+        ("CAKE", "FLOWER", "COMBO", "CHOC"),
+    ):
         payload["perishable_warning"] = (
             "Perishable items are freshest when delivered within one day."
         )

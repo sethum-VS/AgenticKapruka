@@ -27,7 +27,7 @@ def _chat_sse_harness_html(*, include_loading_indicator: bool = False) -> str:
           class="htmx-indicator"
           aria-label="Sending message"
         >
-          <span>Sending…</span>
+          <span data-testid="chat-loading-text">Sending…</span>
         </div>"""
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -119,6 +119,90 @@ def _wait_for_alpine(page: Page) -> None:
 
 
 @pytest.mark.browser
+def test_chat_enter_key_submits_message() -> None:
+    """Pressing Enter in the chat textarea submits without clicking Send."""
+    captured_bodies: list[str] = []
+    sse_body = (
+        "event: message\n"
+        'data: <div id="user-msg">Enter turn</div>\n\n'
+        "event: message\n"
+        'data: <div id="assistant-final">Got it</div>\n\n'
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def capture_post(route: Route) -> None:
+            captured_bodies.append(route.request.post_data or "")
+            route.fulfill(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+                body=sse_body,
+            )
+
+        page.route("http://localhost/chat/stream", capture_post)
+        page.set_content(_chat_sse_harness_html())
+        _wait_for_alpine(page)
+
+        page.fill("#chat-message", "Hello via Enter")
+        page.press("#chat-message", "Enter")
+        page.wait_for_function(
+            """() => {
+              const messages = document.getElementById('chat-messages');
+              return messages && messages.textContent.includes('Got it');
+            }"""
+        )
+
+        assert any("Hello via Enter" in body for body in captured_bodies if body)
+
+        browser.close()
+
+
+@pytest.mark.browser
+def test_chat_sse_done_event_clears_sending_indicator() -> None:
+    """Explicit done event clears Sending… without waiting for body close."""
+    sse_body = (
+        'event: message\ndata: <div id="user-msg">You said hello</div>\n\nevent: done\ndata: \n\n'
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def handle_stream(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+                body=sse_body,
+            )
+
+        page.route("http://localhost/chat/stream", handle_stream)
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const form = document.getElementById('chat-form');
+              const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
+              return form
+                && !form.classList.contains('htmx-request')
+                && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
+                && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === '';
+            }""",
+            timeout=1000,
+        )
+
+        browser.close()
+
+
+@pytest.mark.browser
 def test_chat_sse_streams_incremental_assistant_tokens() -> None:
     """Submitting the chat form appends each SSE message event into #chat-messages."""
     sse_body = (
@@ -191,12 +275,17 @@ def test_chat_sse_clears_sending_indicator_after_stream() -> None:
             """() => {
               const form = document.getElementById('chat-form');
               const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
               const input = document.getElementById('chat-message');
               const button = document.querySelector('#chat-form button[type="submit"]');
               return form
                 && !form.classList.contains('htmx-request')
                 && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
                 && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === ''
                 && input
                 && !input.readOnly
                 && button
@@ -237,13 +326,18 @@ def test_chat_sse_clears_sending_and_pending_bubble_on_error() -> None:
             """() => {
               const form = document.getElementById('chat-form');
               const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
               const input = document.getElementById('chat-message');
               const button = document.querySelector('#chat-form button[type="submit"]');
               const pending = document.getElementById('assistant-stream-deadbeef');
               return form
                 && !form.classList.contains('htmx-request')
                 && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
                 && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === ''
                 && input
                 && !input.readOnly
                 && button
@@ -289,6 +383,7 @@ def test_chat_sse_clears_input_immediately_while_sending() -> None:
                 && input.value === ''
                 && input.readOnly
                 && indicator
+                && !indicator.hidden
                 && indicator.classList.contains('htmx-request')
                 && form
                 && form.classList.contains('htmx-request');
@@ -306,12 +401,17 @@ def test_chat_sse_clears_input_immediately_while_sending() -> None:
             """() => {
               const form = document.getElementById('chat-form');
               const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
               const input = document.getElementById('chat-message');
               const button = document.querySelector('#chat-form button[type="submit"]');
               return form
                 && !form.classList.contains('htmx-request')
                 && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
                 && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === ''
                 && input
                 && !input.readOnly
                 && button
@@ -319,6 +419,165 @@ def test_chat_sse_clears_input_immediately_while_sending() -> None:
             }""",
             timeout=1000,
         )
+
+        browser.close()
+
+
+@pytest.mark.browser
+def test_chat_sse_status_updates_loading_text_during_held_stream() -> None:
+    """Status SSE events update #chat-loading text while the stream is in flight."""
+    import json
+
+    status_html = (
+        '<div id="assistant-stream-abc" class="flex justify-start" hx-swap-oob="outerHTML">'
+        '<div role="assistant" aria-label="Assistant message">'
+        '<p class="whitespace-pre-wrap">Searching our catalog…</p>'
+        "</div></div>"
+    )
+    status_chunk = f"event: status\ndata: {status_html}\n\n"
+    completion_chunk = (
+        'event: message\ndata: <div id="assistant-final">Done</div>\n\nevent: done\ndata: \n\n'
+    )
+    stream_args = json.dumps(
+        {"statusChunk": status_chunk, "completionChunk": completion_chunk, "delayMs": 400}
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+        page.evaluate(
+            """(args) => {
+              const originalFetch = window.fetch.bind(window);
+              window.fetch = async (url, options) => {
+                const target = typeof url === 'string' ? url : url.url;
+                if (!target.includes('/chat/stream')) {
+                  return originalFetch(url, options);
+                }
+                const encoder = new TextEncoder();
+                const stream = new ReadableStream({
+                  async start(controller) {
+                    controller.enqueue(encoder.encode(args.statusChunk));
+                    await new Promise((resolve) => setTimeout(resolve, args.delayMs));
+                    controller.enqueue(encoder.encode(args.completionChunk));
+                    controller.close();
+                  },
+                });
+                return new Response(stream, {
+                  status: 200,
+                  headers: { 'Content-Type': 'text/event-stream' },
+                });
+              };
+            }""",
+            json.loads(stream_args),
+        )
+
+        page.fill("#chat-message", "birthday cake")
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
+              const indicator = document.getElementById('chat-loading');
+              return span
+                && span.textContent === 'Searching our catalog…'
+                && indicator
+                && indicator.getAttribute('aria-label') === 'Searching our catalog…'
+                && indicator.classList.contains('htmx-request');
+            }""",
+            timeout=2000,
+        )
+        page.wait_for_function(
+            """() => {
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
+              const indicator = document.getElementById('chat-loading');
+              const form = document.getElementById('chat-form');
+              return span
+                && span.textContent === ''
+                && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
+                && form
+                && !form.classList.contains('htmx-request');
+            }""",
+            timeout=3000,
+        )
+
+        browser.close()
+
+
+@pytest.mark.browser
+def test_chat_sse_status_timer_cleared_on_fast_completion() -> None:
+    """Status-then-done under 800ms resets loading text; timer cannot re-stick status."""
+    import json
+
+    status_html = (
+        '<div id="assistant-stream-fast" class="flex justify-start" hx-swap-oob="outerHTML">'
+        '<div role="assistant" aria-label="Assistant message">'
+        '<p class="whitespace-pre-wrap">Searching our catalog…</p>'
+        "</div></div>"
+    )
+    status_chunk = f"event: status\ndata: {status_html}\n\n"
+    completion_chunk = (
+        'event: message\ndata: <div id="assistant-final">Done</div>\n\nevent: done\ndata: \n\n'
+    )
+    stream_args = json.dumps(
+        {"statusChunk": status_chunk, "completionChunk": completion_chunk, "delayMs": 50}
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+        page.evaluate(
+            """(args) => {
+              const originalFetch = window.fetch.bind(window);
+              window.fetch = async (url, options) => {
+                const target = typeof url === 'string' ? url : url.url;
+                if (!target.includes('/chat/stream')) {
+                  return originalFetch(url, options);
+                }
+                const encoder = new TextEncoder();
+                const stream = new ReadableStream({
+                  async start(controller) {
+                    controller.enqueue(encoder.encode(args.statusChunk));
+                    await new Promise((resolve) => setTimeout(resolve, args.delayMs));
+                    controller.enqueue(encoder.encode(args.completionChunk));
+                    controller.close();
+                  },
+                });
+                return new Response(stream, {
+                  status: 200,
+                  headers: { 'Content-Type': 'text/event-stream' },
+                });
+              };
+            }""",
+            json.loads(stream_args),
+        )
+
+        page.fill("#chat-message", "birthday cake")
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
+              const indicator = document.getElementById('chat-loading');
+              const form = document.getElementById('chat-form');
+              return span
+                && span.textContent === ''
+                && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
+                && form
+                && !form.classList.contains('htmx-request');
+            }""",
+            timeout=3000,
+        )
+        page.wait_for_timeout(900)
+        assert page.locator("#chat-loading").evaluate("el => el.hidden") is True
+        assert page.locator('[data-testid="chat-loading-text"]').inner_text() == ""
 
         browser.close()
 
@@ -368,5 +627,102 @@ def test_chat_suggestion_chip_fills_input_and_submits() -> None:
 
         assert page.input_value("#chat-message") == ""
         assert any("Birthday" in body and "Colombo" in body for body in captured_bodies if body)
+
+        browser.close()
+
+
+@pytest.mark.browser
+def test_chat_sse_prunes_stale_carousels_after_new_carousel() -> None:
+    """Only the latest product carousel remains after a follow-up search."""
+    carousel_a = (
+        '<div class="flex justify-start" data-role="assistant-message">'
+        '<div role="assistant" aria-label="Assistant message">'
+        '<div class="assistant-products" data-slot="product-carousel">'
+        '<div data-testid="product-carousel" id="carousel-old">'
+        '<span data-testid="product-card">Old Rs. 26,310 Cake</span>'
+        "</div></div></div></div>"
+    )
+    carousel_b = (
+        '<div class="flex justify-start" data-role="assistant-message">'
+        '<div role="assistant" aria-label="Assistant message">'
+        '<div class="assistant-products" data-slot="product-carousel">'
+        '<div data-testid="product-carousel" id="carousel-new">'
+        '<span data-testid="product-card">New Chocolate Box</span>'
+        "</div></div></div></div>"
+    )
+    sse_body = (
+        "event: message\n"
+        f"data: {carousel_a}\n\n"
+        "event: message\n"
+        f"data: {carousel_b}\n\n"
+        "event: done\n"
+        "data: \n\n"
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def handle_stream(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+                body=sse_body,
+            )
+
+        page.route("http://localhost/chat/stream", handle_stream)
+        page.set_content(_chat_sse_harness_html())
+        _wait_for_alpine(page)
+
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const carousels = document.querySelectorAll('[data-testid="product-carousel"]');
+              return carousels.length === 1 && carousels[0].id === 'carousel-new';
+            }""",
+            timeout=1000,
+        )
+        assert "26,310" not in page.inner_text("#chat-messages")
+
+        browser.close()
+
+
+@pytest.mark.browser
+def test_chat_sse_done_clears_sending_without_response_html() -> None:
+    """Graph completion emits done even when no assistant HTML is streamed."""
+    sse_body = "event: done\ndata: \n\n"
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def handle_stream(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+                body=sse_body,
+            )
+
+        page.route("http://localhost/chat/stream", handle_stream)
+        page.set_content(_chat_sse_harness_html(include_loading_indicator=True))
+        _wait_for_alpine(page)
+
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            """() => {
+              const form = document.getElementById('chat-form');
+              const indicator = document.getElementById('chat-loading');
+              const span = document.querySelector('[data-testid="chat-loading-text"]');
+              return form
+                && !form.classList.contains('htmx-request')
+                && indicator
+                && indicator.hidden
+                && indicator.getAttribute('aria-hidden') === 'true'
+                && !indicator.classList.contains('htmx-request')
+                && span
+                && span.textContent === '';
+            }""",
+            timeout=1000,
+        )
 
         browser.close()

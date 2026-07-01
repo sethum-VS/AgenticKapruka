@@ -1,25 +1,97 @@
 /**
  * Alpine.js cartDrawer — slide-over cart panel with badge synced from HTMX cart swaps.
  */
+const PROCEED_CHECKOUT_MESSAGE = "Proceed to checkout";
+let proceedCheckoutInFlight = false;
+
+function isChatFormInFlight() {
+  const form = document.getElementById("chat-form");
+  return Boolean(form?.classList.contains("htmx-request"));
+}
+
+function chatComposerShell() {
+  const form = document.getElementById("chat-form");
+  return form?.parentElement?.parentElement ?? null;
+}
+
+function updateCartDrawerComposerClearance() {
+  const backdrop = document.querySelector('[data-testid="cart-backdrop"]');
+  const panel = document.querySelector('[data-testid="cart-drawer-panel"]');
+  const shell = chatComposerShell();
+  const clearance =
+    shell && shell.getBoundingClientRect
+      ? Math.max(0, window.innerHeight - shell.getBoundingClientRect().top)
+      : 0;
+  const bottom = clearance > 0 ? `${clearance}px` : "";
+  if (backdrop) {
+    backdrop.style.bottom = bottom;
+  }
+  if (panel) {
+    panel.style.bottom = bottom;
+  }
+}
+
+function resetCartDrawerComposerClearance() {
+  const backdrop = document.querySelector('[data-testid="cart-backdrop"]');
+  const panel = document.querySelector('[data-testid="cart-drawer-panel"]');
+  if (backdrop) {
+    backdrop.style.bottom = "";
+  }
+  if (panel) {
+    panel.style.bottom = "";
+  }
+}
+
+function focusChatComposer() {
+  const input = document.getElementById("chat-message");
+  if (input instanceof HTMLElement) {
+    input.focus();
+  }
+}
+
+function closeCartDrawer() {
+  const drawerRoot = document.querySelector('[data-testid="cart-drawer"]');
+  if (!drawerRoot || !window.Alpine) {
+    return;
+  }
+  const data = Alpine.$data(drawerRoot);
+  if (data && typeof data.close === "function") {
+    data.close();
+  }
+}
+
+function proceedToCheckoutFromDrawer() {
+  const form = document.getElementById("chat-form");
+  const input = document.getElementById("chat-message");
+  if (!form || !input) {
+    return;
+  }
+  if (proceedCheckoutInFlight || isChatFormInFlight()) {
+    return;
+  }
+  proceedCheckoutInFlight = true;
+  input.value = PROCEED_CHECKOUT_MESSAGE;
+  form.requestSubmit();
+  closeCartDrawer();
+  requestAnimationFrame(() => {
+    focusChatComposer();
+  });
+}
+
 document.addEventListener("alpine:init", () => {
   Alpine.data("cartDrawer", (initialCount = 0) => ({
     open: false,
+    sidebarOpen: false,
     itemCount: Number(initialCount) || 0,
 
     init() {
       document.body.addEventListener("htmx:afterSwap", (event) => {
         this.syncCountFromPanel(event);
       });
-      // HTMX outerHTML swaps do not activate Alpine @click on injected cart partials.
-      document.body.addEventListener("click", (event) => {
-        const target = event.target;
-        if (!(target instanceof Element)) {
-          return;
+      window.addEventListener("resize", () => {
+        if (this.open) {
+          updateCartDrawerComposerClearance();
         }
-        if (!target.closest('[data-testid="cart-proceed-checkout"]')) {
-          return;
-        }
-        this.proceedToCheckout();
       });
     },
 
@@ -27,6 +99,7 @@ document.addEventListener("alpine:init", () => {
       const panel = document.getElementById("cart-panel");
       if (!panel || !window.htmx) {
         this.open = true;
+        this.$nextTick(() => updateCartDrawerComposerClearance());
         return;
       }
 
@@ -41,6 +114,7 @@ document.addEventListener("alpine:init", () => {
           this.syncCountFromPanel(event);
         }
         this.open = true;
+        this.$nextTick(() => updateCartDrawerComposerClearance());
       };
 
       const onSettle = (event) => {
@@ -67,17 +141,11 @@ document.addEventListener("alpine:init", () => {
 
     close() {
       this.open = false;
+      resetCartDrawerComposerClearance();
     },
 
     proceedToCheckout() {
-      const form = document.getElementById("chat-form");
-      const input = document.getElementById("chat-message");
-      if (!form || !input) {
-        return;
-      }
-      input.value = "Proceed to checkout";
-      form.requestSubmit();
-      this.close();
+      proceedToCheckoutFromDrawer();
     },
 
     syncCountFromPanel(event) {
@@ -93,3 +161,42 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 });
+
+// Single delegated handler — avoids duplicate submits when multiple cartDrawer roots mount.
+document.body.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+  if (!target.closest('[data-testid="cart-proceed-checkout"]')) {
+    return;
+  }
+  event.preventDefault();
+  proceedToCheckoutFromDrawer();
+});
+
+document.body.addEventListener("htmx:afterRequest", (event) => {
+  const elt = event.detail?.elt;
+  if (elt?.id === "chat-form") {
+    proceedCheckoutInFlight = false;
+  }
+});
+
+function bindCartDrawerComposerFocus() {
+  const textarea = document.getElementById("chat-message");
+  if (!textarea || textarea.dataset.cartFocusBound === "true") {
+    return;
+  }
+  textarea.dataset.cartFocusBound = "true";
+  textarea.addEventListener("focusin", () => {
+    if (document.querySelector('[data-testid="cart-drawer-panel"]')) {
+      closeCartDrawer();
+    }
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bindCartDrawerComposerFocus);
+} else {
+  bindCartDrawerComposerFocus();
+}

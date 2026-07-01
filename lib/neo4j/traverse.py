@@ -19,11 +19,19 @@ _ALLOWED_RELATIONSHIPS: Final = (
     REL_CATEGORY_TO_PRODUCT_TYPE,
 )
 _ONTOLOGY_LABELS: Final = (LABEL_OCCASION, LABEL_CATEGORY, LABEL_PRODUCT_TYPE)
+_ALLOWED_MAX_HOPS: Final = frozenset({1, 2})
 
-_TRAVERSE_FROM_CATEGORIES_CYPHER = f"""
+
+def _traverse_from_categories_cypher(max_hops: int) -> str:
+    """Build traverse Cypher with a literal hop depth (Neo4j 5.27 rejects $max_hops in patterns)."""
+    if max_hops not in _ALLOWED_MAX_HOPS:
+        allowed = ", ".join(str(value) for value in sorted(_ALLOWED_MAX_HOPS))
+        msg = f"max_hops must be one of {{{allowed}}}"
+        raise ValueError(msg)
+    return f"""
 MATCH (seed:{LABEL_CATEGORY})
 WHERE seed.id IN $category_ids
-MATCH path = (seed)-[rels*1..$max_hops]-(connected)
+MATCH path = (seed)-[rels*1..{max_hops}]-(connected)
 WHERE ALL(r IN rels WHERE type(r) IN $rel_types)
   AND ANY(label IN labels(connected) WHERE label IN $node_labels)
 RETURN DISTINCT
@@ -32,7 +40,7 @@ RETURN DISTINCT
   labels(connected)[0] AS label,
   connected.display_name AS display_name,
   connected.description AS description,
-  length(rels) AS hop,
+  length(path) AS hop,
   [r IN rels | type(r)][-1] AS relationship_type,
   reduce(w = 1.0, r IN rels | w * coalesce(r.weight, 1.0)) AS weight
 ORDER BY hop, weight DESC, display_name
@@ -82,15 +90,11 @@ async def traverse_from_categories(
     if not category_ids:
         return TraversalResult(nodes=())
 
-    if max_hops < 1:
-        msg = "max_hops must be >= 1"
-        raise ValueError(msg)
-
+    cypher = _traverse_from_categories_cypher(max_hops)
     rows = await client.execute(
-        _TRAVERSE_FROM_CATEGORIES_CYPHER,
+        cypher,
         {
             "category_ids": category_ids,
-            "max_hops": max_hops,
             "rel_types": list(_ALLOWED_RELATIONSHIPS),
             "node_labels": list(_ONTOLOGY_LABELS),
         },

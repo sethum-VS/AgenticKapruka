@@ -16,20 +16,23 @@ Expected TTHW (time-to-helpful-widget) on local dev with mocked or live MCP:
   specific_product    ~8–20s  product carousel
   search_blush_roses  ~8–20s  product carousel (setup for add-to-cart)
   add_blush_roses_cart ~8–20s  cart add confirmation, no carousel
+  place_order_with_cart ~8–25s checkout handoff after cart add; no API errors
   tracking_order      ~5–15s  order-tracking-status card, no carousel
   tracking_ka         ~5–15s  KA legacy educate copy, no tracking card
   tracking_status     ~5–15s  check-status phrasing + VIMP tracking card
   delivery_colombo    ~8–25s  delivery confirmation or clarifying date, no carousel
   budget_sort         ~8–20s  carousel first item within stated budget cap
   silk_disclaimer     ~8–20s  artificial floral note when silk products appear
+  fresh_flowers_silk  ~8–20s  fresh flowers request + silk picks → disclaimer
   farewell            ~2–5s   warm sign-off, not capabilities menu
   delivery_followup   ~8–25s  delivery check after cart add; no Field required errors
   cake_mom_colombo    ~8–25s  carousel OR zone clarify OR delivery copy; no API errors
   roses_galle_tomorrow ~8–25s delivery markers for Galle; no API errors
-  gift_ideas_5000     ~8–20s  gift/voucher carousel first item ≤5000 LKR
+  gift_ideas_5000     ~8–20s  mixed physical gifts in carousel; ≤2 vouchers in top 5
   roses_under_budget  ~8–20s  in-budget rose carousel; reply must not negate results (Eval B-03)
   flowers_fruit_kandy ~8–20s  in-budget carousel; no puja/pooja in top slots
   track_vimp_regression ~5–15s order-tracking card (regression after eval block)
+  support_policy_wilted ~2–8s  support/policy FAQ handoff; not welcome menu
 
 Customer-eval merge gate (PRD-131): cake_mom_colombo and gift_ideas_5000 are expected
 to fail red on main before PRD-132/133; green when the Eval Fix Pack ships.
@@ -97,8 +100,12 @@ class TurnScenario:
     expect_artificial_disclaimer_if_silk: bool = False
     expect_farewell: bool = False
     expect_cart_add: bool = False
+    expect_checkout: bool = False
+    expect_support: bool = False
     expect_any_of: tuple[str, ...] = ()
     expect_carousel_keywords: tuple[str, ...] = ()
+    max_voucher_in_top_carousel_slots: int | None = None
+    require_physical_gift_in_carousel: bool = False
     forbidden_in_carousel_substrings: tuple[str, ...] = ()
     top_carousel_slots: int = 3
     forbidden_substrings: tuple[str, ...] = ()
@@ -145,6 +152,17 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         expect_cart_add=True,
     ),
     TurnScenario(
+        name="place_order_with_cart",
+        message="Help me place the order — recipient is Amma, Colombo, tomorrow",
+        expect_carousel=False,
+        expect_checkout=True,
+        forbidden_substrings=(
+            "couldn't find",
+            "could not find",
+            *_API_ERROR_FORBIDDEN,
+        ),
+    ),
+    TurnScenario(
         name="delivery_followup",
         message="Can you deliver this to Colombo tomorrow?",
         expect_carousel=False,
@@ -189,6 +207,12 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         expect_artificial_disclaimer_if_silk=True,
     ),
     TurnScenario(
+        name="fresh_flowers_silk",
+        message="I need fresh flowers for an anniversary",
+        expect_carousel=True,
+        expect_artificial_disclaimer_if_silk=True,
+    ),
+    TurnScenario(
         name="farewell",
         message="thanks that's all",
         expect_carousel=False,
@@ -218,7 +242,17 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         message="Gift ideas under Rs. 5,000",
         expect_carousel=True,
         max_first_carousel_price=5000.0,
-        expect_carousel_keywords=("gift", "voucher"),
+        expect_carousel_keywords=(
+            "hamper",
+            "chocolate",
+            "flower",
+            "rose",
+            "ferrero",
+            "gift box",
+        ),
+        max_voucher_in_top_carousel_slots=2,
+        require_physical_gift_in_carousel=True,
+        top_carousel_slots=5,
         forbidden_substrings=_API_ERROR_FORBIDDEN,
     ),
     TurnScenario(
@@ -249,6 +283,17 @@ SCENARIOS: tuple[TurnScenario, ...] = (
         message="Track VIMP34456CB2",
         expect_carousel=False,
         expect_tracking=True,
+    ),
+    TurnScenario(
+        name="support_policy_wilted",
+        message="What's your return policy if flowers arrive wilted?",
+        expect_carousel=False,
+        expect_support=True,
+        forbidden_substrings=(
+            "Welcome to Kapruka",
+            "What would you like to explore",
+            "I can help you with:",
+        ),
     ),
 )
 
@@ -404,6 +449,33 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
                 f"in top {scenario.top_carousel_slots} slots",
             )
 
+    if scenario.require_physical_gift_in_carousel and has_carousel:
+        top_texts = _extract_top_carousel_card_texts(html, scenario.top_carousel_slots)
+        physical_markers = (
+            "hamper",
+            "chocolate",
+            "flower",
+            "rose",
+            "ferrero",
+            "bouquet",
+            "gift box",
+        )
+        has_physical = any(any(marker in text for marker in physical_markers) for text in top_texts)
+        if not has_physical:
+            failures.append(
+                "expected at least one physical gift (hamper/chocolate/flowers) "
+                f"in top {scenario.top_carousel_slots} carousel slots",
+            )
+
+    if scenario.max_voucher_in_top_carousel_slots is not None and has_carousel:
+        top_texts = _extract_top_carousel_card_texts(html, scenario.top_carousel_slots)
+        voucher_count = sum(1 for text in top_texts if "voucher" in text)
+        if voucher_count > scenario.max_voucher_in_top_carousel_slots:
+            failures.append(
+                f"too many vouchers in top carousel ({voucher_count} > "
+                f"{scenario.max_voucher_in_top_carousel_slots})",
+            )
+
     if scenario.forbidden_in_carousel_substrings and has_carousel:
         top_texts = _extract_top_carousel_card_texts(html, scenario.top_carousel_slots)
         for text in top_texts:
@@ -430,6 +502,30 @@ def _evaluate_turn(scenario: TurnScenario, html: str) -> list[str]:
         )
         if not all(marker in lower for marker in cart_markers):
             failures.append("expected add-to-cart confirmation copy")
+
+    if scenario.expect_checkout:
+        checkout_markers = (
+            "checkout",
+            "recipient",
+            "delivery",
+            "order",
+            "review",
+            "payment",
+        )
+        if not any(marker in lower for marker in checkout_markers):
+            failures.append("expected checkout flow response")
+
+    if scenario.expect_support:
+        support_markers = (
+            "kapruka support",
+            "+94-11-7551111",
+            "kapruka.com",
+            "refund",
+            "return",
+            "policy",
+        )
+        if not any(marker in lower for marker in support_markers):
+            failures.append("expected support/policy handoff copy")
 
     for forbidden in scenario.forbidden_substrings:
         if forbidden.lower() in lower:

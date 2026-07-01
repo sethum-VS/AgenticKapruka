@@ -1,61 +1,88 @@
-<div class="flex justify-start" data-role="assistant-message">
-  <div
-    class="max-w-[85%] rounded-2xl rounded-bl-md border border-commerce-parchment bg-white px-4 py-3 shadow-sm"
-    role="assistant"
-    aria-label="Assistant message"
-  >
-    <div class="prose-assistant">
-      <p>{{ message }}</p>
-    </div>
-    {% if products_html %}
+<div class="mb-4 flex flex-col gap-4" data-role="assistant-message">
+  <div class="flex items-start gap-3">
     <div
-      class="assistant-products mt-3 border-t border-commerce-parchment/60 pt-3"
-      data-slot="product-carousel"
-      role="region"
-      aria-label="Suggested products"
+      class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full"
+      aria-hidden="true"
     >
-      {{ products_html | safe }}
+      <img
+        src="/static/img/kapruka-smile-avatar.png"
+        alt=""
+        class="h-full w-full object-cover"
+        width="32"
+        height="32"
+      />
     </div>
-    {% endif %}
-    {% if checkout_review_html %}
     <div
-      class="assistant-checkout-review mt-3 border-t border-commerce-parchment/60 pt-3"
-      data-slot="checkout-review"
-      role="region"
-      aria-label="Order review"
+      class="max-w-[85%] rounded-xl rounded-tl-none border border-surface-muted bg-canvas p-4"
+      role="assistant"
+      aria-label="Assistant message"
     >
-      {{ checkout_review_html | safe }}
+      <div class="prose-assistant">
+        <p>{{ message }}</p>
+      </div>
+      {% if rate_limit_banner_html %}
+      <div class="mt-4" data-slot="rate-limit-banner">
+        {{ rate_limit_banner_html | safe }}
+      </div>
+      {% endif %}
+      {% if carousel_slot_id %}
+      <div
+        id="{{ carousel_slot_id }}"
+        class="assistant-products mt-4"
+        data-slot="product-carousel"
+        role="region"
+        aria-label="Suggested products"
+      ></div>
+      {% elif products_html %}
+      <div
+        class="assistant-products mt-4"
+        data-slot="product-carousel"
+        role="region"
+        aria-label="Suggested products"
+      >
+        {{ products_html | safe }}
+      </div>
+      {% endif %}
+      {% if checkout_review_html %}
+      <div
+        class="assistant-checkout-review mt-4"
+        data-slot="checkout-review"
+        role="region"
+        aria-label="Order review"
+      >
+        {{ checkout_review_html | safe }}
+      </div>
+      {% endif %}
+      {% if checkout_payment_html %}
+      <div
+        class="assistant-checkout-payment mt-4"
+        data-slot="checkout-payment"
+        role="region"
+        aria-label="Complete payment"
+      >
+        {{ checkout_payment_html | safe }}
+      </div>
+      {% endif %}
+      {% if tracking_status_html %}
+      <div
+        class="assistant-tracking-status mt-4"
+        data-slot="tracking-status"
+        role="region"
+        aria-label="Order tracking"
+      >
+        {{ tracking_status_html | safe }}
+      </div>
+      {% endif %}
+      {% if delivery_status_html %}
+      <div
+        class="assistant-delivery-status mt-4"
+        data-slot="delivery-status"
+        role="region"
+        aria-label="Delivery availability"
+      >
+        {{ delivery_status_html | safe }}
+      </div>
+      {% endif %}
     </div>
-    {% endif %}
-    {% if checkout_payment_html %}
-    <div
-      class="assistant-checkout-payment mt-3 border-t border-commerce-parchment/60 pt-3"
-      data-slot="checkout-payment"
-      role="region"
-      aria-label="Complete payment"
-    >
-      {{ checkout_payment_html | safe }}
-    </div>
-    {% endif %}
-    {% if tracking_status_html %}
-    <div
-      class="assistant-tracking-status mt-3 border-t border-commerce-parchment/60 pt-3"
-      data-slot="tracking-status"
-      role="region"
-      aria-label="Order tracking"
-    >
-      {{ tracking_status_html | safe }}
-    </div>
-    {% endif %}
-    {% if delivery_status_html %}
-    <div
-      class="assistant-delivery-status mt-3 border-t border-commerce-parchment/60 pt-3"
-      data-slot="delivery-status"
-      role="region"
-      aria-label="Delivery availability"
-    >
-      {{ delivery_status_html | safe }}
-    </div>
-    {% endif %}
   </div>
 </div>

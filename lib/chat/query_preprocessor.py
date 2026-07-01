@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Literal
 
+from lib.chat.delivery_dates import normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
-from lib.neo4j.hybrid_context import extract_max_price
+from lib.chat.off_topic import is_off_topic_message
+from lib.neo4j.hybrid_context import extract_budget, extract_max_price
 
 QueryMode = Literal["utility", "situational"]
 
@@ -18,11 +21,24 @@ _UTILITY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bVIMP[0-9A-Z]+\b"),
 )
 
-# Emotional / life-event cues — favor warmer, local tone.
-_SITUATIONAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+# Emotional / life-event cues — favor warmer, local tone (trump utility when matched).
+_EMOTIONAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        r"\b(broke up|breakup|passed away|funeral|condolence|sorry|heartbroken|"
-        r"missing (?:her|him|them)|devastated|lonely|stressed|anxious|nervous)\b",
+        r"\b(broke up|breakup|break-up|passed away|funeral|condolence|sympathy|"
+        r"sorry to hear|heartbroken|devastated|grieving)\b",
+        re.I,
+    ),
+)
+
+# Order-fix apologies are transactional — not distress / concierge empathy turns.
+_TRANSACTIONAL_APOLOGY = re.compile(
+    r"\bi'?m sorry\b.*\b(?:order(?:ed)?|wrong|mistake|replacement|help|fix|cake)\b",
+    re.I,
+)
+
+_SITUATIONAL_PATTERNS: tuple[re.Pattern[str], ...] = _EMOTIONAL_PATTERNS + (
+    re.compile(
+        r"\b(missing (?:her|him|them)|lonely|stressed|anxious|nervous)\b",
         re.I,
     ),
     re.compile(r"\b(girlfriend|boyfriend|ex-|divorce|separated)\b", re.I),
@@ -78,12 +94,23 @@ _IN_OR_FOR_CITY = re.compile(
     re.I,
 )
 
+_BARE_DELIVERY_CITY = re.compile(
+    r"^(Colombo(?:\s+\d{2})?|Kandy|Galle|Negombo|Jaffna|Matara)(?:\s+please)?[.!]?$",
+    re.I,
+)
+
 
 def classify_query_mode(text: str) -> QueryMode:
     """Classify input as utility (transactional) or situational (emotional)."""
     stripped = text.strip()
     if not stripped:
         return "utility"
+
+    if _TRANSACTIONAL_APOLOGY.search(stripped):
+        return "utility"
+
+    if any(pattern.search(stripped) for pattern in _EMOTIONAL_PATTERNS):
+        return "situational"
 
     situational_hits = sum(1 for pattern in _SITUATIONAL_PATTERNS if pattern.search(stripped))
     utility_hits = sum(1 for pattern in _UTILITY_PATTERNS if pattern.search(stripped))
@@ -147,6 +174,10 @@ def _normalize_city(raw: str) -> str:
 
 def extract_target_city(text: str) -> str | None:
     """Extract a delivery destination city from delivery verbs or in/to/for city phrases."""
+    stripped = text.strip().rstrip(".!")
+    bare_match = _BARE_DELIVERY_CITY.match(stripped)
+    if bare_match:
+        return _normalize_city(bare_match.group(1))
     if _has_delivery_intent(text):
         for pattern in (_DELIVER_TO_CITY, _CITY_DELIVERY):
             match = pattern.search(text)
@@ -158,6 +189,60 @@ def extract_target_city(text: str) -> str | None:
     return None
 
 
+def should_defer_delivery_date(
+    state: Mapping[str, object],
+    user_message: str,
+) -> bool:
+    """Defer delivery date collection to checkout for gift discovery that names a city."""
+    if _has_delivery_intent(user_message):
+        return False
+    session_date = state.get("session_delivery_date") or state.get("delivery_date")
+    if isinstance(session_date, str) and session_date.strip():
+        return False
+    if normalize_delivery_date({}, user_message) is not None:
+        return False
+    intent_metadata = state.get("intent_metadata")
+    metadata: dict[str, object] = dict(intent_metadata) if isinstance(intent_metadata, dict) else {}
+    target_city = metadata.get("target_city") or extract_target_city(user_message)
+    if not (isinstance(target_city, str) and target_city.strip()):
+        return False
+    if _has_perishable_gift_intent(user_message):
+        return True
+    if re.search(r"\bbirthday\b", user_message, re.I) and re.search(
+        r"\bcake\b",
+        user_message,
+        re.I,
+    ):
+        return True
+    session_focus = state.get("session_product_focus")
+    return isinstance(session_focus, str) and bool(session_focus.strip())
+
+
+def is_delivery_context_relevant_turn(
+    state: dict[str, object],
+    user_message: str,
+) -> bool:
+    """True when this turn should surface delivery city/date copy."""
+    from lib.chat.delivery_dates import normalize_delivery_date
+
+    stripped = user_message.strip()
+    intent_metadata = state.get("intent_metadata")
+    metadata: dict[str, object] = dict(intent_metadata) if isinstance(intent_metadata, dict) else {}
+    if metadata.get("requires_delivery_validation"):
+        return True
+    if metadata.get("target_city"):
+        return True
+    if extract_target_city(stripped):
+        return True
+    if normalize_delivery_date({}, stripped) is not None:
+        return True
+    if _has_delivery_intent(stripped):
+        return True
+    if classify_query_mode(stripped) == "situational":
+        return False
+    return False
+
+
 class QueryPreprocessor:
     """Derive IntentMetadata from raw user text before LLM intent classification."""
 
@@ -165,14 +250,25 @@ class QueryPreprocessor:
         stripped = text.strip()
         mode = classify_query_mode(stripped)
         vernacular = detect_vernacular(stripped)
-        target_city = extract_target_city(stripped)
-        requires_delivery = target_city is not None and (
-            _has_delivery_intent(stripped) or _has_perishable_gift_intent(stripped)
+        off_topic = is_off_topic_message(stripped)
+        target_city = None if off_topic else extract_target_city(stripped)
+        has_delivery_date = normalize_delivery_date({}, stripped) is not None
+        requires_delivery = (
+            not off_topic
+            and target_city is not None
+            and (
+                _has_delivery_intent(stripped)
+                or _has_perishable_gift_intent(stripped)
+                or has_delivery_date
+            )
         )
+        budget_cap = extract_budget(stripped)
         return {
             "is_situational": mode == "situational",
             "detected_vernacular": vernacular,
             "requires_delivery_validation": requires_delivery,
             "target_city": target_city,
-            "budget_max": extract_max_price(stripped),
+            "budget_max": budget_cap.amount if budget_cap else extract_max_price(stripped),
+            "budget_currency": budget_cap.currency if budget_cap else None,
+            "vernacular_score_hint": vernacular_score_hint(stripped),
         }

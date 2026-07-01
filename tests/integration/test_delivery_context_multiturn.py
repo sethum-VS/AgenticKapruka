@@ -184,7 +184,8 @@ async def test_kandy_cake_deliver_tomorrow_multiturn_check_delivery(
         turn2_trace = turn2.get("tool_trace") or []
         turn2_checks = [inv for inv in turn2_trace if inv["name"] == CHECK_DELIVERY_TOOL]
         assert len(turn2_checks) == 1
-        assert turn2_checks[0]["args"] == {"city": "Kandy"}
+        assert turn2_checks[0]["args"]["city"] == "Kandy"
+        assert "product_id" in turn2_checks[0]["args"]
         assert "verified with Kapruka" in (turn2.get("assistant_message") or "")
 
         turn3 = await graph.ainvoke(append_message_state("tomorrow"), config)
@@ -194,7 +195,10 @@ async def test_kandy_cake_deliver_tomorrow_multiturn_check_delivery(
     assert check_calls, "turn 3 must invoke kapruka_check_delivery"
     assert check_calls[-1]["args"]["city"] == "Kandy"
     assert check_calls[-1]["args"]["delivery_date"] == "2026-06-13"
-    assert turn3.get("session_awaiting_delivery_date") is False
+    assert (
+        turn3.get("delivery_date") == "2026-06-13"
+        or turn3.get("session_delivery_date") == "2026-06-13"
+    )
 
     mock_service.check_delivery.assert_awaited()
     assert mock_service.check_delivery.await_count >= 2
@@ -202,3 +206,85 @@ async def test_kandy_cake_deliver_tomorrow_multiturn_check_delivery(
     assert dated_call.args[0] == _CLIENT_IP
     assert dated_call.kwargs["city"] == "Kandy"
     assert dated_call.kwargs["delivery_date"] == "2026-06-13"
+
+
+@pytest.mark.asyncio
+async def test_heart_chocolates_kandy_sunday_dated_preflight(
+    checkpointer: AsyncRedisSaver,
+) -> None:
+    """Product-specific turn with Kandy + Sunday resolves dated kapruka_check_delivery."""
+    mock_service = AsyncMock(spec=KaprukaService)
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[
+            ProductResult(
+                id="choc001",
+                name="Heart Chocolates",
+                summary="Assorted hearts.",
+                price=Money(amount=5330.0, currency="LKR"),
+                compare_at_price=None,
+                in_stock=True,
+                stock_level="high",
+                image_url="https://example.com/choc.jpg",
+                category=CategoryRef(id="cat_choc", name="Chocolate", slug="chocolate"),
+                rating=None,
+                ships_internationally=False,
+                url="https://www.kapruka.com/choc",
+            ),
+        ],
+        next_cursor=None,
+        applied_filters={"q": "chocolate gift", "limit": 10, "in_stock_only": False},
+    )
+    mock_service.list_delivery_cities.return_value = ["Kandy"]
+    mock_service.check_delivery.return_value = CheckDeliveryOutput(
+        city="Kandy",
+        now="2026-06-25T12:00:00+05:30",
+        checked_date="2026-06-28",
+        available=True,
+        rate=1075.0,
+        currency="LKR",
+        reason=None,
+        next_available_date=None,
+        perishable_warning=None,
+    )
+
+    deps = ShoppingGraphDeps(
+        kapruka_service=mock_service,
+        client_ip=_CLIENT_IP,
+        genai_client=_discovery_mock_genai(),
+    )
+    graph = build_shopping_graph(checkpointer=checkpointer, deps=deps)
+    config: dict[str, Any] = {"configurable": {"thread_id": "thread-choc-kandy-sun"}}
+    planner_steps = [
+        AgentPlannerStep(
+            action="call_tool",
+            tool_name=SEARCH_PRODUCTS_TOOL,
+            tool_args={"q": "chocolate gift"},
+            rationale="search chocolates",
+        ),
+        AgentPlannerStep(action="finish", rationale="done"),
+    ]
+
+    fixed = datetime(2026, 6, 25, 12, 0, tzinfo=ZoneInfo("Asia/Colombo"))
+    with (
+        patch("lib.utils.timezone.colombo_now", return_value=fixed),
+        patch(
+            "graphs.nodes.agent_loop._plan_next_step_sync",
+            side_effect=planner_steps,
+        ),
+    ):
+        result = await graph.ainvoke(
+            initial_shopping_state(
+                message="Heart Chocolates deliver to Kandy this Sunday",
+                session_id="sess-choc-kandy-sun",
+                thread_id="thread-choc-kandy-sun",
+            ),
+            config,
+        )
+
+    tool_trace = result.get("tool_trace") or []
+    check_calls = [inv for inv in tool_trace if inv["name"] == CHECK_DELIVERY_TOOL]
+    assert check_calls, "dated kapruka_check_delivery must run"
+    dated = [inv for inv in check_calls if inv["args"].get("delivery_date")]
+    assert dated, "at least one dated check_delivery invocation expected"
+    assert dated[-1]["args"]["city"] == "Kandy"
+    assert dated[-1]["args"]["delivery_date"] == "2026-06-28"

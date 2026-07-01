@@ -12,6 +12,7 @@ from tests.unit.test_settings import _VALID_ENV, _apply_env
 from app.config import get_settings
 from app.main import create_app
 from lib.chat.session import SESSION_COOKIE_NAME, verify_signed_session_cookie
+from lib.kapruka.errors import KaprukaError
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.types import (
     CategoryRef,
@@ -117,6 +118,50 @@ async def test_post_cart_add_returns_html_with_product_name(cart_app) -> None:
     cart = await get_cart(cart_app.state.redis, thread_id)
     assert len(cart) == 1
     assert cart[0].name == _PRODUCT_NAME
+
+
+@pytest.mark.asyncio
+async def test_post_cart_add_kapruka_error_returns_visible_htmx_error(cart_app) -> None:
+    """HTMX cart add failures return 200 with error banner + retry (not silent 502)."""
+    mock_service = cart_app.state.kapruka_service
+    mock_service.get_product.side_effect = KaprukaError(
+        "upstream_error",
+        "Kapruka service unavailable",
+    )
+
+    transport = ASGITransport(app=cart_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/cart/add",
+            data={"product_id": _PRODUCT_ID},
+            headers={"HX-Request": "true"},
+        )
+
+    assert response.status_code == 200
+    assert 'data-testid="cart-add-error"' in response.text
+    assert 'data-testid="error-banner"' in response.text
+    assert 'data-testid="cart-add-retry"' in response.text
+    assert 'id="cart-panel"' in response.text
+    assert "Try again" in response.text
+
+    thread_id = verify_signed_session_cookie(_session_cookie_from_response(response))
+    assert thread_id is not None
+    assert await get_cart(cart_app.state.redis, thread_id) == []
+
+
+@pytest.mark.asyncio
+async def test_post_cart_add_rejects_invalid_product_id_without_mcp(cart_app) -> None:
+    transport = ASGITransport(app=cart_app)
+    mock_service = cart_app.state.kapruka_service
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/cart/add",
+            data={"product_id": "not-a-real-id"},
+            headers={"HX-Request": "true"},
+        )
+
+    assert response.status_code == 422
+    mock_service.get_product.assert_not_awaited()
 
 
 @pytest.mark.asyncio
