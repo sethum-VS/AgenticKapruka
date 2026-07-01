@@ -584,7 +584,7 @@ async def test_agent_loop_emits_status_events() -> None:
         AgentPlannerStep(
             action="call_tool",
             tool_name=CHECK_DELIVERY_TOOL,
-            tool_args={"city": "Kandy", "delivery_date": "2026-07-01"},
+            tool_args={"city": "Kandy", "delivery_date": "2099-01-01"},
             rationale="check delivery",
         ),
         AgentPlannerStep(action="finish", rationale="done"),
