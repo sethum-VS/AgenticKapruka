@@ -94,6 +94,8 @@ def _patch_eval_settings() -> Iterator[None]:
     with (
         patch("lib.chat.model_router.get_settings", return_value=settings),
         patch("graphs.nodes.retrieve_hybrid_context.get_settings", return_value=settings),
+        patch("lib.chat.master_flow.get_settings", return_value=settings),
+        patch("graphs.nodes.master_flow.get_settings", return_value=settings),
     ):
         yield
 
