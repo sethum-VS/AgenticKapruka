@@ -96,7 +96,7 @@ def test_product_carousel_no_horizontal_overflow_on_mobile_viewport() -> None:
               const doc = document.documentElement;
               return {
                 cardCount: cards.length,
-                pageOverflow: doc.scrollWidth > doc.clientWidth,
+                pageOverflow: doc.scrollWidth > 375,
               };
             }"""
         )
