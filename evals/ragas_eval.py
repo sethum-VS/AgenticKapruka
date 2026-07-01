@@ -588,6 +588,7 @@ def build_eval_genai_client(
             and getattr(config.response_schema, "__name__", "") == "MasterFlowAlignment"
         ):
             from lib.chat.master_flow import MasterFlowAlignment
+
             resolved = MasterFlowAlignment(
                 decision="proceed",
                 confidence=1.0,
@@ -609,6 +610,7 @@ def build_eval_genai_client(
             and getattr(config.response_schema, "__name__", "") == "SpecificityRefinement"
         ):
             from lib.chat.request_specificity import SpecificityRefinement
+
             ref = SpecificityRefinement(
                 score=100.0,
                 product_score=1.0,
