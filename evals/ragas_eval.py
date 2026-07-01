@@ -583,7 +583,10 @@ def build_eval_genai_client(
             response.text = json.dumps({"message": message})
             return response
 
-        if config is not None and getattr(config.response_schema, "__name__", "") == "MasterFlowAlignment":
+        if (
+            config is not None
+            and getattr(config.response_schema, "__name__", "") == "MasterFlowAlignment"
+        ):
             from lib.chat.master_flow import MasterFlowAlignment
             resolved = MasterFlowAlignment(
                 decision="proceed",
@@ -601,7 +604,10 @@ def build_eval_genai_client(
             response.text = resolved.model_dump_json()
             return response
 
-        if config is not None and getattr(config.response_schema, "__name__", "") == "SpecificityRefinement":
+        if (
+            config is not None
+            and getattr(config.response_schema, "__name__", "") == "SpecificityRefinement"
+        ):
             from lib.chat.request_specificity import SpecificityRefinement
             ref = SpecificityRefinement(
                 score=100.0,
