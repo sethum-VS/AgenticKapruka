@@ -231,7 +231,7 @@
         {"role": "user", "content": "Show me chocolate cakes instead"}
       ],
       "constraints": {
-        "preserved_terms": ["cake", "date"],
+        "preserved_terms": ["cake", "delivery"],
         "expected_tools_any_turn": ["kapruka_search_products"]
       },
       "final_expect_product_ui": true

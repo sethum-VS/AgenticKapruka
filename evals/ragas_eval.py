@@ -583,6 +583,38 @@ def build_eval_genai_client(
             response.text = json.dumps({"message": message})
             return response
 
+        if config is not None and getattr(config.response_schema, "__name__", "") == "MasterFlowAlignment":
+            from lib.chat.master_flow import MasterFlowAlignment
+            resolved = MasterFlowAlignment(
+                decision="proceed",
+                confidence=1.0,
+                active_flow="free_discovery",
+                mismatch_reason="mock",
+                clarifying_question=None,
+                resolved_intent=None,
+                resolved_session_fields={},
+                intent_metadata_patches={},
+                checkout_action=None,
+                context_reset=False,
+            )
+            response.parsed = resolved
+            response.text = resolved.model_dump_json()
+            return response
+
+        if config is not None and getattr(config.response_schema, "__name__", "") == "SpecificityRefinement":
+            from lib.chat.request_specificity import SpecificityRefinement
+            ref = SpecificityRefinement(
+                score=100.0,
+                product_score=1.0,
+                occasion_score=1.0,
+                budget_score=1.0,
+                band="proceed",
+                missing_dimension=None,
+            )
+            response.parsed = ref
+            response.text = ref.model_dump_json()
+            return response
+
         response.parsed = intent_response.parsed
         response.text = intent_response.text
         return response
