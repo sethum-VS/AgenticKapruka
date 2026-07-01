@@ -54,6 +54,7 @@ def _carousel_harness_html(carousel_html: str) -> str:
       body {{
         width: 375px;
         max-width: 375px;
+        overflow-y: hidden;
       }}
       [data-testid="product-carousel"] {{
         width: 100%;
