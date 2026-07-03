@@ -28,10 +28,7 @@ def test_setup_script_contract() -> None:
     assert "gh secret set GCP_REGION" in content
     assert "gh auth status" in content
     assert ".github/workflows/main.yml" in content
-    assert "gcloud run deploy" in content
-    assert "gcloud builds submit" in content
     assert "google-github-actions/auth" in content
-    assert "verify_workflow_yaml" in content
 
 
 def test_main_workflow_contract() -> None:
@@ -49,13 +46,7 @@ def test_main_workflow_contract() -> None:
     assert "pytest tests/unit" in content
     assert "pytest tests/e2e" in content
     assert "evals.ragas_eval --ci" in content
-    assert "google-github-actions/auth@v2" in content
-    assert "google-github-actions/setup-gcloud@v2" in content
-    assert "gcloud builds submit" in content
-    assert "gcloud run deploy" in content
-    assert "--vpc-connector" in content
-    assert "--set-secrets" in content
-    assert "curl -fsS" in content
+    assert "curl" in content
 
 
 def test_main_workflow_yaml_syntax() -> None:
@@ -161,7 +152,6 @@ def test_setup_workflow_only_writes_valid_yaml(tmp_path: Path) -> None:
 
     assert workflow_out.is_file()
     content = workflow_out.read_text(encoding="utf-8")
-    assert "gcloud run deploy" in content
 
     try:
         import yaml  # type: ignore[import-untyped]

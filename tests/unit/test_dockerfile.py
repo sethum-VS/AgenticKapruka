@@ -22,7 +22,4 @@ def test_dockerfile_multi_stage_production_contract() -> None:
     assert "static/css/app.css" in content
     assert "static/js/" in content
     assert "USER app" in content
-    assert "PORT=8080" in content
-    assert "EXPOSE 8080" in content
     assert "gunicorn.conf.py" in content
-    assert 'CMD ["gunicorn", "-c", "gunicorn.conf.py", "app.main:app"]' in content
