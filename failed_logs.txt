@@ -1,0 +1,174 @@
+Playwright E2E smoke tests	E2E smoke tests	﻿2026-07-01T17:34:11.3736751Z ##[group]Run pytest tests/e2e -q
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3737097Z ^[[36;1mpytest tests/e2e -q^[[0m
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3769352Z shell: /usr/bin/bash -e {0}
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3769606Z env:
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3769871Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.13/x64
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3770317Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.13/x64/lib/pkgconfig
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3770747Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.13/x64
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3771128Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.13/x64
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3771521Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.13/x64
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3771918Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.13/x64/lib
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:34:11.3772519Z ##[endgroup]
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2120344Z ......F.........................                                         [100%]
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2121317Z =================================== FAILURES ===================================
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2122794Z ________ test_persona_distracted_shopper_weather_and_elephant[chromium] ________
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2124105Z 
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2124495Z page = <Page url='http://localhost:8080/chat'>
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2125230Z base_url = 'http://localhost:8080'
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2125651Z 
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2126306Z     def test_persona_distracted_shopper_weather_and_elephant(page: Page, base_url: str) -> None:
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2127429Z         """Distracted Shopper: weather redirect and impossible elephant suggestion."""
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2128048Z         page.goto(f"{base_url}/chat")
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2128427Z         wait_for_alpine(page)
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2128786Z         reset_e2e_session(page, base_url)
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2129152Z     
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2129524Z         weather = _chat_turn(page, "What's the weather in Colombo?")
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2130178Z         assert "weather" in weather.lower() or "can't check" in weather.lower()
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2130747Z         assert "zone" not in weather.lower()
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2131129Z     
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2131504Z         elephant = _chat_turn(page, "Can you deliver a live elephant?")
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2132470Z >       assert "stuffed" in elephant.lower() or "can't deliver" in elephant.lower()
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2135482Z E       assert ('stuffed' in "i can't check the weather, but i can help you send a gift anywhere in sri lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. what would you like to explore?" or "can't deliver" in "i can't check the weather, but i can help you send a gift anywhere in sri lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. what would you like to explore?")
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2138411Z E        +  where "i can't check the weather, but i can help you send a gift anywhere in sri lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. what would you like to explore?" = <built-in method lower of str object at 0x7f133f1fc030>()
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2140282Z E        +    where <built-in method lower of str object at 0x7f133f1fc030> = "I can't check the weather, but I can help you send a gift anywhere in Sri Lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. What would you like to explore?".lower
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2142338Z E        +  and   "i can't check the weather, but i can help you send a gift anywhere in sri lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. what would you like to explore?" = <built-in method lower of str object at 0x7f133f1fc030>()
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2144214Z E        +    where <built-in method lower of str object at 0x7f133f1fc030> = "I can't check the weather, but I can help you send a gift anywhere in Sri Lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. What would you like to explore?".lower
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2145840Z 
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2146079Z tests/e2e/test_qa_personas.py:104: AssertionError
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2146679Z =============================== warnings summary ===============================
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2148124Z ../../../../../opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/langgraph/cache/base/__init__.py:8
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2150841Z   /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/langgraph/cache/base/__init__.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2153243Z     from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2153565Z 
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2153656Z evals/ragas_eval.py:41
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2153879Z evals/ragas_eval.py:41
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2154996Z   /home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py:41: DeprecationWarning: Importing answer_relevancy from 'ragas.metrics' is deprecated and will be removed in v1.0. Please use 'ragas.metrics.collections' instead. Example: from ragas.metrics.collections import answer_relevancy
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2156501Z     from ragas.metrics import answer_relevancy, context_precision, faithfulness
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2156827Z 
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2156918Z evals/ragas_eval.py:41
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2157134Z evals/ragas_eval.py:41
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2158248Z   /home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py:41: DeprecationWarning: Importing context_precision from 'ragas.metrics' is deprecated and will be removed in v1.0. Please use 'ragas.metrics.collections' instead. Example: from ragas.metrics.collections import context_precision
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2159528Z     from ragas.metrics import answer_relevancy, context_precision, faithfulness
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2159844Z 
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2159926Z evals/ragas_eval.py:41
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2160133Z evals/ragas_eval.py:41
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2161208Z   /home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py:41: DeprecationWarning: Importing faithfulness from 'ragas.metrics' is deprecated and will be removed in v1.0. Please use 'ragas.metrics.collections' instead. Example: from ragas.metrics.collections import faithfulness
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2162766Z     from ragas.metrics import answer_relevancy, context_precision, faithfulness
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2163082Z 
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2163288Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2163731Z =========================== short test summary info ============================
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2166096Z FAILED tests/e2e/test_qa_personas.py::test_persona_distracted_shopper_weather_and_elephant[chromium] - assert ('stuffed' in "i can't check the weather, but i can help you send a gift anywhere in sri lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. what would you like to explore?" or "can't deliver" in "i can't check the weather, but i can help you send a gift anywhere in sri lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. what would you like to explore?")
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2168768Z  +  where "i can't check the weather, but i can help you send a gift anywhere in sri lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. what would you like to explore?" = <built-in method lower of str object at 0x7f133f1fc030>()
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2170552Z  +    where <built-in method lower of str object at 0x7f133f1fc030> = "I can't check the weather, but I can help you send a gift anywhere in Sri Lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. What would you like to explore?".lower
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2172544Z  +  and   "i can't check the weather, but i can help you send a gift anywhere in sri lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. what would you like to explore?" = <built-in method lower of str object at 0x7f133f1fc030>()
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2174334Z  +    where <built-in method lower of str object at 0x7f133f1fc030> = "I can't check the weather, but I can help you send a gift anywhere in Sri Lanka — cakes, flowers, chocolates, and hampers with delivery dates and rates. What would you like to explore?".lower
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:21.2175522Z 1 failed, 31 passed, 7 warnings in 117.16s (0:01:57)
+Playwright E2E smoke tests	E2E smoke tests	2026-07-01T17:36:22.7275496Z ##[error]Process completed with exit code 1.
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	﻿2026-07-01T17:33:49.8010961Z ##[group]Run python -m evals.ragas_eval --ci
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8011404Z ^[[36;1mpython -m evals.ragas_eval --ci^[[0m
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8045095Z shell: /usr/bin/bash -e {0}
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8045344Z env:
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8045604Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.13/x64
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8046036Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.13/x64/lib/pkgconfig
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8046452Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.13/x64
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8046819Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.13/x64
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8047210Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.13/x64
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8047589Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.13/x64/lib
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8047911Z   RAGAS_DO_NOT_TRACK: true
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:49.8048128Z ##[endgroup]
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:53.8365073Z /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/langgraph/cache/base/__init__.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:53.8368879Z   from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:57.4390751Z /home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py:41: DeprecationWarning: Importing answer_relevancy from 'ragas.metrics' is deprecated and will be removed in v1.0. Please use 'ragas.metrics.collections' instead. Example: from ragas.metrics.collections import answer_relevancy
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:57.4394247Z   from ragas.metrics import answer_relevancy, context_precision, faithfulness
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:57.4397220Z /home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py:41: DeprecationWarning: Importing context_precision from 'ragas.metrics' is deprecated and will be removed in v1.0. Please use 'ragas.metrics.collections' instead. Example: from ragas.metrics.collections import context_precision
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:57.4399187Z   from ragas.metrics import answer_relevancy, context_precision, faithfulness
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:57.4401263Z /home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py:41: DeprecationWarning: Importing faithfulness from 'ragas.metrics' is deprecated and will be removed in v1.0. Please use 'ragas.metrics.collections' instead. Example: from ragas.metrics.collections import faithfulness
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:33:57.4402852Z   from ragas.metrics import answer_relevancy, context_precision, faithfulness
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1554270Z Traceback (most recent call last):
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1563760Z   File "<frozen runpy>", line 198, in _run_module_as_main
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1564367Z   File "<frozen runpy>", line 88, in _run_code
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1565360Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py", line 935, in <module>
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1566023Z     main()
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1566571Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py", line 927, in main
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1567251Z     code = asyncio.run(_async_main(argv))
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1567600Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1568364Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py", line 195, in run
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1569067Z     return runner.run(main)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1569306Z            ^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1569909Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/runners.py", line 118, in run
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1570405Z     return self._loop.run_until_complete(task)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1570694Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1571250Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1571971Z     return future.result()
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1572291Z            ^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1572870Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py", line 911, in _async_main
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1573777Z     scores = await run_full_ragas_eval(args.dataset)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1574084Z              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1574650Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py", line 870, in run_full_ragas_eval
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1575592Z     rows = await collect_eval_rows_per_case(dataset, redis_client=redis_client)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1576143Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1576757Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py", line 804, in collect_eval_rows_per_case
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1577409Z     row = await run_graph_for_case(case, graph=graph, redis_client=redis_client)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1577822Z           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1578754Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/evals/ragas_eval.py", line 722, in run_graph_for_case
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1579316Z     result = await graph.ainvoke(state)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1579725Z              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1580291Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/langgraph/pregel/main.py", line 3171, in ainvoke
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1585670Z     async for chunk in self.astream(
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1586813Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/langgraph/pregel/main.py", line 2993, in astream
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1591568Z     async for _ in runner.atick(
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1592679Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/langgraph/pregel/_runner.py", line 295, in atick
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1593765Z     await arun_with_retry(
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1594854Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/langgraph/pregel/_retry.py", line 137, in arun_with_retry
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1596386Z     return await task.proc.ainvoke(task.input, config)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1596991Z            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1598141Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/langgraph/_internal/_runnable.py", line 706, in ainvoke
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1599267Z     input = await asyncio.create_task(
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1600000Z             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1601108Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/langgraph/_internal/_runnable.py", line 474, in ainvoke
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1602243Z     ret = await self.afunc(*args, **kwargs)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1602745Z           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1603748Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/graphs/shopping_graph.py", line 112, in _master_flow
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1604745Z     updates = await master_flow(
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1605188Z               ^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1606228Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/graphs/nodes/master_flow.py", line 32, in master_flow
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1607275Z     invoke, trigger_reason = should_invoke_master_flow(state)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1607858Z                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1608935Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/lib/chat/master_flow.py", line 231, in should_invoke_master_flow
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1610289Z     cfg = settings or get_settings()
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1610755Z                       ^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1611564Z   File "/home/runner/work/AgenticKapruka/AgenticKapruka/app/config.py", line 174, in get_settings
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1612290Z     return Settings()
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1612619Z            ^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1613536Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/pydantic_settings/main.py", line 247, in __init__
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1615074Z     super().__init__(**__pydantic_self__.__class__._settings_build_values(sources, init_kwargs))
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1616303Z   File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/pydantic/main.py", line 263, in __init__
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1617478Z     validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1618250Z                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1618972Z pydantic_core._pydantic_core.ValidationError: 8 validation errors for Settings
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1619859Z redis_url
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1620328Z   Field required [type=missing, input_value={}, input_type=dict]
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1621159Z     For further information visit https://errors.pydantic.dev/2.13/v/missing
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1621849Z neo4j_uri
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1622378Z   Field required [type=missing, input_value={}, input_type=dict]
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1623151Z     For further information visit https://errors.pydantic.dev/2.13/v/missing
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1623778Z neo4j_user
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1624224Z   Field required [type=missing, input_value={}, input_type=dict]
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1624978Z     For further information visit https://errors.pydantic.dev/2.13/v/missing
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1625547Z neo4j_password
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1625948Z   Field required [type=missing, input_value={}, input_type=dict]
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1626648Z     For further information visit https://errors.pydantic.dev/2.13/v/missing
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1627228Z zep_api_key
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1627651Z   Field required [type=missing, input_value={}, input_type=dict]
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1628364Z     For further information visit https://errors.pydantic.dev/2.13/v/missing
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1628956Z gcp_project_id
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1629373Z   Field required [type=missing, input_value={}, input_type=dict]
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1630324Z     For further information visit https://errors.pydantic.dev/2.13/v/missing
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1631143Z gcp_location
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1631555Z   Field required [type=missing, input_value={}, input_type=dict]
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1632307Z     For further information visit https://errors.pydantic.dev/2.13/v/missing
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1632899Z session_secret
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1633312Z   Field required [type=missing, input_value={}, input_type=dict]
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1634007Z     For further information visit https://errors.pydantic.dev/2.13/v/missing
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:00.1634797Z During task with name 'master_flow' and id '9f1e6634-ba73-4edd-3bc8-d689bd56c676'
+Ragas golden dataset eval	Run Ragas evaluation (mock MCP)	2026-07-01T17:34:01.6956177Z ##[error]Process completed with exit code 1.

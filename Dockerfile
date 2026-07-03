@@ -50,8 +50,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     APP_ENV=production \
-    PATH="/opt/venv/bin:$PATH" \
-    PORT=8080
+    PATH="/opt/venv/bin:$PATH"
 
 RUN groupadd --system --gid 1001 app \
     && useradd --system --uid 1001 --gid app --home-dir /app app
@@ -62,7 +61,6 @@ COPY --chown=app:app gunicorn.conf.py .
 
 USER app
 
-EXPOSE 8080
 
 # Production entrypoint — see gunicorn.conf.py for workers, timeouts, and bind.
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "app.main:app"]
