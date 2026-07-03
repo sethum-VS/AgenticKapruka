@@ -21,7 +21,7 @@ _workers_env = os.environ.get("GUNICORN_WORKERS")
 if _workers_env is not None:
     workers = max(1, int(_workers_env))
 else:
-    workers = min(multiprocessing.cpu_count() * 2 + 1, 2)
+    workers = 1
 
 worker_class = "uvicorn.workers.UvicornWorker"
 
