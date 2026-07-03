@@ -70,7 +70,10 @@ def test_gunicorn_workers_timeout_and_keepalive() -> None:
     conf = _load_gunicorn_conf(port="8080")
 
     assert conf.bind == "0.0.0.0:8080"
-    assert conf.workers == min(multiprocessing.cpu_count() * 2 + 1, 2)
+    if os.environ.get("GUNICORN_WORKERS") is not None:
+        assert conf.workers == max(1, int(os.environ.get("GUNICORN_WORKERS", 1)))
+    else:
+        assert conf.workers == 1
     assert conf.worker_class == "uvicorn.workers.UvicornWorker"
     assert conf.timeout == 120
     assert conf.graceful_timeout == 30
