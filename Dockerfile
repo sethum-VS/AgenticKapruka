@@ -63,4 +63,4 @@ USER app
 
 
 # Production entrypoint — see gunicorn.conf.py for workers, timeouts, and bind.
-CMD ["sh", "-c", "if [ -n \"$GCP_CREDENTIALS\" ]; then echo \"$GCP_CREDENTIALS\" > /tmp/gcp.json; export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp.json; fi; exec gunicorn -c gunicorn.conf.py app.main:app"]
+CMD sh -c 'if [ -n "$GCP_CREDENTIALS" ]; then echo "$GCP_CREDENTIALS" > /tmp/gcp.json; export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp.json; fi; exec gunicorn -c gunicorn.conf.py app.main:app'
