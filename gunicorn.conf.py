@@ -9,7 +9,6 @@ Cloud Run sets ``PORT``; workers scale with container vCPU count.
 
 from __future__ import annotations
 
-import multiprocessing
 import os
 
 _port = os.environ.get("PORT", "8080")
@@ -18,10 +17,7 @@ bind = f"0.0.0.0:{_port}"
 # Cloud Run: one worker per instance avoids OOM from duplicate LangGraph/Neo4j loads.
 # Override with GUNICORN_WORKERS for local multi-worker testing.
 _workers_env = os.environ.get("GUNICORN_WORKERS")
-if _workers_env is not None:
-    workers = max(1, int(_workers_env))
-else:
-    workers = 1
+workers = max(1, int(_workers_env)) if _workers_env is not None else 1
 
 worker_class = "uvicorn.workers.UvicornWorker"
 
