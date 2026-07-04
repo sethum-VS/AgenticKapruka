@@ -18,8 +18,7 @@ def _bootstrap_settings() -> Settings:
         neo4j_user="neo4j",
         neo4j_password="test-password",
         zep_api_key="zep-test-key",
-        gcp_project_id="test-project",
-        gcp_location="us-central1",
+        nvidia_api_key="nvapi-test-key",
         session_secret="x" * 32,
         _env_file=None,
     )

@@ -69,7 +69,7 @@ class OntologyNodeProperties(BaseModel):
     kapruka_id: str | None = Field(default=None, max_length=80)
     embedding: list[float] | None = Field(
         default=None,
-        description="Vertex gemini-embedding-2 vector (768 dims); set by embed_ontology script",
+        description="NVIDIA NIM nv-embed-v1 vector (4096 dims); set by embed_ontology script",
     )
 
 

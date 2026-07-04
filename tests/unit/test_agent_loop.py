@@ -258,7 +258,7 @@ async def test_agent_loop_first_iteration_refines_intent() -> None:
     )
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         return_value=finish_step,
     ):
         result = await agent_loop(
@@ -282,7 +282,7 @@ async def test_agent_loop_finish_sets_done() -> None:
     finish_step = AgentPlannerStep(action="finish", rationale="products found")
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         return_value=finish_step,
     ):
         result = await agent_loop(
@@ -313,7 +313,7 @@ async def test_agent_loop_finish_after_successful_tool_call() -> None:
     ]
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         result = await agent_loop(
@@ -340,7 +340,7 @@ async def test_agent_loop_ask_user_sets_clarifying_question_and_exits() -> None:
     )
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         return_value=ask_step,
     ):
         result = await agent_loop(
@@ -372,7 +372,7 @@ async def test_agent_loop_iteration_cap_limits_tool_calls() -> None:
     ]
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         result = await agent_loop(
@@ -416,7 +416,7 @@ async def test_agent_loop_duplicate_tool_guard_forces_finish() -> None:
     ]
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         result = await agent_loop(
@@ -476,7 +476,7 @@ async def test_agent_loop_search_success_guard_forces_finish() -> None:
     ]
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ) as mock_plan:
         result = await agent_loop(
@@ -552,7 +552,7 @@ async def test_agent_loop_tool_error_exits_immediately() -> None:
     with (
         patch("lib.utils.timezone.colombo_now", return_value=fixed),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ) as mock_plan,
     ):
@@ -593,7 +593,7 @@ async def test_agent_loop_emits_status_events() -> None:
     with (
         patch("graphs.nodes.agent_loop.get_stream_writer", return_value=mock_writer),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -618,11 +618,10 @@ async def test_agent_loop_emits_status_events() -> None:
 async def test_agent_loop_planner_uses_flash_model_only() -> None:
     """Planner never escalates to Pro — always gemini-2.5-flash."""
     mock_service = _mock_kapruka_service()
-    mock_response = MagicMock()
-    mock_response.parsed = AgentPlannerStep(action="finish", rationale="done")
+    mock_response = AgentPlannerStep(action="finish", rationale="done")
 
     with patch(
-        "graphs.nodes.agent_loop.generate_content_with_fallback",
+        "graphs.nodes.agent_loop.generate_content",
         return_value=mock_response,
     ) as mock_generate:
         await agent_loop(
@@ -770,7 +769,7 @@ async def test_agent_loop_check_delivery_missing_date_asks_user_skips_mcp() -> N
         patch("lib.utils.timezone.colombo_now", return_value=fixed),
         patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -809,7 +808,7 @@ async def test_agent_loop_check_delivery_past_planner_date_resolves_from_message
     with (
         patch("lib.utils.timezone.colombo_now", return_value=fixed),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -847,7 +846,7 @@ async def test_agent_loop_check_delivery_past_date_without_message_asks_user() -
         patch("lib.utils.timezone.colombo_now", return_value=fixed),
         patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -907,7 +906,7 @@ async def test_agent_loop_anniversary_flowers_drops_flowers_category_before_sear
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         result = await agent_loop(
@@ -950,7 +949,7 @@ async def test_agent_loop_empty_search_runs_one_broaden_retry() -> None:
     ]
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         result = await agent_loop(
@@ -995,7 +994,7 @@ async def test_agent_loop_search_merge_overrides_planner_dessert_query() -> None
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         result = await agent_loop(
@@ -1037,7 +1036,7 @@ async def test_agent_loop_empty_search_broaden_guard_at_most_one_retry() -> None
     ]
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         result = await agent_loop(
@@ -1077,7 +1076,7 @@ async def test_agent_loop_check_delivery_injects_canonical_city_from_state() -> 
         patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
         patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -1122,7 +1121,7 @@ async def test_agent_loop_check_delivery_missing_date_runs_city_only_for_gift_di
         patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
         patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -1165,7 +1164,7 @@ async def test_agent_loop_check_delivery_missing_date_still_asks_user() -> None:
         patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
         patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -1204,7 +1203,7 @@ async def test_agent_loop_check_delivery_uses_session_city_when_ephemeral_reset(
         patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
         patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -1241,7 +1240,7 @@ async def test_agent_loop_check_delivery_missing_date_sets_session_awaiting_flag
         patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
         patch("lib.chat.delivery_dates.colombo_today_iso", return_value="2026-06-12"),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -1280,7 +1279,7 @@ async def test_agent_loop_check_delivery_success_clears_session_awaiting_flag() 
         patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 12)),
         patch("lib.chat.delivery_dates.colombo_today", return_value=date(2026, 6, 12)),
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
     ):
@@ -1371,7 +1370,7 @@ async def test_agent_loop_utility_general_iteration_cap_at_two() -> None:
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         result = await agent_loop(
@@ -1432,7 +1431,7 @@ async def test_agent_loop_budget_refinement_exits_without_second_planner_iterati
     )
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=[planner_should_not_run],
     ) as mock_plan:
         result = await agent_loop(
@@ -1473,7 +1472,7 @@ async def test_agent_loop_discovery_city_gift_searches_before_planner() -> None:
     )
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=[planner_should_not_run],
     ) as mock_plan:
         result = await agent_loop(
@@ -1505,7 +1504,7 @@ async def test_agent_loop_situational_breakup_flowers_searches_on_turn_one() -> 
     )
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=[planner_should_not_run],
     ) as mock_plan:
         result = await agent_loop(
@@ -1563,7 +1562,7 @@ async def test_agent_loop_rate_limit_retry_succeeds_without_tool_error() -> None
 
     with (
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=AssertionError("planner should not run on budget refinement"),
         ),
         patch(
@@ -1653,7 +1652,7 @@ async def test_agent_loop_delivery_only_skips_planner() -> None:
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=AssertionError("planner should not run on delivery-only"),
     ):
         result = await agent_loop(
@@ -1684,7 +1683,7 @@ async def test_agent_loop_support_faq_skips_planner() -> None:
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=AssertionError("planner should not run on support FAQ"),
     ):
         result = await agent_loop(
@@ -1710,7 +1709,7 @@ async def test_agent_loop_cart_intent_skips_planner() -> None:
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=AssertionError("planner should not run on cart intent"),
     ):
         result = await agent_loop(
@@ -1740,7 +1739,7 @@ async def test_agent_loop_confident_discovery_skips_planner() -> None:
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=AssertionError("planner should not run on confident discovery"),
     ):
         result = await agent_loop(
@@ -1773,7 +1772,7 @@ async def test_agent_loop_budgeted_roses_skips_planner() -> None:
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=AssertionError("planner should not run on budgeted roses"),
     ):
         result = await agent_loop(
@@ -1829,7 +1828,7 @@ async def test_agent_loop_product_detail_fast_path_fetches_get_product() -> None
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=AssertionError("planner should not run on product detail"),
     ):
         result = await agent_loop(
@@ -1870,7 +1869,7 @@ async def test_agent_loop_product_detail_fast_path_uses_session_resolved_without
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=AssertionError("planner should not run on product detail"),
     ):
         result = await agent_loop(
@@ -1915,7 +1914,7 @@ async def test_agent_loop_skips_confident_discovery_on_product_detail_turn() -> 
     }
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=AssertionError("planner should not run on product detail"),
     ):
         result = await agent_loop(
@@ -1949,7 +1948,7 @@ async def test_agent_loop_vector_hits_only_runs_planner() -> None:
     )
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         return_value=planner_step,
     ) as mock_plan:
         result = await agent_loop(

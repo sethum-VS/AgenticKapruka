@@ -6,7 +6,8 @@ from lib.neo4j.embed_ontology import (
     has_category_embeddings,
 )
 from lib.neo4j.hybrid_context import (
-    VECTOR_CONFIDENCE_THRESHOLD,
+    DEFAULT_RERANKER_THRESHOLD,
+    RewrittenSearchQuery,
     build_discovery_search_args,
     build_graph_hybrid_context,
     fetch_category_display_names,
@@ -55,7 +56,8 @@ __all__ = [
     "apply_ontology_schema",
     "build_triplets_from_categories",
     "count_ontology_nodes_by_label",
-    "VECTOR_CONFIDENCE_THRESHOLD",
+    "DEFAULT_RERANKER_THRESHOLD",
+    "RewrittenSearchQuery",
     "VectorSearchHit",
     "OCCASION_VECTOR_INDEX_NAME",
     "build_discovery_search_args",

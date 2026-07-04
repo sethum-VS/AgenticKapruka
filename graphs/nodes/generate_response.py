@@ -11,8 +11,7 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any, cast
 
-from google import genai
-from google.genai import types
+
 from langchain_core.messages import HumanMessage
 from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ValidationError
@@ -88,8 +87,8 @@ from lib.checkout.tracking import (
     tracking_error_from_tool_results,
     tracking_output_from_tool_results,
 )
-from lib.genai.errors import is_resource_exhausted
-from lib.genai.fallback import generate_content_with_fallback
+from lib.genai.errors import is_rate_limited
+from lib.genai.completions import generate_content
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -994,34 +993,7 @@ def _build_user_prompt(
     )
 
 
-def _parse_reply_response(response: types.GenerateContentResponse) -> str:
-    """Parse structured or JSON text assistant reply from Gemini."""
-    if response.parsed is not None:
-        if isinstance(response.parsed, AssistantReply):
-            return response.parsed.message.strip()
-        validated = AssistantReply.model_validate(response.parsed)
-        return validated.message.strip()
-
-    raw_text = (response.text or "").strip()
-    if not raw_text:
-        msg = "Gemini returned empty assistant reply"
-        raise ValueError(msg)
-
-    try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        msg = f"Gemini reply is not valid JSON: {raw_text!r}"
-        raise ValueError(msg) from exc
-
-    try:
-        return AssistantReply.model_validate(payload).message.strip()
-    except ValidationError as exc:
-        msg = f"Gemini reply JSON failed validation: {payload!r}"
-        raise ValueError(msg) from exc
-
-
-def _generate_reply_sync(
-    client: genai.Client | None,
+async def _generate_reply(
     *,
     model: str,
     user_prompt: str,
@@ -1037,7 +1009,7 @@ def _generate_reply_sync(
     session_delivery_date: str | None = None,
     session_delivery_city: str | None = None,
 ) -> str:
-    """Blocking Gemini call; run via asyncio.to_thread from generate_response."""
+    """NVIDIA NIM call with structured output."""
     instruction = system_instruction or build_response_system_instruction(
         intent_metadata,
         zep_memory_facts=zep_memory_facts,
@@ -1053,18 +1025,18 @@ def _generate_reply_sync(
     if system_instruction is not None and zep_memory_facts:
         instruction += format_memory_facts_block(zep_memory_facts)
 
-    response = generate_content_with_fallback(
-        client=client,
+    reply = await generate_content(
         model=model,
-        contents=user_prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=instruction,
-            response_mime_type="application/json",
-            response_schema=AssistantReply,
-            temperature=0.2,
-        ),
+        messages=[
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": user_prompt},
+        ],
+        response_schema=AssistantReply,
+        temperature=0.2,
     )
-    return _parse_reply_response(response)
+    if isinstance(reply, AssistantReply):
+        return reply.message.strip()
+    return ""
 
 
 def _carousel_strict_budget(
@@ -1708,7 +1680,7 @@ def _build_checkout_review_prompt(user_message: str, checkout: dict[str, Any]) -
 async def generate_response(
     state: AgentState,
     *,
-    genai_client: genai.Client | None = None,
+    genai_client: object | None = None,
 ) -> dict[str, Any]:
     """LangGraph node: synthesize assistant text and render response_html partial."""
     messages = state.get("messages") or []
@@ -1992,9 +1964,7 @@ async def generate_response(
             model = select_model(state)
             user_prompt = _build_checkout_review_prompt(user_message, checkout)
             zep_memory_facts = state.get("zep_memory_facts")
-            reply_text = await asyncio.to_thread(
-                _generate_reply_sync,
-                client,
+            reply_text = await _generate_reply(
                 model=model,
                 user_prompt=user_prompt,
                 zep_memory_facts=zep_memory_facts,
@@ -2333,11 +2303,13 @@ async def generate_response(
                 state=state,
                 visible_products=visible_products,
             )
-            return _assistant_response_fields(
+            updates = _assistant_response_fields(
                 reply_text,
                 products_html=None if delivery_only else products_html,
                 delivery_status_html=delivery_status_html,
             )
+            updates["last_visible_products"] = visible_products
+            return updates
 
     client = genai_client
     model = select_model(state)
@@ -2377,9 +2349,7 @@ async def generate_response(
         "delivery_city_canonical",
     )
     try:
-        reply_text = await asyncio.to_thread(
-            _generate_reply_sync,
-            client,
+        reply_text = await _generate_reply(
             model=model,
             user_prompt=user_prompt,
             zep_memory_facts=zep_memory_facts,

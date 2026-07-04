@@ -267,53 +267,22 @@ def _ask_then_cakes_mock_genai() -> MagicMock:
     mock_client = MagicMock()
     planner_calls = 0
 
-    def generate_content(
-        *,
-        model: str,
-        contents: str,
-        config: types.GenerateContentConfig | None = None,
-        **kwargs: Any,
-    ) -> MagicMock:
-        nonlocal planner_calls
-        _ = model, kwargs
-        response = MagicMock()
-        if config is not None and config.response_schema is IntentClassification:
-            response.parsed = IntentClassification(intent="discovery")
-            response.text = json.dumps({"intent": "discovery"})
-            return response
-
-        if config is not None and config.response_schema is AgentPlannerStep:
-            planner_calls += 1
-            if planner_calls == 1:
-                step = AgentPlannerStep(
-                    action="ask_user",
-                    rationale="Who is the gift for or what occasion?",
-                    refined_intent="discovery",
-                )
-            elif planner_calls == 2:
-                step = AgentPlannerStep(
-                    action="call_tool",
-                    tool_name=SEARCH_PRODUCTS_TOOL,
-                    tool_args={"q": "cakes"},
-                    refined_intent="discovery",
-                    rationale="search cakes",
-                )
-            else:
-                step = AgentPlannerStep(action="finish", rationale="done")
-            response.parsed = step
-            response.text = step.model_dump_json()
-            return response
-
-        if config is not None and config.response_schema is AssistantReply:
-            response.parsed = AssistantReply(message="Here are some cakes from Kapruka.")
-            response.text = json.dumps({"message": "Here are some cakes from Kapruka."})
-            return response
-
-        response.parsed = IntentClassification(intent="discovery")
-        response.text = json.dumps({"intent": "discovery"})
-        return response
-
-    mock_client.models.generate_content.side_effect = generate_content
+    async def fake_generate_content(*, model: str | None = None, messages: list = [], response_schema: Any = None, **kwargs: Any) -> Any:
+        schema_name = getattr(response_schema, "__name__", "")
+        if schema_name == "IntentClassification":
+            from graphs.nodes.analyze_intent import IntentClassification
+            return IntentClassification(intent="discovery")
+        if schema_name == "AssistantReply":
+            from graphs.nodes.generate_response import AssistantReply
+            return AssistantReply(message="Here is a mock response.")
+        if schema_name == "MasterFlowAlignment":
+            from lib.chat.master_flow import MasterFlowAlignment
+            return MasterFlowAlignment(decision="hold", confidence=0.9, active_flow="shopping")
+        return {"content": "mocked"}
+    from lib.genai.completions import set_override_generate_content
+    from tests.helpers.mock_genai import ACTIVE_PATCHERS
+    set_override_generate_content(fake_generate_content)
+    ACTIVE_PATCHERS.append(fake_generate_content)
     return mock_client
 
 

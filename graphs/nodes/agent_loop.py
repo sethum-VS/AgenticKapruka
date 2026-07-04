@@ -9,8 +9,6 @@ import re
 from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
-from google import genai
-from google.genai import types
 from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ValidationError
 
@@ -61,7 +59,7 @@ from lib.chat.search_broadening import apply_first_broaden
 from lib.chat.status_copy import SEARCHING_CATALOG, long_search_status_message
 from lib.chat.support_faq import is_support_question
 from lib.debug.trace import trace_agent_iteration
-from lib.genai.fallback import generate_content_with_fallback
+from lib.genai.completions import generate_content
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tool_executor import (
     canonical_tool_args_for_dedup,
@@ -1213,50 +1211,29 @@ def _build_planner_user_prompt(state: AgentState) -> str:
     return prompt
 
 
-def _parse_planner_step(response: types.GenerateContentResponse) -> AgentPlannerStep:
-    """Parse structured or JSON text planner step from a Gemini response."""
-    if response.parsed is not None:
-        if isinstance(response.parsed, AgentPlannerStep):
-            return response.parsed
-        return AgentPlannerStep.model_validate(response.parsed)
-
-    raw_text = (response.text or "").strip()
-    if not raw_text:
-        msg = "Gemini returned empty planner step"
-        raise ValueError(msg)
-
-    try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        msg = f"Gemini planner response is not valid JSON: {raw_text!r}"
-        raise ValueError(msg) from exc
-
-    try:
-        return AgentPlannerStep.model_validate(payload)
-    except ValidationError as exc:
-        msg = f"Gemini planner JSON failed validation: {payload!r}"
-        raise ValueError(msg) from exc
-
-
-def _plan_next_step_sync(
-    client: genai.Client | None,
+async def _plan_next_step(
     *,
     state: AgentState,
     tool_trace: list[ToolInvocation],
 ) -> AgentPlannerStep:
-    """Blocking Gemini planner call; run via asyncio.to_thread from agent_loop."""
-    response = generate_content_with_fallback(
-        client=client,
-        model=PLANNER_MODEL,
-        contents=_build_planner_user_prompt(state),
-        config=types.GenerateContentConfig(
-            system_instruction=_build_planner_system_instruction(state, tool_trace=tool_trace),
-            response_mime_type="application/json",
+    """NVIDIA NIM planner call with structured output."""
+    try:
+        step = await generate_content(
+            model=PLANNER_MODEL,
+            messages=[
+                {"role": "system", "content": _build_planner_system_instruction(state, tool_trace=tool_trace)},
+                {"role": "user", "content": _build_planner_user_prompt(state)},
+            ],
             response_schema=AgentPlannerStep,
             temperature=0,
-        ),
-    )
-    return _parse_planner_step(response)
+        )
+        if not isinstance(step, AgentPlannerStep):
+            msg = "NVIDIA NIM returned unparseable planner step"
+            raise ValueError(msg)
+        return step
+    except Exception as exc:
+        msg = f"NVIDIA NIM planner call failed: {exc}"
+        raise ValueError(msg) from exc
 
 
 def _emit_status(message: str) -> None:
@@ -1651,7 +1628,7 @@ async def agent_loop(
     *,
     kapruka_service: KaprukaService | None = None,
     client_ip: str | None = None,
-    genai_client: genai.Client | None = None,
+    genai_client: object | None = None,
 ) -> dict[str, Any]:
     """LangGraph node: bounded Flash planner loop with MCP tool execution."""
     if kapruka_service is None:
@@ -2001,9 +1978,7 @@ async def agent_loop(
                 long_search_status_message(iteration=iteration, has_budget=has_budget),
             )
 
-        step = await asyncio.to_thread(
-            _plan_next_step_sync,
-            genai_client,
+        step = await _plan_next_step(
             state=state,
             tool_trace=tool_trace,
         )

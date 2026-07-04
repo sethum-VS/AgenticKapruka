@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage
 
 from graphs.nodes.retrieve_hybrid_context import retrieve_hybrid_context
 from graphs.state import AgentState
-from lib.embeddings.vertex_embeddings import EMBEDDING_DIMENSION
+from lib.embeddings.nvidia_embeddings import EMBEDDING_DIMENSION
 from lib.kapruka.types import CategoryNode
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import embed_ontology_nodes

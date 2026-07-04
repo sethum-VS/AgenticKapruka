@@ -1,35 +1,24 @@
-"""Select Gemini model tier based on checkout context and tool-call depth."""
+"""Select NVIDIA NIM model for the shopping graph agent."""
 
 from __future__ import annotations
 
+from app.config import get_settings
 from graphs.state import AgentState, ModelTier
 
-FLASH_MODEL = "gemini-2.5-flash"
-PRO_MODEL = "gemini-2.5-pro"
+# Single NVIDIA NIM model for all LLM tasks — no flash/pro tiering.
+NVIDIA_MODEL: str = get_settings().nvidia_llm_model if get_settings else "z-ai/glm-5.2"
 
-_TOOL_CALL_PRO_THRESHOLD = 3
+# Legacy aliases for backward compatibility with state/tests.
+FLASH_MODEL = "z-ai/glm-5.2"
+PRO_MODEL = "z-ai/glm-5.2"
 
 
 def select_model_tier(state: AgentState) -> ModelTier:
-    """Return flash or pro tier from explicit override and escalation rules."""
-    tier: ModelTier | None = state.get("model_tier")
-    if tier == "pro":
-        return "pro"
-
-    checkout_state = state.get("checkout_state")
-    if checkout_state == "review":
-        return "pro"
-
-    tool_call_count = state.get("tool_call_count") or 0
-    if tool_call_count > _TOOL_CALL_PRO_THRESHOLD:
-        return "pro"
-
+    """Return model tier — always flash with single-model NVIDIA NIM."""
     return "flash"
 
 
 def select_model(state: AgentState) -> str:
-    """Return Gemini model name for the current agent turn."""
-    tier = select_model_tier(state)
-    if tier == "pro":
-        return PRO_MODEL
-    return FLASH_MODEL
+    """Return NVIDIA NIM model name for the current agent turn."""
+    cfg = get_settings()
+    return cfg.nvidia_llm_model

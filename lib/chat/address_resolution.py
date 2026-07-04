@@ -6,8 +6,7 @@ import logging
 import re
 from typing import Any
 
-from google import genai
-from google.genai import types
+
 from pydantic import BaseModel, Field, ValidationError
 
 from graphs.model_router import FLASH_MODEL
@@ -19,7 +18,7 @@ from lib.chat.query_preprocessor import (
     _has_perishable_gift_intent,
     extract_target_city,
 )
-from lib.genai.fallback import generate_content_with_fallback
+from lib.genai.completions import generate_content
 from lib.kapruka.service import KaprukaService
 from lib.zep.memory import format_memory_facts_block
 
@@ -44,7 +43,7 @@ Support English, Sinhala script, and Tanglish. Prefer specific Colombo zones ove
 
 
 class ExtractedDestination(BaseModel):
-    """Structured Gemini extraction for a shipment destination."""
+    """Structured LLM extraction for a shipment destination."""
 
     raw_text: str = ""
     city_candidate: str | None = None
@@ -71,13 +70,13 @@ def extract_destination_regex(user_message: str) -> str | None:
 
 
 async def extract_destination_llm(
-    client: genai.Client | None,
+    client: object | None,
     user_message: str,
     *,
     memory_facts: list[str] | None = None,
 ) -> ExtractedDestination | None:
-    """Gemini Flash structured extraction for free-text shipment addresses."""
-    if client is None or not user_message.strip():
+    """NVIDIA NIM structured extraction for free-text shipment addresses."""
+    if not user_message.strip():
         return None
 
     instruction = _ADDRESS_SYSTEM
@@ -85,36 +84,19 @@ async def extract_destination_llm(
         instruction += format_memory_facts_block(memory_facts)
 
     try:
-        response = generate_content_with_fallback(
-            client=client,
-            model=FLASH_MODEL,
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=instruction,
-                response_mime_type="application/json",
-                response_schema=ExtractedDestination,
-                temperature=0,
-            ),
+        result = await generate_content(
+            messages=[
+                {"role": "system", "content": instruction},
+                {"role": "user", "content": user_message},
+            ],
+            response_schema=ExtractedDestination,
+            temperature=0,
         )
-    except Exception:
-        logger.warning("extract_destination_llm: Gemini call failed", exc_info=True)
+        if isinstance(result, ExtractedDestination):
+            return result
         return None
-
-    if response.parsed is not None:
-        try:
-            if isinstance(response.parsed, ExtractedDestination):
-                return response.parsed
-            return ExtractedDestination.model_validate(response.parsed)
-        except ValidationError:
-            return None
-
-    raw_text = (response.text or "").strip()
-    if not raw_text:
-        return None
-    try:
-        return ExtractedDestination.model_validate_json(raw_text)
     except Exception:
-        logger.debug("extract_destination_llm: invalid JSON %r", raw_text)
+        logger.warning("extract_destination_llm: NVIDIA NIM call failed", exc_info=True)
         return None
 
 
@@ -217,7 +199,7 @@ async def resolve_shipment_address(
     *,
     kapruka_service: KaprukaService,
     client_ip: str,
-    genai_client: genai.Client | None = None,
+    genai_client: object | None = None,
 ) -> dict[str, Any]:
     """Resolve shipment destination via LLM + MCP; ask user to confirm when ambiguous."""
     user_message = _extract_latest_user_message(state.get("messages") or [])

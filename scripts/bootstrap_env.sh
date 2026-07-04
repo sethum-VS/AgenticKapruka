@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Generate a gitignored .env for local development using gcloud and python.
+# Generate a gitignored .env for local development using python.
 #
-# Reads GCP_PROJECT_ID and GCP_LOCATION from gcloud. Gemini chat uses Vertex AI
-# via Application Default Credentials (gcloud auth application-default login).
 # Generates SESSION_SECRET with python secrets.token_urlsafe.
-# Neo4j AuraDB and Zep Cloud values remain manual placeholders (see .env.example).
+# Neo4j AuraDB, NVIDIA NIM, and Zep Cloud values remain manual placeholders (see .env.example).
 #
 # Usage:
 #   ./scripts/bootstrap_env.sh          # create .env (fails if it exists)
@@ -14,7 +12,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="${BOOTSTRAP_ENV_FILE:-${ROOT_DIR}/.env}"
 FORCE=false
-DEFAULT_GCP_LOCATION="us-central1"
 KAPRUKA_MCP_DEFAULT="https://mcp.kapruka.com/mcp"
 
 usage() {
@@ -22,15 +19,8 @@ usage() {
 Usage: bootstrap_env.sh [--force]
 
 Generate .env for local development:
-  - GCP_PROJECT_ID from: gcloud config get-value project
-  - GCP_LOCATION from:   gcloud config get-value compute/region (fallback us-central1)
-  - GEMINI_BACKEND=vertex (Gemini via Vertex AI + ADC, not API key billing)
   - SESSION_SECRET from: python secrets.token_urlsafe(48)
-  - REDIS_URL and KAPRUKA_MCP_URL defaults; Neo4j and Zep remain placeholders
-
-After bootstrap, authenticate for Vertex AI:
-  gcloud auth application-default login
-  # or: export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+  - REDIS_URL and KAPRUKA_MCP_URL defaults; NVIDIA, Neo4j, and Zep remain placeholders
 
 Options:
   --force, -f   Overwrite an existing .env file
@@ -68,30 +58,9 @@ require_cmd() {
   fi
 }
 
-require_cmd gcloud
 require_cmd python3
 
-gcloud_config_value() {
-  local value
-  value="$(gcloud config get-value "$1" 2>/dev/null | tr -d '[:space:]' || true)"
-  if [[ -z "${value}" || "${value}" == "(unset)" ]]; then
-    return 1
-  fi
-  printf '%s' "${value}"
-}
-
-GCP_PROJECT_ID="$(gcloud_config_value project || true)"
-if [[ -z "${GCP_PROJECT_ID}" ]]; then
-  echo "Error: gcloud project is not set. Run: gcloud config set project PROJECT_ID" >&2
-  exit 1
-fi
-
-if GCP_LOCATION="$(gcloud_config_value compute/region)"; then
-  :
-else
-  GCP_LOCATION="${DEFAULT_GCP_LOCATION}"
-  echo "Note: gcloud compute/region is unset; using ${GCP_LOCATION}" >&2
-fi
+SESSION_SECRET="$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")"
 
 SESSION_SECRET="$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")"
 
@@ -108,9 +77,7 @@ NEO4J_PASSWORD=your-neo4j-password
 
 ZEP_API_KEY=your-zep-api-key
 
-GEMINI_BACKEND=vertex
-GCP_PROJECT_ID=${GCP_PROJECT_ID}
-GCP_LOCATION=${GCP_LOCATION}
+NVIDIA_API_KEY=your-nvidia-api-key
 
 KAPRUKA_MCP_URL=${KAPRUKA_MCP_DEFAULT}
 

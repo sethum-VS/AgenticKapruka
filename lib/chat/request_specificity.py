@@ -8,8 +8,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from google import genai
-from google.genai import types
 from pydantic import BaseModel, Field, ValidationError
 
 from lib.chat.delivery_dates import is_ambiguous_weekday_phrase
@@ -28,7 +26,7 @@ from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import FLASH_MODEL
 from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
 from lib.chat.support_faq import is_support_question
-from lib.genai.fallback import generate_content_with_fallback
+from lib.genai.completions import generate_content
 from lib.kapruka.product_id import contains_product_id
 from lib.neo4j.hybrid_context import extract_budget, extract_max_price
 
@@ -611,18 +609,15 @@ async def refine_specificity_with_llm(
     message: str,
     heuristic: SpecificityResult,
     *,
-    genai_client: object,
+    genai_client: object | None = None,
     session_product_focus: str | None = None,
     session_occasion: str | None = None,
     session_recipient_hint: str | None = None,
     session_budget_max: float | None = None,
     intent_metadata: IntentMetadata | None = None,
 ) -> SpecificityResult:
-    """Gemini flash refinement for ambiguous heuristic band; safe clarify on failure."""
+    """NVIDIA NIM refinement for ambiguous heuristic band; safe clarify on failure."""
     meta: IntentMetadata = intent_metadata or {}
-    if not isinstance(genai_client, genai.Client):
-        return _fallback_clarify(heuristic, is_situational=bool(meta.get("is_situational")))
-
     session_line = _session_summary(
         session_product_focus=session_product_focus,
         session_occasion=session_occasion,
@@ -638,42 +633,42 @@ async def refine_specificity_with_llm(
     )
 
     try:
-        response = generate_content_with_fallback(
-            client=genai_client,
+        refinement = await generate_content(
             model=FLASH_MODEL,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_REFINEMENT_SYSTEM,
-                response_mime_type="application/json",
-                response_schema=SpecificityRefinement,
-                temperature=0,
-            ),
+            messages=[
+                {"role": "system", "content": _REFINEMENT_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_schema=SpecificityRefinement,
+            temperature=0,
         )
+        if not isinstance(refinement, SpecificityRefinement):
+            logger.warning("refine_specificity_with_llm: could not parse refinement")
+            return _fallback_clarify(heuristic, is_situational=bool(meta.get("is_situational")))
     except Exception:
-        logger.warning("refine_specificity_with_llm: Gemini call failed", exc_info=True)
+        logger.warning("refine_specificity_with_llm: NVIDIA NIM call failed", exc_info=True)
         return _fallback_clarify(heuristic, is_situational=bool(meta.get("is_situational")))
 
-    parsed: SpecificityRefinement | None = None
-    if response.parsed is not None:
-        try:
-            if isinstance(response.parsed, SpecificityRefinement):
-                parsed = response.parsed
-            else:
-                parsed = SpecificityRefinement.model_validate(response.parsed)
-        except ValidationError:
-            parsed = None
+    if refinement.band not in {"proceed", "clarify", "ambiguous"}:
+        logger.warning("refine_specificity_with_llm: invalid band %r", refinement.band)
+        return _fallback_clarify(heuristic, is_situational=bool(meta.get("is_situational")))
 
-    if parsed is None:
-        raw_text = (response.text or "").strip()
-        if raw_text:
-            try:
-                parsed = SpecificityRefinement.model_validate_json(raw_text)
-            except Exception:
-                logger.debug("refine_specificity_with_llm: invalid JSON %r", raw_text)
-        if parsed is None:
-            return _fallback_clarify(heuristic, is_situational=bool(meta.get("is_situational")))
+    missing = refinement.missing_dimension or heuristic.missing_dimension
+    question = None
+    if refinement.band in ("clarify", "ambiguous"):
+        question = _build_clarifying_question(missing, is_situational=bool(meta.get("is_situational")))
 
-    return _result_from_refinement(parsed, is_situational=bool(meta.get("is_situational")))
+    return SpecificityResult(
+        score=refinement.score,
+        dimension_scores={
+            "product": refinement.product_score,
+            "occasion": refinement.occasion_score,
+            "budget": refinement.budget_score,
+        },
+        missing_dimension=missing,
+        band=refinement.band,
+        clarifying_question=question,
+    )
 
 
 def _fallback_clarify(

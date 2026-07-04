@@ -13,10 +13,9 @@ from graphs.state import AgentState
 from lib.chat.intent_heuristics import is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
 from lib.embeddings.reranker import CrossEncoderService, get_reranker
-from lib.embeddings.vertex_embeddings import embed_texts
+from lib.embeddings.nvidia_embeddings import embed_texts
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
-    VECTOR_CONFIDENCE_THRESHOLD,
     build_graph_hybrid_context,
     enrich_anniversary_hints,
     enrich_birthday_cake_hints,
@@ -92,8 +91,9 @@ async def _fetch_graph_hybrid_context(
         return {}
 
     direct_category_ids = [hit.id for hit in category_hits]
+    threshold = get_settings().nvidia_vector_threshold
     high_confidence_occasion_ids = [
-        hit.id for hit in occasion_hits if hit.score >= VECTOR_CONFIDENCE_THRESHOLD
+        hit.id for hit in occasion_hits if hit.score >= threshold
     ]
     occasion_category_ids = await fetch_category_ids_for_occasions(
         neo4j_client,

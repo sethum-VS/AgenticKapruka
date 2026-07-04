@@ -1,4 +1,4 @@
-"""Redis cache for Vertex query embeddings (GraphRAG)."""
+"""Redis cache for NVIDIA NIM query embeddings (GraphRAG)."""
 
 from __future__ import annotations
 

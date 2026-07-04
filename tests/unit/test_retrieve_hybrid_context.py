@@ -16,7 +16,7 @@ from graphs.nodes.retrieve_hybrid_context import (
 from graphs.state import AgentState, Intent
 from lib.chat.routing import route_after_analyze_intent
 from lib.neo4j.client import Neo4jClient
-from lib.neo4j.hybrid_context import VECTOR_CONFIDENCE_THRESHOLD
+from app.config import get_settings
 from lib.neo4j.traverse import TraversalResult
 from lib.neo4j.vector_search import VectorSearchHit
 
@@ -304,6 +304,7 @@ async def test_fetch_graph_hybrid_context_runs_parallel_vector_searches() -> Non
         ) as mock_get_settings,
     ):
         mock_get_settings.return_value.reranker_threshold = 0.45
+        mock_get_settings.return_value.nvidia_vector_threshold = 0.65
         result = await _fetch_graph_hybrid_context(
             "wedding flowers",
             neo4j_client=neo4j_client,
@@ -365,7 +366,9 @@ async def test_fetch_graph_hybrid_context_skips_low_confidence_occasion_hop() ->
             "graphs.nodes.retrieve_hybrid_context.build_graph_hybrid_context",
             return_value={"direct_occasion_hits": [{"id": "occasion:birthday", "score": 0.4}]},
         ),
+        patch("graphs.nodes.retrieve_hybrid_context.get_settings") as mock_get_settings,
     ):
+        mock_get_settings.return_value.nvidia_vector_threshold = 0.65
         await _fetch_graph_hybrid_context(
             "cake",
             neo4j_client=neo4j_client,
@@ -378,7 +381,7 @@ async def test_fetch_graph_hybrid_context_skips_low_confidence_occasion_hop() ->
         ["category:cakes"],
         max_hops=2,
     )
-    assert VECTOR_CONFIDENCE_THRESHOLD == 0.65
+    assert mock_get_settings.return_value.nvidia_vector_threshold == 0.65
 
 
 @pytest.mark.asyncio

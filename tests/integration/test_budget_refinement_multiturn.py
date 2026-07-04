@@ -23,6 +23,8 @@ from graphs.shopping_graph import (
     initial_shopping_state,
 )
 from lib.chat.city_resolution import CityResolution
+from lib.chat.master_flow import MasterFlowAlignment
+from lib.genai.completions import set_override_generate_content
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
@@ -95,29 +97,45 @@ async def checkpointer(redis_client: RedisClient) -> AsyncRedisSaver:
 
 def _discovery_mock_genai() -> MagicMock:
     mock_client = MagicMock()
+    intent_calls = 0
 
-    def generate_content(
+    async def fake_generate_content(
         *,
-        model: str,
-        contents: str,
-        config: types.GenerateContentConfig | None = None,
+        model: str | None = None,
+        messages: list[Any],
+        response_schema: Any = None,
         **kwargs: Any,
-    ) -> MagicMock:
-        _ = model, contents, kwargs
-        response = MagicMock()
-        if config is not None and config.response_schema is IntentClassification:
-            response.parsed = IntentClassification(intent="discovery")
-            response.text = json.dumps({"intent": "discovery"})
-            return response
-        if config is not None and config.response_schema is AssistantReply:
-            response.parsed = AssistantReply(message="Here are chocolate gifts within your budget.")
-            response.text = json.dumps({"message": "Here are chocolate gifts within your budget."})
-            return response
-        response.parsed = IntentClassification(intent="discovery")
-        response.text = json.dumps({"intent": "discovery"})
-        return response
+    ) -> Any:
+        nonlocal intent_calls
+        schema_name = getattr(response_schema, "__name__", "")
 
-    mock_client.models.generate_content.side_effect = generate_content
+        if schema_name == "IntentClassification":
+            intent_calls += 1
+            print(f"\n[DEBUG] IntentClassification called. Call count: {intent_calls}. User message: {messages[-1].get('content')}")
+            if intent_calls >= 3:
+                return IntentClassification(intent="delivery", requires_delivery_validation=True, target_city="Kandy")
+            return IntentClassification(intent="discovery")
+
+        if schema_name == "AgentPlannerStep":
+            return AgentPlannerStep(action="finish", thought="Testing", response_to_user="Done")
+            
+        if schema_name == "AssistantReply":
+            return AssistantReply(message="Here are chocolate gifts within your budget.")
+
+        if schema_name == "MasterFlowAlignment":
+            return MasterFlowAlignment(decision="hold", confidence=0.9, active_flow="shopping")
+
+        return {"content": "mocked", "role": "assistant"}
+
+    set_override_generate_content(fake_generate_content)
+    
+    # We must append to ACTIVE_PATCHERS so tests/conftest.py cleans it up
+    try:
+        from tests.helpers.mock_genai import ACTIVE_PATCHERS
+        ACTIVE_PATCHERS.append(fake_generate_content)
+    except ImportError:
+        pass
+
     return mock_client
 
 
@@ -165,7 +183,7 @@ async def test_clarify_chocolate_budget_multiturn_keeps_chocolate_carousel(
     ]
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ) as mock_plan:
         turn1 = await graph.ainvoke(
@@ -209,6 +227,11 @@ async def test_budget_refinement_carousel_stable_after_delivery_turn(
             next_cursor=None,
             applied_filters={"q": "chocolate gift", "max_price": 6000.0},
         ),
+        SearchProductsOutput(
+            results=[_CHOCOLATE_PRODUCT],
+            next_cursor=None,
+            applied_filters={"q": "chocolate gift"},
+        ),
     ]
     mock_service.check_delivery.return_value = CheckDeliveryOutput(
         city="Kandy",
@@ -251,7 +274,7 @@ async def test_budget_refinement_carousel_stable_after_delivery_turn(
 
     with (
         patch(
-            "graphs.nodes.agent_loop._plan_next_step_sync",
+            "graphs.nodes.agent_loop._plan_next_step",
             side_effect=planner_steps,
         ),
         patch(
@@ -260,6 +283,7 @@ async def test_budget_refinement_carousel_stable_after_delivery_turn(
         ),
         patch("lib.utils.timezone.colombo_today", return_value=date(2026, 6, 25)),
     ):
+        print("STARTING TURN 1")
         await graph.ainvoke(
             initial_shopping_state(
                 message="Something with chocolate for my wife",
@@ -268,11 +292,14 @@ async def test_budget_refinement_carousel_stable_after_delivery_turn(
             ),
             config,
         )
+        print("STARTING TURN 2")
         await graph.ainvoke(append_message_state("Keep it under 6000 rupees."), config)
+        print("STARTING TURN 3")
         turn3 = await graph.ainvoke(
             append_message_state("can you deliver to Kandy this Sunday?"),
             config,
         )
+        print("DONE TURN 3")
 
     html = _rendered_html(turn3)
     assert "Heart Chocolate Gift Box" in html
@@ -359,7 +386,7 @@ async def test_budget_refinement_filters_snack_noise_from_mock_mcp(
     ]
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         await graph.ainvoke(

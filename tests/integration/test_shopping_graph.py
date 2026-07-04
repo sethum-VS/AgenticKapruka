@@ -105,30 +105,27 @@ def _mock_genai_client(*, intent: str = "discovery") -> MagicMock:
     """Gemini client returning intent classification and assistant reply on demand."""
     mock_client = MagicMock()
 
-    def generate_content(
-        *,
-        model: str,
-        contents: str,
-        config: types.GenerateContentConfig | None = None,
-        **kwargs: Any,
-    ) -> MagicMock:
-        _ = model, contents, kwargs
-        response = MagicMock()
-        if config is not None and config.response_schema is IntentClassification:
-            response.parsed = IntentClassification(intent=intent)  # type: ignore[arg-type]
-            response.text = json.dumps({"intent": intent})
-            return response
-        if config is not None and config.response_schema is AssistantReply:
-            message = "Happy to help with your Kapruka gift search."
-            response.parsed = AssistantReply(message=message)
-            response.text = json.dumps({"message": message})
-            return response
-        response.parsed = IntentClassification(intent=intent)  # type: ignore[arg-type]
-        response.text = json.dumps({"intent": intent})
-        return response
-
-    mock_client.models.generate_content.side_effect = generate_content
+    async def fake_generate_content(*, model: str | None = None, messages: list = [], response_schema: Any = None, **kwargs: Any) -> Any:
+        schema_name = getattr(response_schema, "__name__", "")
+        if schema_name == "IntentClassification":
+            from graphs.nodes.analyze_intent import IntentClassification
+            return IntentClassification(intent="discovery")
+        if schema_name == "AssistantReply":
+            from graphs.nodes.generate_response import AssistantReply
+            return AssistantReply(message="Here is a mock response.")
+        if schema_name == "MasterFlowAlignment":
+            from lib.chat.master_flow import MasterFlowAlignment
+            return MasterFlowAlignment(decision="hold", confidence=0.9, active_flow="shopping")
+        return {"content": "mocked"}
+    from lib.genai.completions import set_override_generate_content
+    try:
+        from tests.helpers.mock_genai import ACTIVE_PATCHERS
+    except ImportError:
+        ACTIVE_PATCHERS = []
+    set_override_generate_content(fake_generate_content)
+    ACTIVE_PATCHERS.append(fake_generate_content)
     return mock_client
+
 
 
 def _mock_kapruka_service() -> AsyncMock:
@@ -186,7 +183,7 @@ async def test_shopping_graph_cakes_search_via_agent_loop(graph_deps: ShoppingGr
     )
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=_planner_side_effect,
     ):
         result = await graph.ainvoke(state)
@@ -238,7 +235,7 @@ async def test_shopping_graph_thanks_skips_tools_via_agent_loop(
     )
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         return_value=AgentPlannerStep(
             action="finish",
             refined_intent="general",

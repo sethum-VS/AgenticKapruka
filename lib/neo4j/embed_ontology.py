@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
-from lib.embeddings.vertex_embeddings import embed_texts
+from lib.embeddings.nvidia_embeddings import embed_texts
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.ontology import (
     LABEL_CATEGORY,

@@ -1,7 +1,7 @@
 """Text embedding clients for GraphRAG."""
 
 from lib.embeddings.reranker import RERANKER_MODEL, CrossEncoderService, get_reranker
-from lib.embeddings.vertex_embeddings import (
+from lib.embeddings.nvidia_embeddings import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
     embed_texts,

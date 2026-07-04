@@ -10,9 +10,10 @@ import statistics
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from google import genai
-from google.genai import types
+
 from pydantic import BaseModel, ValidationError
+
+from app.config import get_settings
 
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import select_rewrite_model
@@ -23,7 +24,7 @@ from lib.chat.product_curation import (
     is_flower_fruit_intent,
 )
 from lib.embeddings.reranker import CrossEncoderService
-from lib.genai.fallback import generate_content_with_fallback
+from lib.genai.completions import generate_content
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.embed_ontology import build_embedding_text
 from lib.neo4j.ontology import LABEL_CATEGORY, LABEL_OCCASION, REL_OCCASION_TO_CATEGORY
@@ -42,8 +43,6 @@ WHERE o.id IN $occasion_ids
 RETURN DISTINCT c.id AS id
 """.strip()
 
-# Minimum vector-search score before a direct occasion hit seeds category traversal.
-VECTOR_CONFIDENCE_THRESHOLD = 0.65
 # Legacy absolute threshold for mocked 0–1 scores in unit tests; production uses relative ranking.
 DEFAULT_RERANKER_THRESHOLD = 0.45
 # Minimum gap between top-1 and top-2 reranker scores before emitting a hint (logit scale).
@@ -415,7 +414,8 @@ def _best_vector_category_hint(
     display_names: dict[str, str],
 ) -> str | None:
     """Pick a category hint from vector hits when reranker yields none."""
-    eligible = [hit for hit in vector_hits if hit.score >= VECTOR_CONFIDENCE_THRESHOLD]
+    threshold = get_settings().nvidia_vector_threshold
+    eligible = [hit for hit in vector_hits if hit.score >= threshold]
     if not eligible:
         return None
 
@@ -447,7 +447,7 @@ def _best_vector_category_hint(
         ]
         if product_aligned:
             best = max(product_aligned, key=lambda hit: hit.score)
-        elif _effective_score(best) < VECTOR_CONFIDENCE_THRESHOLD:
+        elif _effective_score(best) < get_settings().nvidia_vector_threshold:
             return None
     return str(display_names.get(best.id, best.id))
 
@@ -460,7 +460,7 @@ def _best_vector_occasion_hint(
     """Pick an occasion hint from vector hits when reranker yields none."""
     eligible: list[VectorSearchHit] = []
     for hit in occasion_hits:
-        if hit.score < VECTOR_CONFIDENCE_THRESHOLD:
+        if hit.score < get_settings().nvidia_vector_threshold:
             continue
         display = _occasion_display_name(hit.id, traversal.occasions)
         if _is_vendor_or_hotel_occasion(hit.id, display):
@@ -1730,64 +1730,13 @@ def merge_planner_search_args(
     return merged
 
 
-def _parse_rewrite_response(response: types.GenerateContentResponse) -> str:
-    """Parse structured or JSON text rewrite from a Gemini response."""
-    if response.parsed is not None:
-        if isinstance(response.parsed, RewrittenSearchQuery):
-            return response.parsed.q.strip()
-        validated = RewrittenSearchQuery.model_validate(response.parsed)
-        return validated.q.strip()
-
-    raw_text = (response.text or "").strip()
-    if not raw_text:
-        msg = "Gemini returned empty search rewrite"
-        raise ValueError(msg)
-
-    try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        msg = f"Gemini rewrite response is not valid JSON: {raw_text!r}"
-        raise ValueError(msg) from exc
-
-    try:
-        return RewrittenSearchQuery.model_validate(payload).q.strip()
-    except ValidationError as exc:
-        msg = f"Gemini rewrite JSON failed validation: {payload!r}"
-        raise ValueError(msg) from exc
-
-
-def _rewrite_search_query_sync(
-    client: genai.Client | None,
-    user_message: str,
-    occasion: str,
-) -> str:
-    """Blocking Gemini call; run via asyncio.to_thread from rewrite helper."""
-    prompt = f"User message: {user_message}\nOccasion context: {occasion}"
-    response = generate_content_with_fallback(
-        client=client,
-        model=select_rewrite_model(),
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=REWRITE_SYSTEM_INSTRUCTION,
-            response_mime_type="application/json",
-            response_schema=RewrittenSearchQuery,
-            temperature=0,
-        ),
-    )
-    rewritten = _parse_rewrite_response(response)
-    if not rewritten:
-        msg = "Gemini returned empty rewritten search query"
-        raise ValueError(msg)
-    return rewritten
-
-
 async def rewrite_search_query_with_occasion(
     user_message: str,
     occasion: str,
     *,
-    genai_client: genai.Client | None = None,
+    genai_client: object | None = None,
 ) -> str:
-    """Rewrite q with Gemini when occasion must influence search without naive concatenation."""
+    """Rewrite q with NVIDIA NIM when occasion must influence search without naive concatenation."""
     stripped = user_message.strip()
     occasion_stripped = occasion.strip()
     if not stripped or not occasion_stripped:
@@ -1795,14 +1744,21 @@ async def rewrite_search_query_with_occasion(
     if not occasion_rewrite_needed(stripped, occasion_stripped):
         return stripped
 
-    client = genai_client
+    prompt = f"User message: {stripped}\nOccasion context: {occasion_stripped}"
     try:
-        return await asyncio.to_thread(
-            _rewrite_search_query_sync,
-            client,
-            stripped,
-            occasion_stripped,
+        rewritten = await generate_content(
+            model=select_rewrite_model(),
+            messages=[
+                {"role": "system", "content": REWRITE_SYSTEM_INSTRUCTION},
+                {"role": "user", "content": prompt},
+            ],
+            response_schema=RewrittenSearchQuery,
+            temperature=0,
         )
+        if not isinstance(rewritten, RewrittenSearchQuery):
+            msg = "NVIDIA NIM returned unparseable rewritten search query"
+            raise ValueError(msg)
+        return rewritten.q.strip()
     except Exception:
         logger.warning(
             "rewrite_search_query_with_occasion failed; using raw user message",

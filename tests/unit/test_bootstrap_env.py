@@ -36,10 +36,7 @@ def test_bootstrap_env_script_contract() -> None:
 
     content = BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
 
-    assert "gcloud config get-value project" in content
-    assert "gcloud config get-value compute/region" in content
-    assert "GEMINI_BACKEND=vertex" in content
-    assert "application-default login" in content
+    assert "NVIDIA_API_KEY=" in content
     assert "secrets.token_urlsafe" in content
     assert "REDIS_URL=redis://localhost:6379/0" in content
     assert "KAPRUKA_MCP_URL=" in content
@@ -93,19 +90,13 @@ def test_bootstrap_env_generates_settings_compatible_env(tmp_path: Path) -> None
     assert env_file.is_file()
     content = env_file.read_text(encoding="utf-8")
     assert "REDIS_URL=redis://localhost:6379/0" in content
-    assert "GEMINI_BACKEND=vertex" in content
-    assert "GCP_PROJECT_ID=mock-gcp-project" in content
-    assert "GCP_LOCATION=us-central1" in content
     assert "KAPRUKA_MCP_URL=https://mcp.kapruka.com/mcp" in content
     assert "SESSION_SECRET=" in content
+    assert "NVIDIA_API_KEY=your-nvidia-api-key" in content
     assert "GOOGLE_API_KEY=" not in content
 
     settings = Settings(_env_file=env_file)
     assert settings.redis_url == "redis://localhost:6379/0"
-    assert settings.gemini_backend == "vertex"
-    assert settings.google_api_key is None
-    assert settings.gcp_project_id == "mock-gcp-project"
-    assert settings.gcp_location == "us-central1"
     assert len(settings.session_secret) >= 32
 
 

@@ -19,6 +19,7 @@ from lib.chat.query_preprocessor import (
     extract_target_city,
 )
 from lib.chat.request_specificity import is_delivery_only_inquiry
+from lib.kapruka.errors import KaprukaError
 from lib.kapruka.product_id import contains_product_id
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL
@@ -187,28 +188,40 @@ async def _preflight_check_delivery(
     product_id: str | None = None,
 ) -> ToolInvocation:
     """Run check_delivery and return a tool_trace entry."""
-    if delivery_date:
-        output = await kapruka_service.check_delivery(
-            client_ip,
-            city=city,
-            delivery_date=delivery_date,
-            product_id=product_id,
-        )
-        args: dict[str, str] = {"city": city, "delivery_date": delivery_date}
-    else:
-        output = await kapruka_service.check_delivery(
-            client_ip,
-            city=city,
-            product_id=product_id,
-        )
+    try:
+        if delivery_date:
+            output = await kapruka_service.check_delivery(
+                client_ip,
+                city=city,
+                delivery_date=delivery_date,
+                product_id=product_id,
+            )
+            args: dict[str, str] = {"city": city, "delivery_date": delivery_date}
+        else:
+            output = await kapruka_service.check_delivery(
+                client_ip,
+                city=city,
+                product_id=product_id,
+            )
+            args = {"city": city}
+        if product_id:
+            args["product_id"] = product_id
+        return {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": args,
+            "result": output.model_dump(),
+        }
+    except KaprukaError as e:
         args = {"city": city}
-    if product_id:
-        args["product_id"] = product_id
-    return {
-        "name": CHECK_DELIVERY_TOOL,
-        "args": args,
-        "result": output.model_dump(),
-    }
+        if delivery_date:
+            args["delivery_date"] = delivery_date
+        if product_id:
+            args["product_id"] = product_id
+        return {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": args,
+            "result": {"available": False, "reason": e.message},
+        }
 
 
 async def _attach_ambiguous_colombo_preflight(

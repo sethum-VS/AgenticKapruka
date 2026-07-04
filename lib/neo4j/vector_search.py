@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Final
 
-from lib.embeddings.vertex_embeddings import EMBEDDING_DIMENSION
+from lib.embeddings.nvidia_embeddings import EMBEDDING_DIMENSION
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.ontology import LABEL_CATEGORY, LABEL_OCCASION
 

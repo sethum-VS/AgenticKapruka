@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated, Literal, Self
 
-from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
-
-GeminiBackend = Literal["vertex", "api_key"]
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -26,40 +23,36 @@ class Settings(BaseSettings):
     neo4j_user: str = Field(..., min_length=1)
     neo4j_password: str = Field(..., min_length=1)
     zep_api_key: str = Field(..., min_length=1)
-    gemini_backend: GeminiBackend = Field(
-        default="vertex",
-        description="vertex (ADC + Vertex AI) or api_key (Gemini Developer API)",
+
+    # ── NVIDIA NIM ────────────────────────────────────────────────────────
+    nvidia_api_key: str = Field(..., min_length=1, description="NVIDIA NIM API key")
+    nvidia_base_url: str = Field(
+        default="https://integrate.api.nvidia.com/v1",
+        description="NVIDIA NIM OpenAI-compatible base URL",
     )
-    google_api_key: str | None = Field(
-        default=None,
-        description="Gemini Developer API key; required only when GEMINI_BACKEND=api_key",
+    nvidia_llm_model: str = Field(
+        default="z-ai/glm-5.2",
+        description="NVIDIA NIM LLM model for all text generation tasks",
     )
-    gcp_project_id: str = Field(..., min_length=1)
-    gcp_location: str = Field(..., min_length=1)
-    gemini_chat_location: str = Field(
-        default="global",
+    nvidia_embedding_model: str = Field(
+        default="nvidia/nv-embed-v1",
+        description="NVIDIA NIM embedding model for GraphRAG vectors",
+    )
+    nvidia_rate_limit_rpm: int = Field(
+        default=30,
+        ge=1,
+        description="Max requests per minute for NVIDIA NIM free-tier safety",
+    )
+    nvidia_vector_threshold: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
         description=(
-            "Vertex AI region for Gemini chat/intent/rewrite calls. "
-            "Use global to reduce 429 shared-capacity errors per Google guidance; "
-            "embeddings still use the global embedding endpoint separately."
+            "Minimum cosine similarity for nv-embed-v1 (4096d) vector matches. "
+            "Baseline 0.75 — tune via evals/ragas_eval.py after re-indexing."
         ),
     )
-    gemini_fallback_regions: Annotated[
-        list[str],
-        NoDecode,
-        Field(
-            default=[
-                "europe-west4",
-                "us-east4",
-                "asia-northeast1",
-                "us-central1",
-            ],
-            description=(
-                "Vertex regions to try after GEMINI_CHAT_LOCATION on 429 RESOURCE_EXHAUSTED. "
-                "Comma-separated in env, e.g. europe-west4,us-east4,asia-northeast1,us-central1"
-            ),
-        ),
-    ]
+
     kapruka_mcp_url: str = Field(
         default="https://mcp.kapruka.com/mcp",
         description="Kapruka MCP JSON-RPC endpoint",
@@ -85,13 +78,6 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
         description="Minimum Flash confidence before master_flow patches are applied",
-    )
-    kapruka_lora_endpoint_id: str | None = Field(
-        default=None,
-        description=(
-            "Vertex AI LoRA-tuned endpoint ID for intent classification "
-            "and discovery query rewrite; falls back to gemini-2.5-flash when unset"
-        ),
     )
 
     @field_validator("redis_url")
@@ -122,8 +108,7 @@ class Settings(BaseSettings):
         "neo4j_user",
         "neo4j_password",
         "zep_api_key",
-        "gcp_project_id",
-        "gcp_location",
+        "nvidia_api_key",
         "session_secret",
         mode="after",
     )
@@ -135,37 +120,13 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return stripped
 
-    @field_validator("google_api_key", mode="before")
+    @field_validator("nvidia_base_url")
     @classmethod
-    def empty_google_api_key_to_none(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        stripped = str(value).strip()
-        return stripped or None
-
-    @field_validator("gemini_fallback_regions", mode="before")
-    @classmethod
-    def parse_gemini_fallback_regions(cls, value: object) -> list[str]:
-        if isinstance(value, str):
-            return [region.strip() for region in value.split(",") if region.strip()]
-        if isinstance(value, list):
-            return [str(region).strip() for region in value if str(region).strip()]
-        return []
-
-    @field_validator("kapruka_lora_endpoint_id", mode="before")
-    @classmethod
-    def empty_lora_endpoint_id_to_none(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        stripped = str(value).strip()
-        return stripped or None
-
-    @model_validator(mode="after")
-    def validate_gemini_backend(self) -> Self:
-        if self.gemini_backend == "api_key" and not self.google_api_key:
-            msg = "GOOGLE_API_KEY is required when GEMINI_BACKEND=api_key"
+    def validate_nvidia_base_url(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            msg = "NVIDIA_BASE_URL must be an HTTP(S) URL"
             raise ValueError(msg)
-        return self
+        return value
 
 
 @lru_cache

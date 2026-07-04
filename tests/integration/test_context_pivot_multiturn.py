@@ -83,29 +83,27 @@ async def checkpointer(redis_client: Any) -> AsyncRedisSaver:
 def _discovery_mock_genai() -> MagicMock:
     mock_client = MagicMock()
 
-    def generate_content(
-        *,
-        model: str,
-        contents: str,
-        config: types.GenerateContentConfig | None = None,
-        **kwargs: Any,
-    ) -> MagicMock:
-        _ = model, contents, kwargs
-        response = MagicMock()
-        if config is not None and config.response_schema is IntentClassification:
-            response.parsed = IntentClassification(intent="discovery")
-            response.text = json.dumps({"intent": "discovery"})
-            return response
-        if config is not None and config.response_schema is AssistantReply:
-            response.parsed = AssistantReply(message="Here are some cake options.")
-            response.text = json.dumps({"message": "Here are some cake options."})
-            return response
-        response.parsed = IntentClassification(intent="discovery")
-        response.text = json.dumps({"intent": "discovery"})
-        return response
-
-    mock_client.models.generate_content.side_effect = generate_content
+    async def fake_generate_content(*, model: str | None = None, messages: list = [], response_schema: Any = None, **kwargs: Any) -> Any:
+        schema_name = getattr(response_schema, "__name__", "")
+        if schema_name == "IntentClassification":
+            from graphs.nodes.analyze_intent import IntentClassification
+            return IntentClassification(intent="discovery")
+        if schema_name == "AssistantReply":
+            from graphs.nodes.generate_response import AssistantReply
+            return AssistantReply(message="Here is a mock response.")
+        if schema_name == "MasterFlowAlignment":
+            from lib.chat.master_flow import MasterFlowAlignment
+            return MasterFlowAlignment(decision="hold", confidence=0.9, active_flow="shopping")
+        return {"content": "mocked"}
+    from lib.genai.completions import set_override_generate_content
+    try:
+        from tests.helpers.mock_genai import ACTIVE_PATCHERS
+    except ImportError:
+        ACTIVE_PATCHERS = []
+    set_override_generate_content(fake_generate_content)
+    ACTIVE_PATCHERS.append(fake_generate_content)
     return mock_client
+
 
 
 @pytest.mark.asyncio
@@ -153,7 +151,7 @@ async def test_context_pivot_nevermind_cakes_clears_anniversary_and_searches_cak
     ]
 
     with patch(
-        "graphs.nodes.agent_loop._plan_next_step_sync",
+        "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         turn1 = await graph.ainvoke(

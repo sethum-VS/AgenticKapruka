@@ -12,7 +12,7 @@ from lib.embeddings.embedding_cache import (
     get_cached_embedding,
     set_cached_embedding,
 )
-from lib.embeddings.vertex_embeddings import embed_texts
+from lib.embeddings.nvidia_embeddings import embed_texts
 from lib.redis.client import RedisClient
 
 
@@ -47,11 +47,11 @@ async def test_embed_texts_uses_redis_cache(monkeypatch: pytest.MonkeyPatch) -> 
         return fn(*args, **kwargs)
 
     monkeypatch.setattr(
-        "lib.embeddings.vertex_embeddings._embed_texts_sync",
+        "lib.embeddings.nvidia_embeddings._embed_texts_sync",
         fake_embed_sync,
     )
     monkeypatch.setattr(
-        "lib.embeddings.vertex_embeddings.asyncio.to_thread",
+        "lib.embeddings.nvidia_embeddings.asyncio.to_thread",
         fake_to_thread,
     )
 

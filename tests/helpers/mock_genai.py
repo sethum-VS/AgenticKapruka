@@ -15,6 +15,8 @@ from graphs.state import Intent
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 
 
+ACTIVE_PATCHERS = []
+
 def build_mock_genai_client(
     *,
     intent: Intent | list[Intent] = "discovery",
@@ -34,36 +36,39 @@ def build_mock_genai_client(
         intent_calls += 1
         return resolved
 
-    def generate_content(
+    async def fake_generate_content(
         *,
-        model: str,
-        contents: str,
-        config: types.GenerateContentConfig | None = None,
+        model: str | None = None,
+        messages: list[Any],
+        response_schema: Any = None,
         **kwargs: Any,
-    ) -> MagicMock:
+    ) -> Any:
         nonlocal planner_calls
-        _ = model, kwargs
-        response = MagicMock()
-        if config is not None and config.response_schema is IntentClassification:
-            resolved_intent = _resolve_intent()
-            response.parsed = IntentClassification(intent=resolved_intent)
-            response.text = json.dumps({"intent": resolved_intent})
-            return response
+        schema_name = getattr(response_schema, "__name__", "")
 
-        if config is not None and config.response_schema is AgentPlannerStep:
+        if schema_name == "IntentClassification":
+            resolved_intent = _resolve_intent()
+            from graphs.nodes.analyze_intent import IntentClassification
+            return IntentClassification(intent=resolved_intent)
+
+        if schema_name == "AgentPlannerStep":
             planner_calls += 1
             resolved_intent = _resolve_intent()
+            from graphs.nodes.agent_loop import AgentPlannerStep
             if planner_calls == 1 and resolved_intent == "general":
-                step = AgentPlannerStep(
+                return AgentPlannerStep(
                     action="finish",
                     refined_intent="general",
                     rationale="no catalog tools needed",
                 )
             elif planner_calls == 1:
-                query = search_query or contents.strip()
-                if len(query) < 3:
-                    query = "gifts"
-                step = AgentPlannerStep(
+                query = search_query or "gifts"
+                if messages and messages[-1].get("content"):
+                    q = messages[-1]["content"].strip()
+                    if len(q) >= 3:
+                        query = q
+                from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+                return AgentPlannerStep(
                     action="call_tool",
                     tool_name=SEARCH_PRODUCTS_TOOL,
                     tool_args={"q": query},
@@ -71,20 +76,24 @@ def build_mock_genai_client(
                     rationale="search catalog",
                 )
             else:
-                step = AgentPlannerStep(action="finish", rationale="catalog facts collected")
-            response.parsed = step
-            response.text = step.model_dump_json()
-            return response
+                return AgentPlannerStep(action="finish", rationale="catalog facts collected")
 
-        if config is not None and config.response_schema is AssistantReply:
-            response.parsed = AssistantReply(message=assistant_message)
-            response.text = json.dumps({"message": assistant_message})
-            return response
+        if schema_name == "AssistantReply":
+            from graphs.nodes.generate_response import AssistantReply
+            return AssistantReply(message=assistant_message)
 
-        resolved_intent = _resolve_intent()
-        response.parsed = IntentClassification(intent=resolved_intent)
-        response.text = json.dumps({"intent": resolved_intent})
-        return response
+        if schema_name == "MasterFlowAlignment":
+            from lib.chat.master_flow import MasterFlowAlignment
+            return MasterFlowAlignment(
+                decision="hold",
+                confidence=0.9,
+                active_flow="shopping",
+            )
 
-    mock_client.models.generate_content.side_effect = generate_content
+        return {"content": "mocked", "role": "assistant"}
+
+    from lib.genai.completions import set_override_generate_content
+    set_override_generate_content(fake_generate_content)
+    ACTIVE_PATCHERS.append(fake_generate_content)
     return mock_client
+

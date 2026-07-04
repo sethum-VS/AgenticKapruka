@@ -1,18 +1,12 @@
-"""Shared helpers for google-genai / Vertex error handling."""
+"""Shared helpers for NVIDIA NIM / OpenAI SDK error handling."""
 
 from __future__ import annotations
 
-from google.api_core import exceptions as google_exceptions
-from google.genai import errors as genai_errors
+from openai import RateLimitError
 
 
-def is_resource_exhausted(exc: BaseException) -> bool:
-    """Return True for Vertex/Gemini 429 RESOURCE_EXHAUSTED errors."""
-    if isinstance(exc, google_exceptions.ResourceExhausted):
+def is_rate_limited(exc: BaseException) -> bool:
+    """Return True for NVIDIA NIM 429 rate limit errors."""
+    if isinstance(exc, RateLimitError):
         return True
-    if isinstance(exc, genai_errors.ClientError):
-        if exc.code == 429:
-            return True
-        if exc.status == "RESOURCE_EXHAUSTED":
-            return True
     return False

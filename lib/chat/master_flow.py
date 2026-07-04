@@ -6,8 +6,7 @@ import logging
 import re
 from typing import Any, Literal, cast
 
-from google import genai
-from google.genai import types
+
 from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel, Field, ValidationError
 
@@ -26,7 +25,7 @@ from lib.chat.request_specificity import (
 )
 from lib.chat.routing import peek_route_after_analyze_intent
 from lib.checkout.chat_parser import parse_checkout_details
-from lib.genai.fallback import generate_content_with_fallback
+from lib.genai.completions import generate_content
 from lib.neo4j.hybrid_context import extract_budget
 
 logger = logging.getLogger(__name__)
@@ -436,29 +435,6 @@ def build_master_flow_prompt(
     )
 
 
-def _parse_alignment_response(
-    response: types.GenerateContentResponse,
-) -> MasterFlowAlignment | None:
-    parsed: MasterFlowAlignment | None = None
-    if response.parsed is not None:
-        try:
-            if isinstance(response.parsed, MasterFlowAlignment):
-                parsed = response.parsed
-            else:
-                parsed = MasterFlowAlignment.model_validate(response.parsed)
-        except ValidationError:
-            parsed = None
-
-    if parsed is None:
-        raw_text = (response.text or "").strip()
-        if raw_text:
-            try:
-                parsed = MasterFlowAlignment.model_validate_json(raw_text)
-            except Exception:
-                logger.debug("master_flow: invalid JSON %r", raw_text[:200])
-    return parsed
-
-
 async def invoke_master_flow_llm(
     state: AgentState,
     *,
@@ -466,11 +442,7 @@ async def invoke_master_flow_llm(
     trigger_reason: str,
     genai_client: object | None = None,
 ) -> MasterFlowAlignment | None:
-    """Call Flash with structured output; None on failure (fail-open)."""
-    if not isinstance(genai_client, genai.Client):
-        logger.warning("master_flow: no genai client — skipping LLM")
-        return None
-
+    """Call NVIDIA NIM with structured output; None on failure (fail-open)."""
     user_prompt = build_master_flow_prompt(
         state,
         active_flow=active_flow,
@@ -478,22 +450,19 @@ async def invoke_master_flow_llm(
     )
 
     try:
-        response = generate_content_with_fallback(
-            client=genai_client,
+        alignment = await generate_content(
             model=FLASH_MODEL,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_MASTER_FLOW_SYSTEM,
-                response_mime_type="application/json",
-                response_schema=MasterFlowAlignment,
-                temperature=0,
-            ),
+            messages=[
+                {"role": "system", "content": _MASTER_FLOW_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_schema=MasterFlowAlignment,
+            temperature=0,
         )
+        if not isinstance(alignment, MasterFlowAlignment):
+            logger.warning("master_flow: could not parse alignment response")
+            return None
+        return alignment
     except Exception:
-        logger.warning("master_flow: Gemini call failed", exc_info=True)
+        logger.warning("master_flow: NVIDIA NIM call failed", exc_info=True)
         return None
-
-    alignment = _parse_alignment_response(response)
-    if alignment is None:
-        logger.warning("master_flow: could not parse alignment response")
-    return alignment
