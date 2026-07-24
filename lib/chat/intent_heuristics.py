@@ -12,6 +12,14 @@ from lib.neo4j.hybrid_context import extract_budget, extract_max_price
 
 Intent = Literal["discovery", "checkout", "tracking", "general", "cart"]
 
+_CART_ADD_AND_CHECKOUT_RE = re.compile(
+    r"\badd(?:\s+the)?\s+.+?\s+and\s+(?:checkout|check\s*out|proceed)\b",
+    re.I,
+)
+_CART_ADD_AND_PROCEED_RE = re.compile(
+    r"\badd\s+.+?\s+and\s+proceed\b",
+    re.I,
+)
 _CART_ADD_TO_PATTERN = re.compile(
     r"\badd\s+(.+?)\s+to\s+(?:my\s+)?cart\b",
     re.I,
@@ -156,6 +164,8 @@ def is_cart_add_trigger(message: str) -> bool:
     text = message.strip()
     if not text:
         return False
+    if _CART_ADD_AND_CHECKOUT_RE.search(text) or _CART_ADD_AND_PROCEED_RE.search(text):
+        return True
     return bool(
         _CART_ADD_TO_PATTERN.search(text)
         or _CART_PUT_IN_PATTERN.search(text)

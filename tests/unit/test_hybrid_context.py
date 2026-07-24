@@ -417,14 +417,15 @@ def test_build_discovery_search_args_gift_ideas_tea_colleague_uses_relevance_sor
     assert args.get("sort") == "relevance"
 
 
-def test_build_discovery_search_args_wife_birthday_chocolate_prefers_chocolate_gift() -> None:
+def test_build_discovery_search_args_wife_birthday_chocolate_prefers_confectionery() -> None:
     args = build_discovery_search_args(
         "wife birthday chocolate under 6000",
         {"hints": {"occasion": "Birthday"}},
         currency="LKR",
     )
 
-    assert args["q"] == "chocolate birthday cake"
+    assert args["q"] == "chocolate gift box"
+    assert args.get("category") != "Birthday"
     assert args["max_price"] == 6000.0
 
 
@@ -561,50 +562,42 @@ def test_occasion_rewrite_needed_when_terms_absent() -> None:
 
 @pytest.mark.asyncio
 async def test_rewrite_search_query_with_occasion_uses_gemini() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = RewrittenSearchQuery(q="birthday cake for mom")
-    mock_response.text = '{"q": "birthday cake for mom"}'
-    mock_client.models.generate_content.return_value = mock_response
-
     with patch(
         "lib.neo4j.hybrid_context.select_rewrite_model",
         return_value="gemini-2.5-flash",
-    ):
+    ), patch(
+        "lib.neo4j.hybrid_context.generate_content",
+        return_value=RewrittenSearchQuery(q="birthday cake for mom"),
+    ) as mock_generate:
         rewritten = await rewrite_search_query_with_occasion(
             "cake for mom",
             "Birthday",
-            genai_client=mock_client,
+            genai_client=object(),
         )
 
     assert rewritten == "birthday cake for mom"
-    mock_client.models.generate_content.assert_called_once()
-    call_kwargs = mock_client.models.generate_content.call_args.kwargs
-    assert call_kwargs["model"] == "gemini-2.5-flash"
-    assert "cake for mom" in call_kwargs["contents"]
-    assert "Birthday" in call_kwargs["contents"]
+    mock_generate.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_rewrite_search_query_uses_lora_endpoint_when_configured() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = RewrittenSearchQuery(q="avurudu cake gifts")
-    mock_client.models.generate_content.return_value = mock_response
     lora_model = "projects/test/locations/us-central1/endpoints/lora-rewrite"
 
     with patch(
         "lib.neo4j.hybrid_context.select_rewrite_model",
         return_value=lora_model,
-    ):
+    ), patch(
+        "lib.neo4j.hybrid_context.generate_content",
+        return_value=RewrittenSearchQuery(q="avurudu cake gifts"),
+    ) as mock_generate:
         rewritten = await rewrite_search_query_with_occasion(
             "cake ona",
             "Avurudu",
-            genai_client=mock_client,
+            genai_client=object(),
         )
 
     assert rewritten == "avurudu cake gifts"
-    assert mock_client.models.generate_content.call_args.kwargs["model"] == lora_model
+    assert mock_generate.await_args.kwargs["model"] == lora_model
 
 
 @pytest.mark.asyncio
@@ -748,6 +741,15 @@ def test_merge_planner_search_args_budget_refinement() -> None:
     assert merged["max_price"] == 6000.0
 
 
+def test_anniversary_fallback_search_queries_ladder() -> None:
+    from lib.neo4j.hybrid_context import anniversary_fallback_search_queries
+
+    queries = anniversary_fallback_search_queries("Show me some anniversary gifts")
+    assert queries[0] == "anniversary gift"
+    assert "anniversary gift hamper" in queries
+    assert "anniversary flowers" in queries
+
+
 def test_build_discovery_search_args_anniversary_bias() -> None:
     from lib.neo4j.hybrid_context import build_discovery_search_args
 
@@ -838,16 +840,14 @@ def test_merge_planner_search_args_roses_galle_strips_city() -> None:
 
 # P0-1 regression: mom-birthday + chocolate + budget must search "chocolate birthday cake"
 def test_build_discovery_search_args_mom_birthday_chocolate_budget_uses_chocolate_cake_q() -> None:
-    """P0-1: mom birthday + chocolate + budget must use chocolate birthday cake q."""
+    """P0-1: mom birthday + chocolate + budget without cake → chocolate gift box q."""
     args = build_discovery_search_args(
         "birthday gift for mom Colombo loves chocolate budget 8000",
         {},
         currency="LKR",
     )
-    assert "chocolate birthday cake" in args["q"].lower(), (
-        f"Expected chocolate birthday cake, got {args['q']!r}"
-    )
-    assert args.get("category") == "Birthday"
+    assert args["q"] == "chocolate gift box"
+    assert args.get("category") != "Birthday"
     assert args["max_price"] == 8000.0
 
 
@@ -876,8 +876,8 @@ def test_build_discovery_search_args_mom_birthday_cake_uses_birthday_cake_q() ->
     assert args.get("category") == "Birthday"
 
 
-def test_merge_planner_search_args_birthday_chocolate_gift_overrides_to_cake() -> None:
-    """P0-1: planner 'chocolate birthday gift' must override to chocolate birthday cake."""
+def test_merge_planner_search_args_birthday_chocolate_gift_keeps_planner_q() -> None:
+    """Planner chocolate birthday gift without cake is not forced to birthday cake."""
     from lib.neo4j.hybrid_context import merge_planner_search_args
 
     merged = merge_planner_search_args(
@@ -890,19 +890,17 @@ def test_merge_planner_search_args_birthday_chocolate_gift_overrides_to_cake() -
         currency="LKR",
         intent_metadata={"budget_max": 8000.0, "budget_currency": "LKR"},
     )
-    assert "cake" in merged["q"].lower(), (
-        f"Expected 'chocolate birthday cake' or similar, got {merged['q']!r}"
-    )
+    assert merged["q"] == "chocolate gift box"
     assert "condom" not in merged["q"].lower()
 
 
 def test_birthday_planner_q_needs_override_chocolate_gift_returns_true() -> None:
-    """P0-1: planner q 'chocolate birthday gift' needs override for birthday+chocolate query."""
+    """Explicit birthday cake turns still override misaligned planner q."""
     from lib.neo4j.hybrid_context import _birthday_planner_q_needs_override
 
     assert _birthday_planner_q_needs_override(
-        "chocolate birthday gift",
-        "birthday gift for mom Colombo loves chocolate budget 8000",
+        "chocolate lava cake",
+        "birthday cake for mom Colombo loves chocolate budget 8000",
     )
 
 

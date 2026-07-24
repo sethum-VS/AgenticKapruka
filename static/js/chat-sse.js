@@ -9,7 +9,28 @@
 (function () {
   const CHAT_FORM_ID = "chat-form";
   const CHAT_STREAM_PATH = "/chat/stream";
-  const CHAT_STREAM_TIMEOUT_MS = 90_000;
+  const CHAT_STREAM_TIMEOUT_BUFFER_MS = 10_000;
+  const CHAT_STREAM_TIMEOUT_DEFAULT_MS = 130_000;
+
+  let chatStreamController = null;
+  let chatStreamAbortReason = null;
+
+  function getChatStreamTimeoutMs(form) {
+    const raw = form?.dataset?.chatTimeoutMs;
+    const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed + CHAT_STREAM_TIMEOUT_BUFFER_MS;
+    }
+    return CHAT_STREAM_TIMEOUT_DEFAULT_MS;
+  }
+
+  function abortChatStream(reason) {
+    chatStreamAbortReason = reason || "new-session";
+    chatStreamController?.abort();
+  }
+
+  window.abortChatStream = abortChatStream;
+  window.abortActiveChatStream = abortChatStream;
 
   function chatDebugEnabled(form) {
     return form?.dataset?.chatDebug === "true";
@@ -303,18 +324,31 @@
     }
   }
 
-  function showStreamFailureMessage() {
+  function appendStreamNoticeMessage(testId, message) {
     const messages = document.getElementById("chat-messages");
     if (!messages) {
       return;
     }
     const bubble = document.createElement("div");
     bubble.className = "chat-message assistant";
-    bubble.setAttribute("data-testid", "chat-stream-error");
-    bubble.innerHTML =
-      '<p class="text-body-sm text-on-surface-variant">Connection interrupted. Please send your message again.</p>';
+    bubble.setAttribute("data-testid", testId);
+    bubble.innerHTML = `<p class="text-body-sm text-on-surface-variant">${message}</p>`;
     messages.appendChild(bubble);
     messages.scrollTop = messages.scrollHeight;
+  }
+
+  function showStreamFailureMessage() {
+    appendStreamNoticeMessage(
+      "chat-stream-error",
+      "Connection interrupted. Please send your message again.",
+    );
+  }
+
+  function showStreamTimeoutMessage() {
+    appendStreamNoticeMessage(
+      "chat-stream-timeout",
+      "This is taking longer than expected. Please try again or start a new message.",
+    );
   }
 
   function registerAfterRequestBackup() {
@@ -325,6 +359,41 @@
       }
       toggleRequestState(elt, false);
     });
+  }
+
+  function handleStreamError(form, error) {
+    const reason = chatStreamAbortReason;
+    chatStreamAbortReason = null;
+
+    if (error?.name === "AbortError") {
+      if (reason === "new-session") {
+        chatDebugLog(form, "stream aborted for new session");
+        toggleRequestState(form, false);
+        return true;
+      }
+      if (reason === "timeout") {
+        showStreamTimeoutMessage();
+        chatDebugLog(form, "stream timed out");
+        toggleRequestState(form, false);
+        document.body.dispatchEvent(
+          new CustomEvent("htmx:afterRequest", {
+            detail: { elt: form, successful: false },
+          }),
+        );
+        return true;
+      }
+    }
+
+    removePendingAssistantBubbles();
+    showStreamFailureMessage();
+    chatDebugLog(form, "stream failed", error);
+    toggleRequestState(form, false);
+    document.body.dispatchEvent(
+      new CustomEvent("htmx:afterRequest", {
+        detail: { elt: form, successful: false },
+      }),
+    );
+    return false;
   }
 
   async function streamChatPost(form, formData) {
@@ -344,10 +413,16 @@
       message: outboundMessage,
     });
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), CHAT_STREAM_TIMEOUT_MS);
+    const controller = new AbortController();
+    chatStreamController = controller;
+    chatStreamAbortReason = null;
+    const timeoutMs = getChatStreamTimeoutMs(form);
+    const timeoutId = setTimeout(() => {
+      chatStreamAbortReason = "timeout";
+      controller.abort();
+    }, timeoutMs);
 
+    try {
       const response = await fetch(connectPath, {
         method: "POST",
         body: formData,
@@ -431,17 +506,15 @@
       );
       form.reset();
     } catch (error) {
-      removePendingAssistantBubbles();
-      showStreamFailureMessage();
-      chatDebugLog(form, "stream failed", error);
-      toggleRequestState(form, false);
-      document.body.dispatchEvent(
-        new CustomEvent("htmx:afterRequest", {
-          detail: { elt: form, successful: false },
-        }),
-      );
-      throw error;
+      clearTimeout(timeoutId);
+      const handled = handleStreamError(form, error);
+      if (!handled) {
+        throw error;
+      }
     } finally {
+      if (chatStreamController === controller) {
+        chatStreamController = null;
+      }
       toggleRequestState(form, false);
     }
   }

@@ -10,6 +10,7 @@ from lib.chat.product_curation import (
     apply_recipient_curation,
     carousel_focus_guard,
     curate_carousel_products,
+    demote_kids_themed_products,
     demote_non_chocolate_for_chocolate_focus,
     demote_non_floral_for_flower_intent,
     demote_off_focus_products,
@@ -330,6 +331,36 @@ def test_sort_and_filter_strict_budget_hides_over_cap() -> None:
     ]
     curated = sort_and_filter_by_budget(products, 5000.0, "LKR", strict_in_budget=True)
     assert [item["id"] for item in curated] == ["in"]
+
+
+def test_demote_kids_themed_products_for_adult_recipient() -> None:
+    products = [
+        _product("adult", 4500.0, name="Chocolate Gift Box"),
+        _product("kids", 4200.0, name="Princess Chocolate Gift for Girls"),
+        _product("hero", 4300.0, name="Superhero Chocolate Bar for Boys"),
+    ]
+    curated = demote_kids_themed_products(
+        products,
+        session_recipient_hint="wife",
+        user_message="gift for wife",
+    )
+    assert curated[0]["id"] == "adult"
+    assert curated[-1]["id"] in {"kids", "hero"}
+
+
+def test_sort_and_filter_relaxes_strict_budget_for_occasion_turns() -> None:
+    products = [
+        _product("near", 5200.0),
+        _product("far", 9000.0),
+    ]
+    curated = sort_and_filter_by_budget(
+        products,
+        5000.0,
+        "LKR",
+        strict_in_budget=True,
+        session_occasion="Anniversary",
+    )
+    assert [item["id"] for item in curated] == ["near", "far"]
 
 
 def test_apply_birthday_cake_curation_boosts_chocolate_with_flavor_hint() -> None:

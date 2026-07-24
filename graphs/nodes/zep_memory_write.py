@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -11,6 +12,31 @@ from lib.zep.client import ZepClient
 from lib.zep.memory import append_session_messages
 
 logger = logging.getLogger(__name__)
+
+_zep_write_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _persist_turn(
+    zep_client: ZepClient,
+    thread_id: str,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    try:
+        await append_session_messages(
+            zep_client,
+            thread_id,
+            user_message,
+            assistant_message,
+        )
+    except Exception as exc:
+        logger.warning(
+            "zep_memory_write: failed to persist turn for thread %s: %s",
+            thread_id,
+            exc,
+        )
+        return
+    logger.info("zep_memory_write: persisted turn for thread %s", thread_id)
 
 
 async def zep_memory_write(
@@ -30,20 +56,9 @@ async def zep_memory_write(
         logger.debug("zep_memory_write: skipped (empty user or assistant message)")
         return {}
 
-    try:
-        await append_session_messages(
-            zep_client,
-            thread_id,
-            user_message,
-            assistant_message,
-        )
-    except Exception as exc:
-        logger.warning(
-            "zep_memory_write: failed to persist turn for thread %s: %s",
-            thread_id,
-            exc,
-        )
-        return {}
-
-    logger.info("zep_memory_write: persisted turn for thread %s", thread_id)
+    task = asyncio.create_task(
+        _persist_turn(zep_client, thread_id, user_message, assistant_message),
+    )
+    _zep_write_tasks.add(task)
+    task.add_done_callback(_zep_write_tasks.discard)
     return {}

@@ -18,7 +18,7 @@ This document explains how a customer moves through AgenticKapruka from first me
        │                                                   └──────────────┘
        ▼
 ┌──────────────┐
-│  New Session │── cart preserved, fresh conversation thread
+│  New Session │── prompt: keep cart or clear cart + fresh thread
 └──────────────┘
 
 Any time: "Where is order KA-12345?" ──▶ Tracking flow
@@ -75,7 +75,7 @@ Customers add items via:
 
 The cart drawer updates via HTMX without leaving the conversation. Cart state lives in Redis per session thread.
 
-**New Session:** Clicking sidebar **New Session** starts a fresh chat thread but copies cart items to the new session so the customer does not lose their basket.
+**New Session:** Clicking sidebar **New Session** opens a prompt: **Keep** starts a fresh chat thread and copies cart items to the new session; **Clear** also empties the cart. The customer does not lose their basket unless they choose to clear it.
 
 ## Phase 4: Checkout
 

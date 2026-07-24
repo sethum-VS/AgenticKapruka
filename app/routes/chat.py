@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from langchain_core.runnables import RunnableConfig
 from starlette.responses import Response, StreamingResponse
 
+from app.config import get_settings
 from app.dependencies import get_redis
 from app.templating import get_templates, render_cart_partial_oob
 from lib.chat.deps import (
@@ -24,6 +25,10 @@ from lib.chat.page_context import (
     resolve_page_cart,
     resolve_page_currency,
 )
+from lib.chat.request_specificity import (
+    score_request_specificity,
+    should_bypass_specificity_scorer,
+)
 from lib.chat.session import (
     SESSION_COOKIE_NAME,
     cookie_params,
@@ -31,9 +36,9 @@ from lib.chat.session import (
     rotate_chat_thread,
 )
 from lib.chat.sse import format_sse_event
-from lib.chat.streaming import iter_chat_sse_events
+from lib.chat.streaming import chat_turn_timeout_seconds, iter_chat_sse_events
 from lib.debug.trace import is_debug_trace_enabled, trace_error, trace_turn_start
-from lib.redis.cart import clear_cart
+from lib.redis.cart import clear_cart, get_cart, migrate_cart
 from lib.redis.client import RedisClient
 from lib.redis.session import get_session_currency
 from lib.zep.session import get_or_create_session
@@ -95,6 +100,23 @@ async def _chat_event_stream(
         config=config,
         currency=currency,
     )
+    if not should_bypass_specificity_scorer(message):
+        specificity = score_request_specificity(
+            message,
+            session_product_focus=state.get("session_product_focus"),
+            session_occasion=state.get("session_occasion"),
+            session_recipient_hint=state.get("session_recipient_hint"),
+            session_budget_max=state.get("session_budget_max"),
+            session_flavor_hint=state.get("session_flavor_hint"),
+            intent_metadata=state.get("intent_metadata"),
+        )
+        state = {
+            **state,
+            "specificity_band": specificity.band,
+            "specificity_score": specificity.score,
+        }
+        if specificity.band == "clarify" and specificity.clarifying_question:
+            state["agent_clarifying_question"] = specificity.clarifying_question
     trace_turn_start(
         thread_id=thread_id,
         message=message,
@@ -119,12 +141,15 @@ async def chat_index(request: Request, redis_client: RedisDep) -> Response:
     templates = get_templates()
     currency = await resolve_page_currency(request, redis_client)
     cart_items = await resolve_page_cart(request, redis_client)
+    settings = get_settings()
+    stream_timeout_ms = settings.chat_turn_timeout_seconds * 1000
     return templates.TemplateResponse(
         request,
         "chat/index.html",
         {
             "title": "Chat — AgenticKapruka",
             "debug_trace": is_debug_trace_enabled(),
+            "chat_timeout_ms": stream_timeout_ms,
             **currency_template_context(currency),
             **cart_template_context(cart_items),
         },
@@ -166,7 +191,7 @@ async def chat_stream(
     }
     response = StreamingResponse(
         event_generator(),
-        media_type="text/event-stream",
+        media_type="text/event-stream; charset=utf-8",
         headers=headers,
     )
     if new_cookie is not None:
@@ -175,15 +200,25 @@ async def chat_stream(
 
 
 @router.post("/new")
-async def chat_new(request: Request, redis_client: RedisDep) -> Response:
-    """Rotate chat thread and clear conversation context; cart is cleared."""
+async def chat_new(
+    request: Request,
+    redis_client: RedisDep,
+    keep_cart: bool = False,
+) -> Response:
+    """Rotate chat thread; optionally preserve cart items on the new thread."""
     prior_thread_id, new_thread_id, signed_cookie = rotate_chat_thread(request)
-    await clear_cart(redis_client, new_thread_id)
-    if prior_thread_id and prior_thread_id != new_thread_id:
-        await clear_cart(redis_client, prior_thread_id)
+    if keep_cart:
+        if prior_thread_id and prior_thread_id != new_thread_id:
+            await migrate_cart(redis_client, prior_thread_id, new_thread_id)
+        cart_items = await get_cart(redis_client, new_thread_id)
+    else:
+        await clear_cart(redis_client, new_thread_id)
+        if prior_thread_id and prior_thread_id != new_thread_id:
+            await clear_cart(redis_client, prior_thread_id)
+        cart_items = []
     currency = await get_session_currency(redis_client, new_thread_id)
     content = _chat_new_empty_state_html() + render_cart_partial_oob(
-        items=[],
+        items=cart_items,
         currency=currency,
     )
     response = Response(content=content, media_type="text/html")

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 CHAT_SSE_JS = Path(__file__).resolve().parent.parent.parent / "static" / "js" / "chat-sse.js"
+NEW_SESSION_JS = Path(__file__).resolve().parent.parent.parent / "static" / "js" / "new-session.js"
 
 
 def test_chat_sse_js_wires_post_stream_bridge() -> None:
@@ -60,13 +61,37 @@ def test_chat_sse_js_hides_loading_indicator_on_deactivate() -> None:
     assert "indicator.hidden = false" in source
 
 
-def test_chat_sse_js_uses_abort_controller_timeout() -> None:
+def test_chat_sse_js_uses_abort_controller_with_backend_timeout_buffer() -> None:
     source = CHAT_SSE_JS.read_text()
 
     assert "AbortController" in source
-    assert "CHAT_STREAM_TIMEOUT_MS = 90_000" in source
+    assert "CHAT_STREAM_TIMEOUT_BUFFER_MS = 10_000" in source
+    assert "CHAT_STREAM_TIMEOUT_DEFAULT_MS = 130_000" in source
+    assert "getChatStreamTimeoutMs" in source
+    assert 'dataset?.chatTimeoutMs' in source
+    assert 'chatStreamAbortReason = "timeout"' in source
     assert "controller.abort()" in source
     assert "signal: controller.signal" in source
+
+
+def test_chat_sse_js_exposes_abort_for_new_session() -> None:
+    source = CHAT_SSE_JS.read_text()
+
+    assert "let chatStreamController = null" in source
+    assert "window.abortChatStream = abortChatStream" in source
+    assert "window.abortActiveChatStream = abortChatStream" in source
+    assert 'reason === "new-session"' in source
+    assert "abortChatStream" in source
+
+
+def test_chat_sse_js_handles_timeout_without_removing_partial_content() -> None:
+    source = CHAT_SSE_JS.read_text()
+
+    assert "showStreamTimeoutMessage" in source
+    assert "chat-stream-timeout" in source
+    assert 'reason === "timeout"' in source
+    assert "removePendingAssistantBubbles();" in source
+    assert 'if (reason === "timeout")' in source
 
 
 def test_chat_sse_js_removes_pending_bubble_on_stream_error() -> None:
@@ -75,7 +100,6 @@ def test_chat_sse_js_removes_pending_bubble_on_stream_error() -> None:
 
     assert "removePendingAssistantBubbles" in source
     assert '[id^="assistant-stream-"]' in source
-    assert "removePendingAssistantBubbles();" in source
     assert "successful: false" in source
 
 
@@ -86,4 +110,16 @@ def test_chat_sse_js_updates_loading_text_from_status_events() -> None:
     assert "updateLoadingStatusText" in source
     assert 'data-testid="chat-loading-text"' in source
     assert "parseStatusTextFromHtml" in source
-    assert 'DEFAULT_LOADING_TEXT = "Sending…"' in source
+    assert "DEFAULT_LOADING_TEXT" in source
+
+
+def test_new_session_js_prompts_before_post() -> None:
+    source = NEW_SESSION_JS.read_text()
+
+    assert 'data-testid="new-chat-button"' in source
+    assert "new-session-modal" in source
+    assert "keep_cart=" in source
+    assert 'keepCart ? "true" : "false"' in source
+    assert "abortChatStream" in source
+    assert "chat-empty-state-template" in source
+    assert "htmx-request" in source

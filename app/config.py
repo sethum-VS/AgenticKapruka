@@ -43,8 +43,13 @@ class Settings(BaseSettings):
         ge=1,
         description="Max requests per minute for NVIDIA NIM free-tier safety",
     )
+    chat_turn_timeout_seconds: int = Field(
+        default=120,
+        ge=30,
+        description="Wall-clock timeout for a single chat SSE turn before graceful fallback",
+    )
     nvidia_vector_threshold: float = Field(
-        default=0.75,
+        default=0.65,
         ge=0.0,
         le=1.0,
         description=(

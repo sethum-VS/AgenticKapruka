@@ -122,6 +122,18 @@ def test_should_invoke_long_session_drift() -> None:
     assert reason == "long_session_drift"
 
 
+def test_should_not_invoke_when_specificity_band_is_clarify() -> None:
+    state = _state(
+        specificity_band="clarify",
+        agent_clarifying_question="Who is the gift for?",
+        checkout_state="delivery_city",
+        intent="discovery",
+    )
+    invoke, reason = should_invoke_master_flow(state)
+    assert invoke is False
+    assert reason == "specificity_clarify_fast_path"
+
+
 def test_should_not_invoke_when_feature_disabled() -> None:
     state = _state(checkout_state="delivery_city", intent="discovery")
     with patch("lib.chat.master_flow.get_settings") as mock_settings:
@@ -223,27 +235,25 @@ async def test_invoke_master_flow_llm_fail_open() -> None:
 
 @pytest.mark.asyncio
 async def test_invoke_master_flow_llm_parses_response() -> None:
-    from google import genai
-
-    mock_client = MagicMock(spec=genai.Client)
-    response = MagicMock()
-    response.parsed = MasterFlowAlignment(
+    alignment = MasterFlowAlignment(
         decision="proceed",
         confidence=0.8,
         active_flow="free_discovery",
     )
-    response.text = ""
-    mock_client.models.generate_content.return_value = response
 
-    with patch("lib.chat.master_flow.generate_content_with_fallback", return_value=response):
+    with patch(
+        "lib.chat.master_flow.generate_content",
+        return_value=alignment,
+    ) as mock_generate:
         result = await invoke_master_flow_llm(
             _state(),
             active_flow="free_discovery",
             trigger_reason="test",
-            genai_client=mock_client,
+            genai_client=object(),
         )
     assert result is not None
     assert result.decision == "proceed"
+    mock_generate.assert_awaited_once()
 
 
 def test_route_after_master_flow_clarify_short_circuit() -> None:

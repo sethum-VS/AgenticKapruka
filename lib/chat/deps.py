@@ -78,6 +78,7 @@ async def build_shopping_graph_deps(
         kapruka_service=kapruka_service,
         client_ip=client_ip_from_request(request),
         genai_client=None,
+        neo4j_client=getattr(request.app.state, "neo4j", None),
         zep_client=zep_client_from_app(request),
         redis_client=redis_client,
     )

@@ -124,6 +124,11 @@ _FOCUS_TOKEN_PATTERNS: dict[str, re.Pattern[str]] = {
     "gift": re.compile(r"\b(?:hamper|combo|combopack|gift)\b", re.I),
 }
 _ANNIVERSARY_OCCASION_RE = re.compile(r"\banniversary\b", re.I)
+_KIDS_THEMED_RE = re.compile(
+    r"\b(?:kids?|children|child|boy|girl|princess|superhero|cartoon)\b",
+    re.I,
+)
+_ADULT_RECIPIENTS = _FEMALE_RECIPIENTS | _MALE_RECIPIENTS | _NEUTRAL_RECIPIENTS
 _ANNIVERSARY_PROMOTE_RE = re.compile(
     r"\b(?:flower|flowers|rose|roses|bouquet|floral|cake|cakes|hamper|hampers|"
     r"chocolate|chocolates|combo|combopack)\b",
@@ -465,6 +470,33 @@ def demote_loose_grocery_items(
     return preferred + demoted
 
 
+def demote_kids_themed_products(
+    products: list[dict[str, Any]],
+    *,
+    session_recipient_hint: str | None = None,
+    user_message: str = "",
+) -> list[dict[str, Any]]:
+    """Demote kids/children-themed products when the recipient is an adult."""
+    if not products:
+        return []
+    recipient = (session_recipient_hint or "").strip().lower()
+    adult_turn = recipient in _ADULT_RECIPIENTS
+    if not adult_turn:
+        return list(products)
+
+    preferred: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        blob = _product_text_blob(product)
+        if _KIDS_THEMED_RE.search(blob):
+            demoted.append(product)
+        else:
+            preferred.append(product)
+    if len(preferred) >= 3:
+        return preferred
+    return preferred + demoted
+
+
 def demote_non_chocolate_for_chocolate_focus(
     products: list[dict[str, Any]],
     query: str,
@@ -484,6 +516,9 @@ def demote_non_chocolate_for_chocolate_focus(
     demoted: list[dict[str, Any]] = []
     for product in products:
         blob = _product_text_blob(product)
+        if _KIDS_THEMED_RE.search(blob):
+            demoted.append(product)
+            continue
         if _FLORAL_FOR_CHOCOLATE_DENYLIST.search(blob) and not _FOCUS_TOKEN_PATTERNS[
             "chocolate"
         ].search(blob):
@@ -813,6 +848,7 @@ def sort_and_filter_by_budget(
     currency: str,
     *,
     strict_in_budget: bool = False,
+    session_occasion: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hide items above 2× budget; sort in-budget asc, then near-budget (+10%) with badge."""
     if budget_max is None or budget_max <= 0:
@@ -849,6 +885,15 @@ def sort_and_filter_by_budget(
             tagged = dict(product)
             tagged["over_budget"] = True
             over_near.append(tagged)
+
+    if strict_in_budget and not in_budget and session_occasion:
+        return sort_and_filter_by_budget(
+            products,
+            budget_max,
+            currency,
+            strict_in_budget=False,
+            session_occasion=session_occasion,
+        )
 
     in_budget.sort(key=lambda item: product_price_amount(item) or 0.0)
     near_budget.sort(key=lambda item: product_price_amount(item) or 0.0)
@@ -943,6 +988,11 @@ def curate_carousel_products(
     )
     scoped = demote_off_focus_products(scoped, session_product_focus)
     scoped = apply_recipient_curation(scoped, session_recipient_hint)
+    scoped = demote_kids_themed_products(
+        scoped,
+        session_recipient_hint=session_recipient_hint,
+        user_message=query,
+    )
     scoped = filter_gift_noise_products(scoped, strict=strict_budget)
 
     def _budget_sort(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -951,6 +1001,7 @@ def curate_carousel_products(
             budget_max,
             currency,
             strict_in_budget=strict_budget,
+            session_occasion=session_occasion,
         )
 
     def _finalize_carousel(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

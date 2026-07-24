@@ -11,20 +11,26 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
+from app.config import get_settings
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
+from lib.chat.intent_heuristics import is_vague_gift_intent
 from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
 from lib.chat.sse import chunk_text, format_sse_event
-from lib.chat.status_copy import SEARCHING_CATALOG
+from lib.chat.status_copy import SEARCHING_CATALOG, THINKING
 from lib.debug.trace import trace_error, trace_node_update, trace_turn_complete
 
 logger = logging.getLogger(__name__)
 
-CHAT_TURN_TIMEOUT_SECONDS = 90.0
 _TIMEOUT_MESSAGE = (
     "This is taking longer than expected. Please try again with a more specific question."
 )
 _CART_ERROR_FALLBACK = "I couldn't add that — try naming the product."
+
+
+def chat_turn_timeout_seconds() -> float:
+    """Return configured wall-clock timeout for a single chat SSE turn."""
+    return float(get_settings().chat_turn_timeout_seconds)
 
 
 def _skip_early_search_status(state: AgentState) -> bool:
@@ -32,12 +38,17 @@ def _skip_early_search_status(state: AgentState) -> bool:
     intent = state.get("intent")
     if intent in ("tracking", "checkout"):
         return True
+    if state.get("specificity_band") == "clarify":
+        return True
+    intent_metadata = state.get("intent_metadata") or {}
+    if isinstance(intent_metadata, dict) and intent_metadata.get("is_situational"):
+        return True
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if not user_message.strip():
         return False
     if is_off_topic_message(user_message) or is_impossible_catalog_request(user_message):
         return True
-    if state.get("specificity_band") == "clarify":
+    if is_vague_gift_intent(user_message):
         return True
     q = state.get("agent_clarifying_question")
     return bool(isinstance(q, str) and q.strip())
@@ -101,6 +112,7 @@ async def iter_chat_sse_events(
     pending_id = f"assistant-stream-{stream_id or secrets.token_hex(4)}"
     stream_started = False
     partial_state: dict[str, Any] = {}
+    turn_timeout = chat_turn_timeout_seconds()
 
     if not _skip_early_search_status(state):
         early_status_message = SEARCHING_CATALOG
@@ -117,7 +129,7 @@ async def iter_chat_sse_events(
 
     done_emitted = False
     try:
-        async with asyncio.timeout(CHAT_TURN_TIMEOUT_SECONDS):
+        async with asyncio.timeout(turn_timeout):
             async for chunk in graph.astream(state, config, stream_mode=["updates", "custom"]):
                 normalized = _normalize_astream_chunk(chunk)
                 if normalized is None:
@@ -144,6 +156,12 @@ async def iter_chat_sse_events(
                         continue
                     partial_state.update(node_update)
                     trace_node_update(node_name, node_update)
+
+                    if node_name == "analyze_intent" and node_update.get("specificity_band") == "clarify":
+                        clarify_html = _render_streaming_assistant(THINKING, pending_id, oob=True)
+                        yield format_sse_event(clarify_html, event="status")
+                        stream_started = True
+
                     if node_name != "generate_response":
                         continue
                     response_html = node_update.get("response_html")
@@ -182,7 +200,7 @@ async def iter_chat_sse_events(
         trace_error("graph.astream exceeded wall-clock timeout", TimeoutError())
         logger.warning(
             "chat stream timed out after %.0fs for thread %s",
-            CHAT_TURN_TIMEOUT_SECONDS,
+            turn_timeout,
             thread_id or "(unknown)",
         )
         timeout_html = _render_streaming_assistant(_TIMEOUT_MESSAGE, pending_id, oob=stream_started)
@@ -216,6 +234,12 @@ async def iter_chat_sse_events(
             cleanup = (
                 f'<div id="{pending_id}" hx-swap-oob="delete"></div>' if stream_started else ""
             )
+            fallback_html = _render_streaming_assistant(
+                _TIMEOUT_MESSAGE,
+                pending_id,
+                oob=False,
+            )
             if cleanup:
                 yield format_sse_event(cleanup)
+            yield format_sse_event(fallback_html)
             yield format_sse_event("", event="done")

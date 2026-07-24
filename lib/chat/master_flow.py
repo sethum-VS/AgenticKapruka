@@ -231,6 +231,9 @@ def should_invoke_master_flow(
     if not cfg.master_flow_enabled:
         return False, "feature_disabled"
 
+    if state.get("specificity_band") == "clarify":
+        return False, "specificity_clarify_fast_path"
+
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
     if classify_routing_guard(user_message) is not None:

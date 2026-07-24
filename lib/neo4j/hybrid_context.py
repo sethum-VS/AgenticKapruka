@@ -864,6 +864,8 @@ def is_birthday_cake_intent(query: str) -> bool:
         return False
     if _BIRTHDAY_CAKE_INTENT.search(stripped):
         return True
+    if _BIRTHDAY_OCCASION_RE.search(stripped) and _CHOCOLATE_FLAVOR_RE.search(stripped):
+        return bool(_CAKE_TERM.search(stripped))
     return bool(_BIRTHDAY_OCCASION_RE.search(stripped) and _CAKE_TERM.search(stripped))
 
 
@@ -902,9 +904,6 @@ def is_birthday_cake_scoped_turn(
     if topic_pivot:
         return False
     stripped = query.strip()
-    # Birthday + chocolate without "cake" still scopes to birthday cakes (not confectionery)
-    if _BIRTHDAY_OCCASION_RE.search(stripped) and _CHOCOLATE_FLAVOR_RE.search(stripped):
-        return True
     if not birthday_occasion_from_context(hybrid_context, user_message=query):
         return False
     return bool(stripped and _CAKE_TERM.search(stripped))
@@ -1160,7 +1159,7 @@ def _birthday_biased_product_keyword(
     if chocolate_flavor and (birthday_occasion or cake_scoped):
         return "chocolate birthday cake"
     if normalized in {"chocolate", "chocolates"} and birthday_occasion and not cake_scoped:
-        return "chocolate gift"
+        return "chocolate gift box"
     if birthday_occasion and normalized in {"cake", "cakes"}:
         return "birthday cake"
     if birthday_occasion and normalized in {"chocolate", "chocolates"}:
@@ -1291,7 +1290,9 @@ def enrich_chocolate_focus_hints(
     chocolate_focus = session_product_focus == "chocolate" or bool(
         _CHOCOLATE_FLAVOR_RE.search(query),
     )
-    if not chocolate_focus or is_birthday_cake_intent(query) or _CAKE_TERM.search(query):
+    if not chocolate_focus or is_birthday_cake_intent(query):
+        return context
+    if _CAKE_TERM.search(query):
         return context
     hints = dict(context.get("hints") or {})
     existing = str(hints.get("exclude_categories") or "")
@@ -1329,7 +1330,19 @@ def _anniversary_biased_search_q(query: str) -> str:
         return "anniversary flowers"
     if re.search(r"\b(?:cake|cakes|hamper|hampers)\b", lowered):
         return "anniversary gift hamper"
-    return "anniversary gift hamper"
+    return "anniversary gift"
+
+
+def anniversary_fallback_search_queries(query: str) -> tuple[str, ...]:
+    """Fallback ladder when the primary anniversary search returns no products."""
+    primary = _anniversary_biased_search_q(query)
+    fallbacks = (
+        primary,
+        "anniversary gift",
+        "anniversary gift hamper",
+        "anniversary flowers",
+    )
+    return tuple(dict.fromkeys(fallbacks))
 
 
 def enrich_birthday_cake_hints(
@@ -1449,15 +1462,26 @@ def build_discovery_search_args(
                 args["q"] = _fallback_search_query(fallback_category)
 
     if _MOM_BIRTHDAY_RE.search(query) and "gift" in query.lower():
-        # Use product-specific q when the query carries a product focus
-        if _CHOCOLATE_FLAVOR_RE.search(query):
+        if _CHOCOLATE_FLAVOR_RE.search(query) and _CAKE_TERM.search(query):
             args["q"] = "chocolate birthday cake"
             args.setdefault("category", "Birthday")
+        elif _CHOCOLATE_FLAVOR_RE.search(query):
+            args["q"] = "chocolate gift box"
+            args.pop("category", None)
         elif _CAKE_TERM.search(query):
             args["q"] = "birthday cake"
             args.setdefault("category", "Birthday")
         else:
             args["q"] = "Happy Birthday Mom"
+
+    if (
+        _CHOCOLATE_FLAVOR_RE.search(query)
+        and not _CAKE_TERM.search(query)
+        and not is_birthday_cake_intent(query)
+    ):
+        args["q"] = "chocolate gift box"
+        if args.get("category") == "Birthday":
+            args.pop("category", None)
 
     if _is_meta_catalog_query(query):
         args["q"] = _fallback_search_query(fallback_category)
@@ -1597,13 +1621,7 @@ def _birthday_planner_q_needs_override(planner_q: str, user_message: str) -> boo
     if _should_canonicalize_birthday_search_q(user_message):
         canonical = canonical_birthday_cake_search_q(user_message)
         return stripped.lower() != canonical.lower()
-    # Birthday + chocolate intent but planner didn't include "cake" in the query → override
-    # e.g. planner used "chocolate birthday gift" but should be "chocolate birthday cake"
-    return bool(
-        _BIRTHDAY_OCCASION_RE.search(user_message)
-        and _CHOCOLATE_FLAVOR_RE.search(user_message)
-        and "cake" not in stripped.lower()
-    )
+    return False
 
 
 def enrich_message_with_session_slots(
@@ -1699,6 +1717,19 @@ def merge_planner_search_args(
     )
     if birthday_scoped and needs_override and "q" in canonical:
         merged["q"] = canonical["q"]
+
+    canonical_q = str(canonical.get("q") or "").strip()
+    if (
+        planner_q
+        and _CHOCOLATE_FLAVOR_RE.search(discovery_message)
+        and _BIRTHDAY_OCCASION_RE.search(discovery_message)
+        and not _CAKE_TERM.search(discovery_message)
+        and "cake" not in planner_q.lower()
+        and canonical_q
+        and "gift box" in canonical_q.lower()
+    ):
+        merged["q"] = canonical_q
+        merged.pop("category", None)
 
     target_city = intent_metadata.get("target_city") if intent_metadata else None
     merged_q = str(merged.get("q") or "")

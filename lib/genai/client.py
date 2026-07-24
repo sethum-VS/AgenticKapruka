@@ -22,6 +22,7 @@ def create_nvidia_client(*, settings: Settings | None = None) -> OpenAI:
     _client = OpenAI(
         base_url=cfg.nvidia_base_url,
         api_key=cfg.nvidia_api_key,
+        timeout=30.0,
     )
     return _client
 

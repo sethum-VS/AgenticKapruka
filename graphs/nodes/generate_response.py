@@ -1420,6 +1420,24 @@ def _should_use_discovery_template_fast_path(
     )
 
 
+def _carousel_perishability_warning(
+    *,
+    session_delivery_city: str | None,
+    delivery_date: str | None,
+    user_message: str,
+    session_product_focus: str | None,
+) -> str | None:
+    """Warn when a perishable carousel is shown with city but no delivery date."""
+    if not session_delivery_city or delivery_date:
+        return None
+    if not _turn_implies_perishable_gift(user_message, session_product_focus=session_product_focus):
+        return None
+    return (
+        "Fresh cakes, flowers, and gift combos are best ordered closer to the delivery date. "
+        "Please share a delivery date so we can confirm availability."
+    )
+
+
 def build_products_carousel_html(
     tool_results: dict[str, Any] | None,
     *,
@@ -1432,6 +1450,7 @@ def build_products_carousel_html(
     session_occasion: str | None = None,
     session_recipient_hint: str | None = None,
     session_delivery_city: str | None = None,
+    delivery_date: str | None = None,
     last_search_products: list[dict[str, Any]] | None = None,
     last_visible_products: list[dict[str, Any]] | None = None,
     visible_products: list[dict[str, Any]] | None = None,
@@ -1474,7 +1493,26 @@ def build_products_carousel_html(
         session_recipient_hint=session_recipient_hint,
         session_delivery_city=session_delivery_city,
     )
-    return render_product_carousel(products)
+    carousel_html = render_product_carousel(products)
+    warning = _carousel_perishability_warning(
+        session_delivery_city=session_delivery_city,
+        delivery_date=delivery_date,
+        user_message=user_message,
+        session_product_focus=session_product_focus,
+    )
+    if warning:
+        escaped = (
+            warning.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
+        banner = (
+            '<p class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 '
+            f'text-sm text-amber-900" role="note">{escaped}</p>'
+        )
+        return banner + carousel_html
+    return carousel_html
 
 
 def _delivery_fee_reply_from_state(
@@ -1688,14 +1726,16 @@ async def generate_response(
     tool_results = _resolve_effective_tool_results(state)
 
     if not user_message.strip():
-        welcome = build_general_welcome_message()
+        welcome = normalize_catalog_text(build_general_welcome_message())
         return {
             "response_html": render_assistant_html(welcome),
             "assistant_message": welcome,
         }
 
     if is_impossible_catalog_request(user_message):
-        reply = build_impossible_product_redirect(impossible_request_subject(user_message))
+        reply = normalize_catalog_text(
+            build_impossible_product_redirect(impossible_request_subject(user_message)),
+        )
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
@@ -1705,9 +1745,13 @@ async def generate_response(
     if off_topic_meta.get("is_off_topic"):
         redirect_kind = off_topic_meta.get("redirect_kind")
         if redirect_kind == "impossible_product":
-            reply = build_impossible_product_redirect(impossible_request_subject(user_message))
+            reply = normalize_catalog_text(
+                build_impossible_product_redirect(impossible_request_subject(user_message)),
+            )
         else:
-            reply = build_off_topic_redirect_message(off_topic_topic(user_message))
+            reply = normalize_catalog_text(
+                build_off_topic_redirect_message(off_topic_topic(user_message)),
+            )
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
@@ -1715,8 +1759,10 @@ async def generate_response(
 
     intent_metadata = state.get("intent_metadata") or {}
     if isinstance(intent_metadata, dict) and intent_metadata.get("guest_checkout_info"):
-        reply = build_guest_checkout_reply(
-            cart_has_items=bool(intent_metadata.get("guest_checkout_cart_has_items")),
+        reply = normalize_catalog_text(
+            build_guest_checkout_reply(
+                cart_has_items=bool(intent_metadata.get("guest_checkout_cart_has_items")),
+            ),
         )
         return {
             "response_html": render_assistant_html(reply),
@@ -1728,19 +1774,19 @@ async def generate_response(
 
     intent_metadata = state.get("intent_metadata") or {}
     if isinstance(intent_metadata, dict) and intent_metadata.get("support_topic"):
-        reply = build_support_faq_reply(user_message)
+        reply = normalize_catalog_text(build_support_faq_reply(user_message))
         fee_reply = _delivery_fee_reply_from_state(state, user_message)
         if fee_reply:
-            reply = f"{reply}\n\n{fee_reply}"
+            reply = normalize_catalog_text(f"{reply}\n\n{fee_reply}")
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
         }
     if is_support_question(user_message):
-        reply = build_support_faq_reply(user_message)
+        reply = normalize_catalog_text(build_support_faq_reply(user_message))
         fee_reply = _delivery_fee_reply_from_state(state, user_message)
         if fee_reply:
-            reply = f"{reply}\n\n{fee_reply}"
+            reply = normalize_catalog_text(f"{reply}\n\n{fee_reply}")
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
@@ -1748,12 +1794,12 @@ async def generate_response(
 
     if _is_general_welcome_path(state):
         if is_farewell_message(user_message):
-            farewell = build_farewell_message()
+            farewell = normalize_catalog_text(build_farewell_message())
             return {
                 "response_html": render_assistant_html(farewell),
                 "assistant_message": farewell,
             }
-        welcome = build_general_welcome_message()
+        welcome = normalize_catalog_text(build_general_welcome_message())
         return {
             "response_html": render_assistant_html(welcome),
             "assistant_message": welcome,
@@ -1761,7 +1807,7 @@ async def generate_response(
 
     clarifying_question = state.get("master_clarifying_question")
     if isinstance(clarifying_question, str) and clarifying_question.strip():
-        question = clarifying_question.strip()
+        question = normalize_catalog_text(clarifying_question.strip())
         return {
             "response_html": render_assistant_html(question),
             "assistant_message": question,
@@ -1785,7 +1831,7 @@ async def generate_response(
             or (exit_reason is None and not _turn_has_fresh_search(state.get("tool_trace")))
         )
     ):
-        pending_clarifier = clarifying_question.strip()
+        pending_clarifier = normalize_catalog_text(clarifying_question.strip())
 
     has_carousel_products = _turn_search_has_products(state.get("tool_trace"))
     if pending_clarifier and not has_carousel_products:
@@ -1880,6 +1926,7 @@ async def generate_response(
             session_occasion=state.get("session_occasion"),
             session_recipient_hint=state.get("session_recipient_hint"),
             session_delivery_city=state.get("session_delivery_city_canonical"),
+            delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
             last_search_products=last_search or None,
             allow_stale_fallback=allow_stale,
         )
@@ -2024,6 +2071,7 @@ async def generate_response(
                     session_occasion=state.get("session_occasion"),
                     session_recipient_hint=state.get("session_recipient_hint"),
                     session_delivery_city=state.get("session_delivery_city_canonical"),
+                    delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
                     last_search_products=list(state.get("last_search_products") or []) or None,
                     allow_stale_fallback=allow_stale,
                 )
@@ -2154,6 +2202,7 @@ async def generate_response(
                 session_occasion=state.get("session_occasion"),
                 session_recipient_hint=state.get("session_recipient_hint"),
                 session_delivery_city=state.get("session_delivery_city_canonical"),
+                delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
                 last_search_products=state.get("last_search_products"),
             )
             response_fields = _assistant_response_fields(
@@ -2229,6 +2278,8 @@ async def generate_response(
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
+        session_delivery_city=state.get("session_delivery_city_canonical"),
+        delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
         last_search_products=last_search_products or None,
         last_visible_products=last_visible_products or None,
         visible_products=visible_products,
@@ -2366,11 +2417,11 @@ async def generate_response(
             else None,
         )
     except Exception as exc:
-        if not is_resource_exhausted(exc):
+        if not is_rate_limited(exc):
             raise
         reply_text = _build_discovery_template_reply(visible_products, user_message=user_message)
         logger.warning(
-            "generate_response: Gemini rate limited; template fallback (%d products)",
+            "generate_response: NVIDIA NIM rate limited; template fallback (%d products)",
             len(visible_products),
             exc_info=True,
         )

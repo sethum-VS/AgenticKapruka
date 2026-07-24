@@ -1,6 +1,7 @@
 """Customer-facing status strings for chat SSE and agent nodes."""
 
 SENDING = "Sending…"
+THINKING = "Thinking…"
 SEARCHING_KAPRUKA = "Searching Kapruka…"
 SEARCHING_CATALOG = "Searching our catalog…"
 CHECKING_DELIVERY = "Checking delivery options…"

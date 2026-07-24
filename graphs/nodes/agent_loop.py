@@ -73,9 +73,12 @@ from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.neo4j.hybrid_context import (
+    anniversary_fallback_search_queries,
     build_budget_refinement_search_args,
     build_discovery_search_args,
     enrich_message_with_session_slots,
+    has_strong_hybrid_hints,
+    is_anniversary_occasion_intent,
     is_birthday_cake_intent,
     is_broad_cakes_query,
     is_confident_discovery_turn,
@@ -88,8 +91,10 @@ from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_tur
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 3
+GRAPH_HINTS_MAX_ITERATIONS = 2
 UTILITY_GENERAL_MAX_ITERATIONS = 2
 CONFIDENT_DISCOVERY_MAX_ITERATIONS = 1
+BUDGETED_GIFT_SEARCH_CONCURRENCY = 3
 PLANNER_MODEL = FLASH_MODEL
 
 ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
@@ -816,8 +821,22 @@ def _turn_needs_catalog(state: AgentState) -> bool:
     )
 
 
+def _graph_hint_iteration_limit(state: AgentState) -> int | None:
+    """Cap planner iterations when graph hints are strong and retrieval is healthy."""
+    intent_metadata = state.get("intent_metadata") or {}
+    if intent_metadata.get("graph_degraded"):
+        return MAX_ITERATIONS
+    hybrid_context = state.get("hybrid_context") or {}
+    if has_strong_hybrid_hints(hybrid_context):
+        return GRAPH_HINTS_MAX_ITERATIONS
+    return None
+
+
 def _max_iterations_for_state(state: AgentState, refined_intent: Intent | None) -> int:
     """Cap planner iterations for fast utility/general turns that need no catalog."""
+    graph_hint_cap = _graph_hint_iteration_limit(state)
+    if graph_hint_cap is not None:
+        return graph_hint_cap
     if refined_intent == "discovery":
         user_message = _extract_latest_user_message(state.get("messages") or [])
         if is_confident_discovery_turn(
@@ -840,6 +859,9 @@ def _max_iterations_for_state(state: AgentState, refined_intent: Intent | None) 
 
 def _initial_iteration_limit(state: AgentState) -> int:
     """Pre-loop cap when hybrid hints make a single planner pass sufficient."""
+    graph_hint_cap = _graph_hint_iteration_limit(state)
+    if graph_hint_cap is not None:
+        return graph_hint_cap
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if is_confident_discovery_turn(
         user_message,
@@ -1389,6 +1411,78 @@ def _confident_discovery_fast_path_blocked(
     return bool(is_product_detail_turn(user_message))
 
 
+async def _retry_anniversary_search_if_empty(
+    result: dict[str, Any],
+    enriched_args: dict[str, Any],
+    *,
+    state: AgentState,
+    user_message: str,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[ToolInvocation], int]:
+    """Run parallel fallback anniversary searches when the primary query is empty."""
+    hybrid_context = state.get("hybrid_context") or {}
+    if _search_has_products(result) or not is_anniversary_occasion_intent(
+        user_message,
+        hybrid_context,
+    ):
+        return result, enriched_args, tool_trace, 0
+
+    current_q = str(enriched_args.get("q") or "").strip().lower()
+    fallback_queries = [
+        query
+        for query in anniversary_fallback_search_queries(user_message)
+        if query.strip().lower() != current_q
+    ][:BUDGETED_GIFT_SEARCH_CONCURRENCY]
+    if not fallback_queries:
+        return result, enriched_args, tool_trace, 0
+
+    search_sem = asyncio.Semaphore(BUDGETED_GIFT_SEARCH_CONCURRENCY)
+    extra_trace = list(tool_trace)
+    extra_calls = 0
+
+    async def _run_retry(query: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        retry_args = _inject_tool_currency(
+            SEARCH_PRODUCTS_TOOL,
+            {**enriched_args, "q": query},
+            state,
+            currency,
+        )
+        if _is_duplicate_invocation(extra_trace, SEARCH_PRODUCTS_TOOL, retry_args):
+            return retry_args, None
+        async with search_sem:
+            retry_result = await _invoke_tool_with_rate_limit_retry(
+                SEARCH_PRODUCTS_TOOL,
+                retry_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+        retry_result = _curate_search_trace_result(retry_result, state=state)
+        return retry_args, retry_result
+
+    _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+    retry_pairs = await asyncio.gather(
+        *[_run_retry(query) for query in fallback_queries],
+        return_exceptions=True,
+    )
+    for pair in retry_pairs:
+        if isinstance(pair, BaseException):
+            continue
+        retry_args, retry_result = pair
+        if retry_result is None:
+            continue
+        extra_trace.append(
+            {"name": SEARCH_PRODUCTS_TOOL, "args": retry_args, "result": retry_result},
+        )
+        extra_calls += 1
+        if _search_has_products(retry_result):
+            return retry_result, retry_args, extra_trace, extra_calls
+    return result, enriched_args, extra_trace, extra_calls
+
+
 async def _try_confident_discovery_fast_path(
     state: AgentState,
     *,
@@ -1454,10 +1548,20 @@ async def _try_confident_discovery_fast_path(
         currency=currency,
     )
     result = _curate_search_trace_result(result, state=state)
-    tool_trace = [
+    working_trace = [
         *tool_trace,
         {"name": SEARCH_PRODUCTS_TOOL, "args": enriched_args, "result": result},
     ]
+    result, enriched_args, tool_trace, retry_calls = await _retry_anniversary_search_if_empty(
+        result,
+        enriched_args,
+        state=state,
+        user_message=user_message,
+        tool_trace=working_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
     session_search_query_update: str | None = None
     search_q_arg = enriched_args.get("q")
     intent_meta = state.get("intent_metadata")
@@ -1470,7 +1574,7 @@ async def _try_confident_discovery_fast_path(
     base_tool_count = int(state.get("tool_call_count") or 0)
     updates = _fast_path_agent_loop_updates(
         tool_trace,
-        tool_call_count=base_tool_count + 1,
+        tool_call_count=base_tool_count + 1 + retry_calls,
         refined_intent="discovery",
         session_search_query_update=session_search_query_update,
     )
@@ -1707,9 +1811,12 @@ async def agent_loop(
             }
             merged_result: dict[str, Any] = {"results": []}
             physical_queries = _budgeted_gift_physical_queries(user_message)
-            for physical_q in physical_queries:
-                if _search_product_count(merged_result) >= 3:
-                    break
+            search_sem = asyncio.Semaphore(BUDGETED_GIFT_SEARCH_CONCURRENCY)
+            _emit_status(_status_message_for_tool(tool_name))
+
+            async def _run_budgeted_physical_query(
+                physical_q: str,
+            ) -> tuple[dict[str, Any], dict[str, Any] | None]:
                 physical_args = _inject_tool_currency(
                     tool_name,
                     {**base_args, "q": physical_q},
@@ -1717,21 +1824,38 @@ async def agent_loop(
                     currency,
                 )
                 if _is_duplicate_invocation(tool_trace, tool_name, physical_args):
-                    continue
-                _emit_status(_status_message_for_tool(tool_name))
-                physical_result = await _invoke_tool_with_rate_limit_retry(
-                    tool_name,
-                    physical_args,
-                    kapruka_service=kapruka_service,
-                    client_ip=rate_limit_key,
-                    currency=currency,
-                )
+                    return physical_args, None
+                async with search_sem:
+                    physical_result = await _invoke_tool_with_rate_limit_retry(
+                        tool_name,
+                        physical_args,
+                        kapruka_service=kapruka_service,
+                        client_ip=rate_limit_key,
+                        currency=currency,
+                    )
                 physical_result = _curate_search_trace_result(physical_result, state=state)
+                return physical_args, physical_result
+
+            physical_pairs = await asyncio.gather(
+                *[
+                    _run_budgeted_physical_query(physical_q)
+                    for physical_q in physical_queries[:BUDGETED_GIFT_SEARCH_CONCURRENCY]
+                ],
+                return_exceptions=True,
+            )
+            for pair in physical_pairs:
+                if isinstance(pair, BaseException):
+                    continue
+                physical_args, physical_result = pair
+                if physical_result is None:
+                    continue
                 tool_trace.append(
                     {"name": tool_name, "args": physical_args, "result": physical_result},
                 )
                 tool_call_count += 1
                 merged_result = _merge_search_results(merged_result, physical_result)
+                if _search_product_count(merged_result) >= 3:
+                    break
 
             if _search_product_count(merged_result) < 3:
                 voucher_args = _inject_tool_currency(

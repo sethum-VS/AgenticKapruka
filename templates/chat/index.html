@@ -46,6 +46,10 @@
     >
       {% include "chat/empty_state.html" %}
     </div>
+
+    <template id="chat-empty-state-template">
+      {% include "chat/empty_state.html" %}
+    </template>
   </div>
 
   <div
@@ -60,6 +64,7 @@
         hx-trigger="submit"
         hx-indicator="#chat-loading"
         class="relative"
+        data-chat-timeout-ms="{{ chat_timeout_ms | default(120000) }}"
         {% if debug_trace %}data-chat-debug="true"{% endif %}
       >
         <div
@@ -154,4 +159,5 @@
   });
 </script>
 <script defer src="/static/js/chat-sse.js"></script>
+<script defer src="/static/js/new-session.js"></script>
 {% endblock %}

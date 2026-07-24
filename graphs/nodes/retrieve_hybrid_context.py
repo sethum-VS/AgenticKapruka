@@ -261,7 +261,7 @@ async def retrieve_hybrid_context(
     elif graph_context:
         graph_hints = graph_context.get("hints") or {}
         if graph_context.get("vector_hits") and not graph_hints:
-            logger.debug(
+            logger.warning(
                 "retrieve_hybrid_context: rerank_prune_empty_hints query=%r vector_hits=%d",
                 user_message[:80],
                 len(graph_context.get("vector_hits") or []),

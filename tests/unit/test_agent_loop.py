@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.agent_loop import (
     CONFIDENT_DISCOVERY_MAX_ITERATIONS,
+    GRAPH_HINTS_MAX_ITERATIONS,
     MAX_ITERATIONS,
     PLANNER_CATEGORY_NODE_LIMIT,
     PLANNER_SEARCH_RESULT_LIMIT,
@@ -1345,7 +1346,7 @@ def test_max_iterations_for_state_caps_confident_discovery() -> None:
         },
         "intent_metadata": {"target_city": "Colombo"},
     }
-    assert _max_iterations_for_state(state, "discovery") == CONFIDENT_DISCOVERY_MAX_ITERATIONS
+    assert _max_iterations_for_state(state, "discovery") == GRAPH_HINTS_MAX_ITERATIONS
 
 
 @pytest.mark.asyncio

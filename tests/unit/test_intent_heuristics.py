@@ -16,6 +16,12 @@ from lib.chat.intent_heuristics import (
 )
 
 
+def test_cart_add_trigger_matches_add_and_checkout_combo() -> None:
+    assert is_cart_add_trigger("add chocolate cake and checkout")
+    assert is_cart_add_trigger("add the roses bouquet and proceed")
+    assert classify_routing_guard("add chocolate cake and checkout") == "cart"
+
+
 def test_cart_add_trigger_matches_add_and_put_phrases() -> None:
     assert is_cart_add_trigger("Add the Blush Roses combo to my cart please")
     assert is_cart_add_trigger("put chocolate cake in my cart")

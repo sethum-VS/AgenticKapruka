@@ -13,6 +13,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from app.config import Settings, get_settings
 from lib.embeddings.embedding_cache import get_cached_embedding, set_cached_embedding
 from lib.genai.client import create_nvidia_client
+from lib.genai.rate_limiter import get_rate_limiter
 from lib.redis.client import RedisClient
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,8 @@ async def embed_texts(
 
     cfg = settings or get_settings()
     embedding_client = client or create_nvidia_client(settings=cfg)
-    
+    await get_rate_limiter().acquire()
+
     vectors = await asyncio.to_thread(
         _embed_texts_sync,
         texts,
