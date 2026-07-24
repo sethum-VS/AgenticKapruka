@@ -18,6 +18,18 @@ from lib.chat.request_specificity import (
 )
 
 
+def test_is_delivery_only_inquiry_ignores_stale_session_flavor_hint() -> None:
+    """Prior chocolate/cake flavor must not block a pure delivery follow-up."""
+    assert is_delivery_only_inquiry(
+        "can you deliver to Kandy this Sunday?",
+        intent_metadata={
+            "requires_delivery_validation": True,
+            "target_city": "Kandy",
+            "session_flavor_hint": "chocolate",
+        },
+    )
+
+
 def test_is_delivery_only_inquiry_date_only_followup_with_session_city() -> None:
     """A bare date follow-up counts as delivery-only when a session city is known."""
     assert is_delivery_only_inquiry(

@@ -16,6 +16,7 @@
       return;
     }
     modal.hidden = false;
+    modal.classList.remove("pointer-events-none");
     modal.setAttribute("aria-hidden", "false");
     const keepButton = modal.querySelector("[data-new-session-keep]");
     keepButton?.focus();
@@ -27,6 +28,7 @@
       return;
     }
     modal.hidden = true;
+    modal.classList.add("pointer-events-none");
     modal.setAttribute("aria-hidden", "true");
   }
 
@@ -89,17 +91,42 @@
 
     const url = `/chat/new?keep_cart=${keepCart ? "true" : "false"}`;
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "HX-Request": "true" },
-        credentials: "same-origin",
-      });
-      if (!response.ok) {
-        throw new Error(`New session failed (${response.status})`);
+      // /chat/new returns OOB fragments (chat-messages + cart-panel), not a full page.
+      // Use HTMX ajax so OOB swaps apply; swapStyle none avoids replacing <body>.
+      if (window.htmx && typeof window.htmx.ajax === "function") {
+        await new Promise((resolve, reject) => {
+          const onSettle = (event) => {
+            cleanup();
+            resolve(event);
+          };
+          const onError = (event) => {
+            cleanup();
+            reject(event);
+          };
+          const cleanup = () => {
+            document.body.removeEventListener("htmx:afterSettle", onSettle);
+            document.body.removeEventListener("htmx:responseError", onError);
+          };
+          document.body.addEventListener("htmx:afterSettle", onSettle);
+          document.body.addEventListener("htmx:responseError", onError);
+          window.htmx.ajax("POST", url, {
+            target: "body",
+            swap: "none",
+            headers: { "HX-Request": "true" },
+          });
+        });
+      } else {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "HX-Request": "true" },
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error(`New session failed (${response.status})`);
+        }
+        const html = await response.text();
+        htmx.swap(document.body, html, { swapStyle: "none" });
       }
-
-      const html = await response.text();
-      htmx.swap(document.body, html, { swapStyle: "none" });
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
       );

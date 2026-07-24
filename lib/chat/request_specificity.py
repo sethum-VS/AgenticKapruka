@@ -355,12 +355,17 @@ def is_delivery_only_inquiry(
     )
     if delivery_score < 1.0 and not date_only_followup:
         return False
+    # Ignore sticky session flavor/focus when classifying delivery-only turns —
+    # otherwise a prior chocolate/cake thread bumps product_score to 0.5 via
+    # intent_metadata.session_flavor_hint and the turn wrongly re-enters search.
+    delivery_meta = dict(meta)
+    delivery_meta.pop("session_flavor_hint", None)
     product_score = _score_product_dimension(
         stripped,
         session_product_focus=None,
         session_flavor_hint=None,
         session_recipient_hint=None,
-        intent_metadata=meta,
+        intent_metadata=delivery_meta,  # type: ignore[arg-type]
     )
     occasion_score = _score_occasion_dimension(
         stripped,

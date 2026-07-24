@@ -1583,6 +1583,41 @@ async def test_agent_loop_rate_limit_retry_succeeds_without_tool_error() -> None
     assert mock_invoke.await_count == 3
 
 
+@pytest.mark.asyncio
+async def test_agent_loop_planner_rate_limit_exits_gracefully() -> None:
+    """NIM planner 429 finishes the turn with agent_tool_error instead of raising."""
+    import httpx
+    from openai import RateLimitError
+
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="birthday cakes under 5000")],
+    }
+    response = httpx.Response(429, request=httpx.Request("POST", "https://example.com"))
+    rate_limit_exc = RateLimitError(
+        "Rate limit exceeded",
+        response=response,
+        body=None,
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step",
+        new_callable=AsyncMock,
+        side_effect=rate_limit_exc,
+    ):
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    assert result["agent_loop_exit_reason"] == "tool_error"
+    assert result.get("agent_loop_done") is True
+    error = result.get("agent_tool_error") or {}
+    assert error.get("error") == "rate_limit_exceeded"
+
+
 def test_format_planner_hints_graph_degraded_adds_mcp_bias() -> None:
     """graph_degraded=True adds an MCP discovery bias hint."""
     from graphs.nodes.agent_loop import _format_planner_query_rewrite_hints

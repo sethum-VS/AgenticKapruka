@@ -6,7 +6,7 @@ In this tutorial you will start the assistant locally, search for a gift, view p
 
 - AgenticKapruka running locally (see [Developer setup](howto-developer-setup.md) if not yet installed)
 - A browser (Chrome, Firefox, or Safari)
-- Redis Stack, Neo4j, Zep, and Vertex AI credentials configured in `.env`
+- Redis Stack, Neo4j, Zep, and an `NVIDIA_API_KEY` configured in `.env`
 
 ## Step 1: Start the server
 
@@ -45,7 +45,7 @@ Within a few seconds, the assistant streams a reply. You may briefly see status 
 2. An assistant reply on the left with the Kapruka avatar
 3. A product carousel (if MCP and Neo4j are connected) with cake options in a 2-column grid, prices, and images
 
-**What just happened:** Your message passed the specificity gate, was classified as `discovery`, HybridRAG retrieved relevant cake categories from Neo4j, the agent loop called Kapruka MCP, product curation ranked birthday-appropriate cakes, and Gemini wrote a summary grounded in those results.
+**What just happened:** Your message passed the specificity gate, was classified as `discovery`, HybridRAG retrieved relevant cake categories from Neo4j, the agent loop called Kapruka MCP, product curation ranked birthday-appropriate cakes, and NIM wrote a summary grounded in those results.
 
 ## Step 4: Change currency (optional)
 
@@ -73,7 +73,7 @@ You now have:
 
 | Problem | Fix |
 | --- | --- |
-| Empty assistant reply | Check `/health` — MCP or Vertex AI may be down |
+| Empty assistant reply | Check `/health` — MCP or NIM may be down |
 | No product carousel | Verify `KAPRUKA_MCP_URL` and Neo4j connection in `.env` |
 | "Something went wrong" banner | Check terminal logs; Redis must be running with RediSearch |
-| Vertex AI auth error | Run `gcloud auth application-default login` |
+| NIM auth / 401 errors | Confirm `NVIDIA_API_KEY` in `.env` |

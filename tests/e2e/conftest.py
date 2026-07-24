@@ -61,8 +61,11 @@ def _free_e2e_port() -> None:
             except ValueError:
                 continue
         for pid in pids:
+            # ``/T`` also terminates child processes; a spawned worker can inherit
+            # and hold the listening socket, which would otherwise keep answering
+            # /health and mask a freshly started E2E server.
             subprocess.run(
-                ["taskkill", "/PID", str(pid), "/F"],
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
                 check=False,
                 capture_output=True,
             )

@@ -11,6 +11,13 @@
     @apply bg-canvas text-on-surface font-body-md;
   }
 
+  /* Tailwind `.flex` and HTML `[hidden]` share specificity; without !important the
+     utility wins and a "hidden" modal still intercepts clicks (E2E + real UI). */
+  #new-session-modal[hidden] {
+    display: none !important;
+    pointer-events: none !important;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
