@@ -21,8 +21,9 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 # ── Retry constants ──────────────────────────────────────────────────────────
-_MAX_RETRIES = 3
-_RETRY_BASE_DELAY = 2.0  # seconds (2s, 4s, 8s exponential)
+_MAX_RETRIES = 4
+_RETRY_BASE_DELAY = 2.0  # seconds (2s, 4s, 8s, 16s exponential)
+_RETRY_MAX_DELAY = 30.0  # cap any single backoff (incl. Retry-After) at 30s
 
 # ── Markdown fence stripper ──────────────────────────────────────────────────
 _JSON_FENCE_RE = re.compile(
@@ -63,6 +64,18 @@ def set_override_generate_content(func: Any) -> None:
     _override_generate_content = func
 
 
+def _retry_after_delay(exc: RateLimitError) -> float | None:
+    """Parse the Retry-After header (seconds) from a NIM 429 response."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get("retry-after")
+    if isinstance(raw, str) and raw.strip().isdigit():
+        return min(_RETRY_MAX_DELAY, max(1.0, float(raw.strip())))
+    return None
+
+
 async def generate_content(
     *,
     model: str | None = None,
@@ -99,6 +112,18 @@ async def generate_content(
     Parsed Pydantic model instance when ``response_schema`` is provided,
     otherwise a dict with ``{"content": str, "role": str}``.
     """
+    if _override_generate_content is not None:
+        # Test hook: bypass the live NIM client entirely.
+        return await _override_generate_content(
+            model=model,
+            messages=messages,
+            response_schema=response_schema,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            settings=settings,
+            seed=seed,
+        )
+
     cfg = settings or get_settings()
     resolved_model = model or cfg.nvidia_llm_model
     client = create_nvidia_client(settings=cfg)
@@ -158,7 +183,10 @@ async def generate_content(
         except RateLimitError as exc:
             last_exc = exc
             if attempt < _MAX_RETRIES - 1:
-                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                backoff = min(_RETRY_MAX_DELAY, _RETRY_BASE_DELAY * (2 ** attempt))
+                # Respect a server-provided Retry-After when it is longer than our backoff.
+                retry_after = _retry_after_delay(exc)
+                delay = max(backoff, retry_after) if retry_after is not None else backoff
                 logger.warning(
                     "generate_content: NVIDIA NIM 429 on attempt %d; retrying in %.1fs",
                     attempt + 1,

@@ -1552,6 +1552,28 @@ def _delivery_fee_reply_from_state(
         return None
 
 
+def _dated_delivery_reply_from_state(state: AgentState) -> str | None:
+    """Verified dated-delivery confirmation from tool_trace, independent of fee wording."""
+    invocation = _last_check_delivery_invocation(state.get("tool_trace"))
+    if invocation is None or _is_city_only_check_delivery(invocation):
+        return None
+    delivery = invocation.get("result")
+    if not isinstance(delivery, dict) or not delivery.get("available"):
+        return None
+    city = _canonical_city_from_check_delivery_invocation(invocation)
+    checked_date = delivery.get("checked_date")
+    rate = delivery.get("rate")
+    currency = delivery.get("currency") or "LKR"
+    if not city or not isinstance(checked_date, str) or not isinstance(rate, (int, float)):
+        return None
+    return _build_verified_dated_delivery_reply(
+        city=city,
+        checked_date=checked_date,
+        rate=float(rate),
+        currency=str(currency),
+    )
+
+
 def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> str | None:
     """Synthesize a checkout-step reply from run_checkout_graph tool_results."""
     if not tool_results:
@@ -2121,12 +2143,21 @@ async def generate_response(
     last_visible_products = list(state.get("last_visible_products") or [])
     pivot_meta = state.get("intent_metadata")
     topic_pivot = bool(pivot_meta.get("topic_pivot")) if isinstance(pivot_meta, dict) else False
+    session_delivery_city = state.get("session_delivery_city_canonical")
     delivery_only = is_delivery_only_inquiry(
         user_message,
         intent_metadata=pivot_meta,
+        session_delivery_city=(
+            session_delivery_city if isinstance(session_delivery_city, str) else None
+        ),
     )
     if delivery_only or is_delivery_fee_question(user_message):
         fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if not fee_reply and delivery_only:
+            # Date-only follow-ups ("next Sunday") aren't fee questions, but a dated
+            # check_delivery result should still confirm the date without re-dumping
+            # the prior carousel.
+            fee_reply = _dated_delivery_reply_from_state(state)
         if fee_reply:
             tool_trace = state.get("tool_trace")
             invocation = _last_check_delivery_invocation(tool_trace)

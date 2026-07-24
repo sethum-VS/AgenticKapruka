@@ -33,6 +33,15 @@ _CART_ADD_BARE_PATTERN = re.compile(
     r"^(?:please\s+)?add\s+(?:the\s+)?(.+?)(?:\s+(?:please|now|for\s+me))?\s*[.!?]?\s*$",
     re.I,
 )
+# Compound "show/find <product> and add that/it" — one utterance that both searches
+# and adds. Captures the named product so the deictic ("that"/"it") can be resolved
+# by searching first instead of refusing due to no prior carousel.
+_SEARCH_AND_ADD_PATTERN = re.compile(
+    r"\b(?:show|find|get|search(?:\s+for)?|look\s+for|see|pull\s+up)\s+"
+    r"(?:me\s+)?(?P<product>.+?)\s+and\s+(?:then\s+)?add\s+"
+    r"(?:that|it|this|them|those|one)\b",
+    re.I,
+)
 
 _TRACKING_GUARD_TOKENS: frozenset[str] = frozenset(
     (
@@ -170,7 +179,20 @@ def is_cart_add_trigger(message: str) -> bool:
         _CART_ADD_TO_PATTERN.search(text)
         or _CART_PUT_IN_PATTERN.search(text)
         or _CART_ADD_BARE_PATTERN.match(text)
+        or _SEARCH_AND_ADD_PATTERN.search(text)
     )
+
+
+def extract_search_and_add_phrase(message: str) -> str | None:
+    """Return the named product from a compound 'show <product> and add that' utterance."""
+    text = message.strip()
+    if not text:
+        return None
+    match = _SEARCH_AND_ADD_PATTERN.search(text)
+    if not match:
+        return None
+    phrase = match.group("product").strip(" .,!?:;\"'")
+    return phrase or None
 
 
 def extract_cart_product_phrase(message: str) -> str | None:
@@ -178,6 +200,11 @@ def extract_cart_product_phrase(message: str) -> str | None:
     text = message.strip()
     if not text:
         return None
+    # Compound "show <product> and add that" — prefer the named product over the
+    # deictic so the cart resolver can search for it directly.
+    compound = extract_search_and_add_phrase(text)
+    if compound:
+        return compound
     for pattern in (_CART_ADD_TO_PATTERN, _CART_PUT_IN_PATTERN):
         match = pattern.search(text)
         if match:

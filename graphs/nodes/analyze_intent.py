@@ -341,14 +341,49 @@ def _with_session_fields(
     return payload
 
 
+def _is_category_switch_pivot(state: AgentState, user_message: str) -> bool:
+    """True when the turn switches to a different product category than the session.
+
+    Complements is_topic_pivot_message (which needs an explicit "nevermind"/"instead"/
+    "what about" cue) so bare category switches like "fresh flowers" after an
+    anniversary-gift turn still clear stale budget/occasion context. This only widens
+    context clearing; it does NOT change the clarify-vs-search decision, since the
+    specificity scorer ignores topic_pivot and reads the pre-clear session state.
+    """
+    derived_focus = _derive_product_focus(user_message)
+    if derived_focus is None or derived_focus == "gift":
+        return False
+    prior_focus = state.get("session_product_focus")
+    if isinstance(prior_focus, str) and prior_focus.strip():
+        prior_norm = prior_focus.strip().lower()
+        if derived_focus == prior_norm:
+            return False
+        # Cake <-> chocolate is a same-family refinement, not a pivot.
+        if {derived_focus, prior_norm} <= {"cake", "chocolate"}:
+            return False
+        return True
+    # No prior focus: treat as a pivot when a sticky occasion is being abandoned
+    # (bare category turn that names no occasion of its own).
+    prior_occasion = state.get("session_occasion")
+    if (
+        isinstance(prior_occasion, str)
+        and prior_occasion.strip()
+        and _derive_session_occasion(user_message) is None
+    ):
+        return True
+    return False
+
+
 def _clear_budget_on_pivot(
     user_message: str,
     session_budget_max: float | None,
     session_budget_currency: CurrencyCode | None,
     intent_metadata: IntentMetadata,
+    *,
+    is_pivot: bool,
 ) -> tuple[float | None, CurrencyCode | None, IntentMetadata]:
     """Drop sticky budget when the customer pivots to a new product topic."""
-    if not is_topic_pivot_message(user_message):
+    if not is_pivot:
         return session_budget_max, session_budget_currency, intent_metadata
     if extract_budget(user_message) is not None:
         return session_budget_max, session_budget_currency, intent_metadata
@@ -361,9 +396,11 @@ def _clear_context_on_pivot(
     user_message: str,
     state: AgentState,
     intent_metadata: IntentMetadata,
+    *,
+    is_pivot: bool,
 ) -> tuple[IntentMetadata, dict[str, Any] | None, bool, dict[str, Any]]:
     """Drop sticky occasion/search seeds when the customer pivots without a new occasion."""
-    if not is_topic_pivot_message(user_message):
+    if not is_pivot:
         return intent_metadata, None, False, {}
 
     cleared_meta = cast(IntentMetadata, {**intent_metadata, "topic_pivot": True})
@@ -485,17 +522,25 @@ async def analyze_intent(
         user_message,
         intent_metadata,
     )
+    explicit_pivot = is_topic_pivot_message(user_message)
+    # Broader signal: bare category switches (e.g. "fresh flowers" after an
+    # anniversary-gift turn) clear stale occasion/search seeds too. Budget clearing
+    # stays gated on explicit pivots so implicit category changes keep the existing
+    # "still keeping under <budget>?" confirmation flow instead of silently dropping it.
+    context_pivot = explicit_pivot or _is_category_switch_pivot(state, user_message)
     session_budget_max, session_budget_currency, intent_metadata = _clear_budget_on_pivot(
         user_message,
         session_budget_max,
         session_budget_currency,
         intent_metadata,
+        is_pivot=explicit_pivot,
     )
     intent_metadata, hybrid_context_update, topic_pivot, pivot_session_clear = (
         _clear_context_on_pivot(
             user_message,
             state,
             intent_metadata,
+            is_pivot=context_pivot,
         )
     )
     budget_gift_meta, budget_hybrid_update, budget_gift_pivot, budget_session_clear = (

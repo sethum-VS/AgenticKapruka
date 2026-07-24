@@ -37,9 +37,11 @@ def route_after_resolve_delivery_context(state: AgentState) -> RouteAfterResolve
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if contains_product_id(user_message):
         return "call_mcp_tools"
+    session_city = state.get("session_delivery_city_canonical")
     if is_delivery_only_inquiry(
         user_message,
         intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
+        session_delivery_city=session_city if isinstance(session_city, str) else None,
     ):
         return "generate_response"
     return "agent_loop"

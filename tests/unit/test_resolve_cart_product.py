@@ -216,6 +216,49 @@ async def test_resolve_cart_product_cold_start_searches_mcp() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_cart_product_compound_search_and_add_searches_mcp() -> None:
+    """'Show X and add that' with no prior carousel searches for X, then resolves it."""
+    blush = ProductResult(
+        id="combo00blush001",
+        name="Blush Roses Combo Gift",
+        summary="Roses and chocolates.",
+        price=Money(amount=6500.0, currency="LKR"),
+        compare_at_price=None,
+        in_stock=True,
+        stock_level="high",
+        image_url=None,
+        category=CategoryRef(id="cat_combo", name="Combo", slug="combo"),
+        rating=None,
+        ships_internationally=False,
+        url="https://example.com/blush",
+    )
+    mock_service = AsyncMock()
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[blush],
+        next_cursor=None,
+        applied_filters={"q": "Blush Roses", "limit": 10, "in_stock_only": False},
+    )
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="Show Blush Roses and add that to cart")],
+        "session_id": "sess-cart-compound",
+        "currency": "LKR",
+    }
+
+    result = await resolve_cart_product(
+        state,
+        kapruka_service=mock_service,
+        client_ip="127.0.0.1",
+    )
+
+    action = result["cart_action_result"]
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00blush001"
+    mock_service.search_products.assert_awaited_once()
+    assert mock_service.search_products.await_args.kwargs["q"] == "Blush Roses"
+
+
+@pytest.mark.asyncio
 async def test_execute_cart_action_softens_live_stock_mismatch() -> None:
     from unittest.mock import patch
 

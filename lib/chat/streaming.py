@@ -19,6 +19,7 @@ from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_messa
 from lib.chat.sse import chunk_text, format_sse_event
 from lib.chat.status_copy import SEARCHING_CATALOG, THINKING
 from lib.debug.trace import trace_error, trace_node_update, trace_turn_complete
+from lib.genai.errors import is_rate_limited
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,9 @@ _TIMEOUT_MESSAGE = (
     "This is taking longer than expected. Please try again with a more specific question."
 )
 _CART_ERROR_FALLBACK = "I couldn't add that — try naming the product."
+_RATE_LIMIT_MESSAGE = (
+    "I'm getting a lot of requests right now — give me a moment and try that again."
+)
 
 
 def chat_turn_timeout_seconds() -> float:
@@ -215,6 +219,16 @@ async def iter_chat_sse_events(
         cart_message = _cart_error_message_from_state(partial_state)
         if cart_message:
             error_html = _render_streaming_assistant(cart_message, pending_id, oob=stream_started)
+            if stream_started:
+                error_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{error_html}'
+        elif is_rate_limited(exc):
+            # NIM 429 that escaped node-level handling: show friendly retry copy
+            # instead of the generic hard-error banner.
+            error_html = _render_streaming_assistant(
+                _RATE_LIMIT_MESSAGE,
+                pending_id,
+                oob=stream_started,
+            )
             if stream_started:
                 error_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{error_html}'
         else:

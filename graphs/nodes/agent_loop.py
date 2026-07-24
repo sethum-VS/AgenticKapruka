@@ -60,6 +60,7 @@ from lib.chat.status_copy import SEARCHING_CATALOG, long_search_status_message
 from lib.chat.support_faq import is_support_question
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.completions import generate_content
+from lib.genai.errors import is_rate_limited
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tool_executor import (
     canonical_tool_args_for_dedup,
@@ -1254,8 +1255,44 @@ async def _plan_next_step(
             raise ValueError(msg)
         return step
     except Exception as exc:
+        # Preserve rate-limit errors so the loop can degrade gracefully instead of
+        # hard-failing the turn (wrapping as ValueError would strip the type and
+        # trip the generic "Something went wrong" SSE error path).
+        if is_rate_limited(exc):
+            raise
         msg = f"NVIDIA NIM planner call failed: {exc}"
         raise ValueError(msg) from exc
+
+
+def _retry_after_seconds(exc: BaseException) -> int | None:
+    """Best-effort Retry-After (seconds) from a NIM rate-limit response."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get("retry-after")
+    if isinstance(raw, str) and raw.strip().isdigit():
+        return max(1, int(raw.strip()))
+    return None
+
+
+def _planner_rate_limit_error(exc: BaseException) -> dict[str, str]:
+    """Build an agent_tool_error dict so generate_response degrades gracefully.
+
+    A rate-limited planner call would otherwise escape agent_loop uncaught and be
+    rendered as the generic "Something went wrong" SSE error. Routing it through the
+    tool_error path lets generate_response show friendly rate-limit copy, reuse any
+    prior carousel products, and attach the retry banner.
+    """
+    error: dict[str, str] = {
+        "tool": SEARCH_PRODUCTS_TOOL,
+        "error": "rate_limit_exceeded",
+        "message": "NVIDIA NIM is temporarily rate limited.",
+    }
+    retry_after = _retry_after_seconds(exc)
+    if retry_after is not None:
+        error["retry_after_seconds"] = str(retry_after)
+    return error
 
 
 def _emit_status(message: str) -> None:
@@ -1676,9 +1713,15 @@ async def _try_agent_loop_fast_path(
             tool_call_count=base_tool_count,
         )
 
+    delivery_only_session_city = state.get("session_delivery_city_canonical")
     if is_delivery_only_inquiry(
         user_message,
         intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
+        session_delivery_city=(
+            delivery_only_session_city
+            if isinstance(delivery_only_session_city, str)
+            else None
+        ),
     ):
         if _trace_has_check_delivery(tool_trace):
             logger.debug(
@@ -2102,10 +2145,24 @@ async def agent_loop(
                 long_search_status_message(iteration=iteration, has_budget=has_budget),
             )
 
-        step = await _plan_next_step(
-            state=state,
-            tool_trace=tool_trace,
-        )
+        try:
+            step = await _plan_next_step(
+                state=state,
+                tool_trace=tool_trace,
+            )
+        except Exception as exc:
+            if not is_rate_limited(exc):
+                raise
+            logger.warning(
+                "agent_loop: planner rate limited at iteration %s; "
+                "finishing gracefully with rate-limit fallback",
+                iteration,
+                exc_info=True,
+            )
+            agent_tool_error = _planner_rate_limit_error(exc)
+            exit_reason = "tool_error"
+            agent_loop_done = True
+            break
         planner_iterations = iteration + 1
 
         if iteration == 0 and step.refined_intent in ("discovery", "general"):

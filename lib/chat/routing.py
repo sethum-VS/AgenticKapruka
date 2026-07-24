@@ -43,9 +43,11 @@ def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
         )
         return "generate_response"
     user_message = _extract_latest_user_message(state.get("messages") or [])
+    session_city = state.get("session_delivery_city_canonical")
     if is_delivery_only_inquiry(
         user_message,
         intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
+        session_delivery_city=session_city if isinstance(session_city, str) else None,
     ):
         trace_route_decision(
             from_node="analyze_intent",

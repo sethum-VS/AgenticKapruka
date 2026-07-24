@@ -310,29 +310,50 @@ def _meta_delivery_date(meta: IntentMetadata) -> str | None:
     return None
 
 
+def _known_delivery_city(
+    meta: IntentMetadata,
+    session_delivery_city: str | None,
+) -> str | None:
+    """Resolve a delivery city from the caller's session hint or this turn's metadata."""
+    if isinstance(session_delivery_city, str) and session_delivery_city.strip():
+        return session_delivery_city.strip()
+    target = meta.get("target_city")
+    if isinstance(target, str) and target.strip():
+        return target.strip()
+    return None
+
+
 def is_delivery_only_inquiry(
     message: str,
     *,
     intent_metadata: IntentMetadata | None = None,
+    session_delivery_city: str | None = None,
 ) -> bool:
     """True when the turn is only about delivery area/date/fees, not product discovery."""
+    from lib.chat.delivery_dates import is_delivery_date_only_message
     from lib.chat.query_preprocessor import (
         QueryPreprocessor,
         _has_perishable_gift_intent,
     )
 
     meta: IntentMetadata = intent_metadata or QueryPreprocessor().process(message)
-    if not meta.get("requires_delivery_validation"):
-        return False
     stripped = message.strip()
     if _has_perishable_gift_intent(stripped) or contains_product_id(stripped):
+        return False
+    # A date-only follow-up ("next Sunday") with a session-bound city is still
+    # delivery-only even though the message alone carries no city token — so
+    # requires_delivery_validation is False and _score_delivery_dimension can't
+    # see the city. Treat it as delivery-only using the caller's session city.
+    known_city = _known_delivery_city(meta, session_delivery_city)
+    date_only_followup = bool(known_city) and is_delivery_date_only_message(stripped)
+    if not meta.get("requires_delivery_validation") and not date_only_followup:
         return False
     delivery_score = _score_delivery_dimension(
         stripped,
         intent_metadata=meta,
         session_delivery_date=_meta_delivery_date(meta),
     )
-    if delivery_score < 1.0:
+    if delivery_score < 1.0 and not date_only_followup:
         return False
     product_score = _score_product_dimension(
         stripped,

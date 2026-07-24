@@ -266,9 +266,11 @@ def should_invoke_master_flow(
     ):
         return True, "checkout_active_with_discovery_intent"
 
+    session_city = state.get("session_delivery_city_canonical")
     if is_delivery_only_inquiry(
         user_message,
         intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
+        session_delivery_city=session_city if isinstance(session_city, str) else None,
     ):
         if _has_stale_discovery_context(state):
             return True, "delivery_only_with_stale_carousel"

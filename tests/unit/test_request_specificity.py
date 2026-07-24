@@ -2,20 +2,43 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from google import genai
 
 from lib.chat.request_specificity import (
     CLARIFY_THRESHOLD,
     PROCEED_THRESHOLD,
     SpecificityRefinement,
     SpecificityResult,
+    is_delivery_only_inquiry,
     refine_specificity_with_llm,
     score_request_specificity,
     should_bypass_specificity_scorer,
 )
+
+
+def test_is_delivery_only_inquiry_date_only_followup_with_session_city() -> None:
+    """A bare date follow-up counts as delivery-only when a session city is known."""
+    assert is_delivery_only_inquiry(
+        "next Sunday",
+        intent_metadata={},
+        session_delivery_city="Colombo",
+    )
+
+
+def test_is_delivery_only_inquiry_date_only_without_city_is_not_delivery_only() -> None:
+    """Without a known city, a bare date isn't a delivery-only turn."""
+    assert not is_delivery_only_inquiry("next Sunday", intent_metadata={})
+
+
+def test_is_delivery_only_inquiry_product_followup_not_delivery_only() -> None:
+    """A product request with a known session city is discovery, not delivery-only."""
+    assert not is_delivery_only_inquiry(
+        "show me chocolate cakes",
+        intent_metadata={},
+        session_delivery_city="Colombo",
+    )
 
 
 def test_vague_gift_ideas_clarifies_product() -> None:
@@ -210,17 +233,16 @@ async def test_llm_refine_fallback_to_clarify_on_non_client() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_refine_proceed_when_model_scores_high() -> None:
-    mock_client = MagicMock(spec=genai.Client)
-    response = MagicMock()
-    response.parsed = SpecificityRefinement(
-        score=85.0,
-        product_score=1.0,
-        occasion_score=0.5,
-        budget_score=0.0,
-        missing_dimension=None,
-        band="proceed",
+    mock_generate = AsyncMock(
+        return_value=SpecificityRefinement(
+            score=85.0,
+            product_score=1.0,
+            occasion_score=0.5,
+            budget_score=0.0,
+            missing_dimension=None,
+            band="proceed",
+        ),
     )
-    mock_client.models.generate_content.return_value = response
     heuristic = SpecificityResult(
         score=35.0,
         dimension_scores={"product": 0.5, "occasion": 0.0, "budget": 0.5},
@@ -228,13 +250,15 @@ async def test_llm_refine_proceed_when_model_scores_high() -> None:
         band="ambiguous",
         clarifying_question=None,
     )
-    refined = await refine_specificity_with_llm(
-        "something nice for a friend",
-        heuristic,
-        genai_client=mock_client,
-    )
+    with patch("lib.chat.request_specificity.generate_content", mock_generate):
+        refined = await refine_specificity_with_llm(
+            "something nice for a friend",
+            heuristic,
+            genai_client=MagicMock(),
+        )
     assert refined.band == "proceed"
     assert refined.score >= PROCEED_THRESHOLD
+    mock_generate.assert_awaited_once()
 
 
 # P1-5 regression: "I want to buy something nice" must NOT inherit stale session context
