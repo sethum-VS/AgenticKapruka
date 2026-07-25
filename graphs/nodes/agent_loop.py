@@ -41,6 +41,7 @@ from lib.chat.product_curation import (
     has_graph_hybrid_context,
     is_cake_accessory,
     is_flower_fruit_intent,
+    refine_last_search_by_budget,
 )
 from lib.chat.product_detail import (
     is_delivery_fee_question,
@@ -95,7 +96,8 @@ MAX_ITERATIONS = 3
 GRAPH_HINTS_MAX_ITERATIONS = 2
 UTILITY_GENERAL_MAX_ITERATIONS = 2
 CONFIDENT_DISCOVERY_MAX_ITERATIONS = 1
-BUDGETED_GIFT_SEARCH_CONCURRENCY = 3
+BUDGETED_GIFT_SEARCH_CONCURRENCY = 2
+BUDGET_REFINEMENT_IN_MEMORY_MIN = 3
 PLANNER_MODEL = FLASH_MODEL
 
 ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
@@ -602,18 +604,22 @@ def _should_run_situational_flowers_search(
     *,
     already_ran: bool,
 ) -> bool:
-    """True when a distress turn names flowers and needs a deterministic search."""
+    """True when a distress turn should auto-search apology/sympathy flowers."""
     if already_ran:
         return False
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     if not intent_metadata.get("is_situational"):
         return False
-    return bool(_FLOWERS_REQUEST.search(user_message))
+    # Proactively show apology flowers even when the shopper did not name a product.
+    return True
 
 
 def _situational_flowers_search_args(user_message: str) -> dict[str, Any]:
     """Build iteration-0 search args for situational flower/apology turns."""
-    query = "apology flowers" if _APOLOGY_PATTERN.search(user_message) else "roses bouquet"
+    if _APOLOGY_PATTERN.search(user_message) or not _FLOWERS_REQUEST.search(user_message):
+        query = "apology flowers"
+    else:
+        query = "roses bouquet"
     return {"q": query, "category": "Flowers"}
 
 
@@ -664,9 +670,18 @@ async def _invoke_tool_with_rate_limit_retry(
     kapruka_service: KaprukaService,
     client_ip: str,
     currency: str | None,
-    max_retries: int = 2,
+    max_retries: int | None = None,
 ) -> dict[str, Any]:
     """Retry Kapruka MCP reads on rate limit with backoff and status SSE."""
+    from lib.genai.completions import seconds_until_deadline
+
+    if max_retries is None:
+        remaining = seconds_until_deadline()
+        # Under deadline pressure, skip 429 backoff so the turn can still finish.
+        if remaining is not None and remaining < 30.0:
+            max_retries = 0
+        else:
+            max_retries = 2
     result: dict[str, Any] = {}
     for attempt in range(max_retries + 1):
         _emit_status(_status_message_for_tool(tool_name))
@@ -1028,9 +1043,10 @@ def _format_planner_query_rewrite_hints(
     bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
     if bare_focus:
         hints.append(
-            "Topic pivot with bare category only: prefer action ask_user with a short clarifying "
-            "question (who is it for / occasion) OR kapruka_search_products with literal q "
-            f'(e.g. "{bare_focus}s" → q="{bare_focus}") — do not inherit prior occasion context.'
+            "Topic pivot with bare category: prefer action call_tool with "
+            f'kapruka_search_products using literal q="{bare_focus}" '
+            f'(or q="fresh flowers" when the customer said flowers) — do not inherit '
+            "prior occasion context. Only ask_user if search returns no products."
         )
     if session_product_focus == "cake" and _FLORAL_DESIGN.search(user_message):
         hints.append(
@@ -1085,11 +1101,26 @@ def _format_planner_query_rewrite_hints(
             f'(2) q="gift hamper" max_price={budget_max} — before ask_user.'
         )
     if _FLOWERS_REQUEST.search(user_message):
-        hints.append(
-            "Flowers/roses/bouquet request: prefer kapruka_search_products q emphasizing "
-            "fresh cut roses or bouquets. If results are only silk, artificial, soap, or "
-            "paper florals, try one broader fresh-flowers search before finish."
+        color_match = re.search(
+            r"\b(blush|pink|red|white|yellow|purple|lavender)\b",
+            user_message,
+            re.I,
         )
+        if color_match:
+            color = color_match.group(1).lower()
+            flower = "roses" if re.search(r"\broses?\b", user_message, re.I) else "flowers"
+            hints.append(
+                f"Color+flower request: prefer kapruka_search_products with literal "
+                f'q="{color} {flower}" and category="Flowers" — do not rewrite to generic '
+                "fresh cut roses. If top results lack the color modifier, retry once with "
+                "the same literal q before finish."
+            )
+        else:
+            hints.append(
+                "Flowers/roses/bouquet request: prefer kapruka_search_products q emphasizing "
+                "fresh cut roses or bouquets. If results are only silk, artificial, soap, or "
+                "paper florals, try one broader fresh-flowers search before finish."
+            )
     if is_flower_fruit_intent(user_message):
         puja_avoid = (
             "Flower/fruit request: avoid puja, pooja, watti, and religious offering products; "
@@ -1315,6 +1346,50 @@ def _emit_status(message: str) -> None:
         writer({"type": "status", "message": message})
 
 
+def _emit_provisional_carousel(
+    products: list[dict[str, Any]],
+    *,
+    state: AgentState,
+    user_message: str,
+) -> None:
+    """Stream a provisional product carousel before generate_response finishes."""
+    if not products:
+        return
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        return
+    if writer is None:
+        return
+    try:
+        from graphs.nodes.generate_response import (
+            build_products_carousel_html,
+            render_carousel_oob_html,
+        )
+    except Exception:  # noqa: BLE001 — never fail the turn on provisional UI
+        return
+    budget_max = state.get("session_budget_max")
+    currency = str(state.get("currency") or "LKR")
+    products_html = build_products_carousel_html(
+        {"kapruka_search_products": {"results": products}},
+        budget_max=float(budget_max) if isinstance(budget_max, (int, float)) else None,
+        currency=currency,
+        user_message=user_message,
+        session_product_focus=state.get("session_product_focus")
+        if isinstance(state.get("session_product_focus"), str)
+        else None,
+        last_search_products=products,
+        visible_products=products,
+        allow_stale_fallback=False,
+    )
+    if not products_html:
+        return
+    # Fixed provisional slot so OOB can update; streaming also appends if missing.
+    slot_id = "carousel-slot-provisional"
+    carousel_oob = render_carousel_oob_html(products_html, carousel_slot_id=slot_id)
+    writer({"type": "carousel", "html": carousel_oob, "slot_id": slot_id})
+
+
 def _status_message_for_tool(tool_name: str) -> str:
     return _TOOL_STATUS_MESSAGES.get(tool_name, _DEFAULT_STATUS_MESSAGE)
 
@@ -1530,6 +1605,102 @@ async def _retry_anniversary_search_if_empty(
     return result, enriched_args, extra_trace, extra_calls
 
 
+def _literal_color_flower_query(user_message: str) -> str | None:
+    """Return literal 'blush roses'-style q when the customer named color+flower."""
+    match = re.search(
+        r"\b(blush|pink|red|white|yellow|purple|lavender)\s+"
+        r"(roses?|flowers?|bouquets?)\b",
+        user_message,
+        re.I,
+    )
+    if not match:
+        return None
+    color = match.group(1).lower()
+    flower = match.group(2).lower()
+    if flower.startswith("rose"):
+        flower = "roses"
+    elif flower.startswith("flower"):
+        flower = "flowers"
+    else:
+        flower = "bouquet"
+    return f"{color} {flower}"
+
+
+def _top_results_lack_color_modifier(
+    result: dict[str, Any],
+    *,
+    color: str,
+    limit: int = 5,
+) -> bool:
+    """True when none of the top search hits mention the requested color."""
+    raw = result.get("results")
+    if not isinstance(raw, list) or not raw:
+        return True
+    color_re = re.compile(rf"\b{re.escape(color)}\b", re.I)
+    for item in raw[:limit]:
+        if not isinstance(item, dict):
+            continue
+        blob = f"{item.get('name') or ''} {item.get('summary') or ''}"
+        if color_re.search(blob):
+            return False
+    return True
+
+
+async def _maybe_retry_literal_color_flower_search(
+    result: dict[str, Any],
+    enriched_args: dict[str, Any],
+    *,
+    state: AgentState,
+    user_message: str,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[ToolInvocation], int]:
+    """One-shot retry with literal color+flower q when top hits miss the color."""
+    literal_q = _literal_color_flower_query(user_message)
+    if not literal_q:
+        return result, enriched_args, tool_trace, 0
+    color = literal_q.split()[0]
+    if not _top_results_lack_color_modifier(result, color=color):
+        return result, enriched_args, tool_trace, 0
+    current_q = str(enriched_args.get("q") or "").strip().lower()
+    if current_q == literal_q:
+        # Already searched literally — still weak; nothing more to do.
+        if _search_has_products(result):
+            return result, enriched_args, tool_trace, 0
+    retry_args = _inject_tool_currency(
+        SEARCH_PRODUCTS_TOOL,
+        {
+            **enriched_args,
+            "q": literal_q,
+            "category": "Flowers",
+            "sort": "relevance",
+        },
+        state,
+        currency,
+    )
+    if _is_duplicate_invocation(tool_trace, SEARCH_PRODUCTS_TOOL, retry_args):
+        return result, enriched_args, tool_trace, 0
+    _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+    retry_result = await _invoke_tool_with_rate_limit_retry(
+        SEARCH_PRODUCTS_TOOL,
+        retry_args,
+        kapruka_service=kapruka_service,
+        client_ip=rate_limit_key,
+        currency=currency,
+        max_retries=0,
+    )
+    retry_result = _curate_search_trace_result(retry_result, state=state)
+    updated_trace = [
+        *tool_trace,
+        {"name": SEARCH_PRODUCTS_TOOL, "args": retry_args, "result": retry_result},
+    ]
+    if _search_has_products(retry_result):
+        return retry_result, retry_args, updated_trace, 1
+    return result, enriched_args, updated_trace, 1
+
+
 async def _try_confident_discovery_fast_path(
     state: AgentState,
     *,
@@ -1604,6 +1775,21 @@ async def _try_confident_discovery_fast_path(
         *tool_trace,
         {"name": SEARCH_PRODUCTS_TOOL, "args": enriched_args, "result": result},
     ]
+    (
+        result,
+        enriched_args,
+        working_trace,
+        color_extra,
+    ) = await _maybe_retry_literal_color_flower_search(
+        result,
+        enriched_args,
+        state=state,
+        user_message=user_message,
+        tool_trace=working_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
     result, enriched_args, tool_trace, retry_calls = await _retry_anniversary_search_if_empty(
         result,
         enriched_args,
@@ -1614,6 +1800,7 @@ async def _try_confident_discovery_fast_path(
         rate_limit_key=rate_limit_key,
         currency=currency,
     )
+    retry_calls += color_extra
     # Broaden once when primary (and anniversary) search returned 0 — strips
     # poisoned category filters like "Chocolate And Fashion".
     if not _search_has_products(result):
@@ -1920,12 +2107,9 @@ async def agent_loop(
             }
             merged_result: dict[str, Any] = {"results": []}
             physical_queries = _budgeted_gift_physical_queries(user_message)
-            search_sem = asyncio.Semaphore(BUDGETED_GIFT_SEARCH_CONCURRENCY)
             _emit_status(_status_message_for_tool(tool_name))
 
-            async def _run_budgeted_physical_query(
-                physical_q: str,
-            ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+            for physical_q in physical_queries[:BUDGETED_GIFT_SEARCH_CONCURRENCY]:
                 physical_args = _inject_tool_currency(
                     tool_name,
                     {**base_args, "q": physical_q},
@@ -1933,31 +2117,15 @@ async def agent_loop(
                     currency,
                 )
                 if _is_duplicate_invocation(tool_trace, tool_name, physical_args):
-                    return physical_args, None
-                async with search_sem:
-                    physical_result = await _invoke_tool_with_rate_limit_retry(
-                        tool_name,
-                        physical_args,
-                        kapruka_service=kapruka_service,
-                        client_ip=rate_limit_key,
-                        currency=currency,
-                    )
+                    continue
+                physical_result = await _invoke_tool_with_rate_limit_retry(
+                    tool_name,
+                    physical_args,
+                    kapruka_service=kapruka_service,
+                    client_ip=rate_limit_key,
+                    currency=currency,
+                )
                 physical_result = _curate_search_trace_result(physical_result, state=state)
-                return physical_args, physical_result
-
-            physical_pairs = await asyncio.gather(
-                *[
-                    _run_budgeted_physical_query(physical_q)
-                    for physical_q in physical_queries[:BUDGETED_GIFT_SEARCH_CONCURRENCY]
-                ],
-                return_exceptions=True,
-            )
-            for pair in physical_pairs:
-                if isinstance(pair, BaseException):
-                    continue
-                physical_args, physical_result = pair
-                if physical_result is None:
-                    continue
                 tool_trace.append(
                     {"name": tool_name, "args": physical_args, "result": physical_result},
                 )
@@ -2027,6 +2195,61 @@ async def agent_loop(
             )
         ):
             tool_name = SEARCH_PRODUCTS_TOOL
+            # Zero-MCP path: filter the prior carousel in memory when enough
+            # in-budget, in-focus items already exist.
+            prior_products = [
+                item
+                for item in (
+                    list(state.get("last_search_products") or [])
+                    or list(state.get("last_visible_products") or [])
+                )
+                if isinstance(item, dict)
+            ]
+            budget_max_val = state.get("session_budget_max")
+            if (
+                prior_products
+                and isinstance(budget_max_val, (int, float))
+                and budget_max_val > 0
+            ):
+                refined_in_memory = refine_last_search_by_budget(
+                    prior_products,
+                    budget_max=float(budget_max_val),
+                    currency=currency,
+                    session_product_focus=state.get("session_product_focus")
+                    if isinstance(state.get("session_product_focus"), str)
+                    else None,
+                    session_search_query=state.get("session_search_query")
+                    if isinstance(state.get("session_search_query"), str)
+                    else None,
+                    session_recipient_hint=state.get("session_recipient_hint")
+                    if isinstance(state.get("session_recipient_hint"), str)
+                    else None,
+                    user_message=user_message,
+                    hybrid_context=state.get("hybrid_context")
+                    if isinstance(state.get("hybrid_context"), dict)
+                    else None,
+                )
+                if refined_in_memory and len(refined_in_memory) >= BUDGET_REFINEMENT_IN_MEMORY_MIN:
+                    budget_refinement_search_applied = True
+                    synthetic_args = dict(budget_refinement_args)
+                    synthetic_result: dict[str, Any] = {"results": refined_in_memory}
+                    tool_trace.append(
+                        {
+                            "name": tool_name,
+                            "args": synthetic_args,
+                            "result": synthetic_result,
+                        },
+                    )
+                    tool_call_count += 1
+                    _emit_provisional_carousel(
+                        refined_in_memory,
+                        state=state,
+                        user_message=user_message,
+                    )
+                    exit_reason = "finish"
+                    agent_loop_done = True
+                    break
+
             enriched_args = _inject_tool_currency(
                 tool_name,
                 dict(budget_refinement_args),
@@ -2098,6 +2321,18 @@ async def agent_loop(
                 exit_reason = "tool_error"
                 agent_loop_done = True
                 break
+            if _search_has_products(result):
+                mcp_products = [
+                    item
+                    for item in (result.get("results") or [])
+                    if isinstance(item, dict)
+                ]
+                if mcp_products:
+                    _emit_provisional_carousel(
+                        mcp_products,
+                        state=state,
+                        user_message=user_message,
+                    )
             if _search_has_products(result) and _should_force_finish_after_search(
                 state,
                 tool_trace,
@@ -2735,6 +2970,11 @@ async def agent_loop(
             updates["last_search_products"] = prior
         else:
             updates["last_search_products"] = last_search_products
+            _emit_provisional_carousel(
+                last_search_products,
+                state=state,
+                user_message=user_message,
+            )
     elif state.get("last_search_products"):
         updates["last_search_products"] = state["last_search_products"]
 

@@ -64,6 +64,10 @@ _FLORAL_DESIGN = re.compile(r"\b(?:floral|design|designs)\b", re.I)
 _GIFT_FOCUS = re.compile(r"\b(?:gift|voucher|hamper)s?\b", re.I)
 _TEA_FOCUS = re.compile(r"\b(?:tea|teas)\b", re.I)
 _CHOCOLATE_FOCUS = re.compile(r"\b(?:chocolate|chocolates|cocoa|choco)\b", re.I)
+_FLOWER_COLOR_FOCUS = re.compile(
+    r"\b(blush|pink|red|white|yellow|purple|lavender)\b",
+    re.I,
+)
 _COMBO_FOCUS = re.compile(r"\b(?:combo|combopack)\b", re.I)
 _OCCASION_FOCUS = re.compile(
     r"\b(?:birthday|anniversary|wedding|valentine|graduation|new baby|baby shower)\b",
@@ -156,9 +160,13 @@ def _derive_product_focus(user_message: str) -> str | None:
 
 
 def _derive_flavor_hint(user_message: str) -> str | None:
-    """Capture flavor modifiers (e.g. chocolate) even when cake wins product focus."""
-    if _CHOCOLATE_FOCUS.search(user_message.strip()):
+    """Capture flavor/color modifiers even when another product focus wins."""
+    stripped = user_message.strip()
+    if _CHOCOLATE_FOCUS.search(stripped):
         return "chocolate"
+    color = _FLOWER_COLOR_FOCUS.search(stripped)
+    if color and _FLOWERS_FOCUS.search(stripped):
+        return color.group(1).lower()
     return None
 
 
@@ -191,7 +199,7 @@ def _resolve_session_occasion(state: AgentState, user_message: str) -> str | Non
     derived = _derive_session_occasion(user_message)
     if derived is not None:
         return derived
-    if is_topic_pivot_message(user_message):
+    if is_topic_pivot_message(user_message) or _is_category_switch_pivot(state, user_message):
         return None
     prior = state.get("session_occasion")
     if isinstance(prior, str) and prior.strip():
@@ -777,9 +785,9 @@ async def analyze_intent(
     if not should_bypass_specificity_scorer(user_message, guard_intent=None):
         specificity = score_request_specificity(
             user_message,
-            session_product_focus=state.get("session_product_focus"),
-            session_occasion=state.get("session_occasion"),
-            session_recipient_hint=state.get("session_recipient_hint"),
+            session_product_focus=session_product_focus,
+            session_occasion=session_occasion,
+            session_recipient_hint=session_recipient_hint,
             session_budget_max=session_budget_max,
             session_flavor_hint=session_flavor_hint,
             intent_metadata=intent_metadata,
@@ -789,9 +797,9 @@ async def analyze_intent(
                 user_message,
                 specificity,
                 genai_client=genai_client,
-                session_product_focus=state.get("session_product_focus"),
-                session_occasion=state.get("session_occasion"),
-                session_recipient_hint=state.get("session_recipient_hint"),
+                session_product_focus=session_product_focus,
+                session_occasion=session_occasion,
+                session_recipient_hint=session_recipient_hint,
                 session_budget_max=session_budget_max,
                 intent_metadata=intent_metadata,
             )

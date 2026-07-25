@@ -179,11 +179,10 @@ def resolve_product_reference(
             "status": "resolved",
             "product": products[0],
         }
+    # Prefer the first visible carousel item for deictic "that"/"this"/"it".
     return {
-        "status": "clarify",
-        "product": None,
-        "clarifying_question": _numbered_clarify(products),
-        "candidates": products[:5],
+        "status": "resolved",
+        "product": products[0],
     }
 
 

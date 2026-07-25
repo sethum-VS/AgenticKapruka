@@ -1128,17 +1128,16 @@ def build_apology_suggestion_chips_html() -> str:
 
 
 def _should_offer_apology_chips(state: AgentState, user_message: str) -> bool:
-    """True for situational distress turns that have not yet named flowers."""
+    """True for situational distress turns — chips refine apology flower picks."""
     intent_metadata = state.get("intent_metadata") or {}
     if not isinstance(intent_metadata, dict) or not intent_metadata.get("is_situational"):
         return False
+    # When the shopper already named flowers, chips are redundant.
     if re.search(
         r"\b(?:flower|flowers|rose|roses|bouquet|bouquets|floral)\b",
         user_message,
         re.I,
     ):
-        return False
-    if _turn_search_has_products(state.get("tool_trace")):
         return False
     return True
 

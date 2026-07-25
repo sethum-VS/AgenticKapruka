@@ -358,7 +358,7 @@
   }
 
   const STREAM_TROUBLE_MESSAGE =
-    "I'm having trouble right now — please try again in a moment.";
+    "That took too long — please try again. Your last results are still above if you want to refine the budget or pick another gift.";
 
   function showStreamFailureMessage() {
     appendStreamNoticeMessage("chat-stream-error", STREAM_TROUBLE_MESSAGE);

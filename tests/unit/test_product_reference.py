@@ -60,23 +60,33 @@ def test_resolve_deictic_multi_clarify_normalizes_mojibake_apostrophe() -> None:
         last_search_products=[mojibake, _RED],
     )
     assert result is not None
-    assert result["status"] == "clarify"
-    question = result.get("clarifying_question") or ""
-    assert "â€™" not in question
-    assert "Men's" in question
+    # Multi-product deictic prefers the first visible item.
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "gift-mens"
 
 
-def test_resolve_deictic_multi_clarify() -> None:
+def test_resolve_deictic_multi_prefers_first_visible() -> None:
+    """Deictic 'that' defaults to the first visible carousel item."""
     result = resolve_product_reference(
         "that",
         last_visible_products=[_BLUSH, _RED],
         last_search_products=[_BLUSH, _RED],
     )
     assert result is not None
-    assert result["status"] == "clarify"
-    assert result["clarifying_question"] is not None
-    assert "1)" in result["clarifying_question"]
-    assert "2)" in result["clarifying_question"]
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "a"
+
+
+def test_resolve_deictic_add_that_to_cart_phrase() -> None:
+    """Natural-language cart add resolves deictic against visible products."""
+    result = resolve_product_reference(
+        "that",
+        last_visible_products=[_BLUSH],
+        last_search_products=[_BLUSH, _RED],
+    )
+    assert result is not None
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "a"
 
 
 def test_resolve_ordinal_uses_visible_products() -> None:

@@ -54,16 +54,22 @@ def turn_deadline(seconds: float) -> Iterator[None]:
         _turn_deadline_monotonic.reset(token)
 
 
-def _seconds_until_deadline() -> float | None:
+def seconds_until_deadline() -> float | None:
+    """Seconds remaining before the chat-turn wall-clock deadline, if set."""
     deadline = _turn_deadline_monotonic.get()
     if deadline is None:
         return None
     return deadline - time.monotonic()
 
 
+def _seconds_until_deadline() -> float | None:
+    """Backward-compatible alias for :func:`seconds_until_deadline`."""
+    return seconds_until_deadline()
+
+
 def _should_abort_retry(*, reserve_seconds: float) -> bool:
     """True when fewer than reserve_seconds remain before the turn deadline."""
-    remaining = _seconds_until_deadline()
+    remaining = seconds_until_deadline()
     if remaining is None:
         return False
     return remaining < reserve_seconds

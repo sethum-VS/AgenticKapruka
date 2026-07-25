@@ -1049,7 +1049,11 @@ def build_budget_refinement_search_args(
     intent_metadata = state.get("intent_metadata") or {}
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
     budget_gift_discovery = bool(intent_metadata.get("budgeted_gift_discovery"))
-    if budget_gift_discovery or topic_pivot:
+    # Budget-only refinements must still run even if a soft pivot flag leaked in
+    # (e.g. historical "Actually, under 6000" turns). Fresh gift discovery stays blocked.
+    if budget_gift_discovery:
+        return None
+    if topic_pivot and not is_budget_refinement_message(user_message):
         return None
 
     session_q = state.get("session_search_query")
@@ -1468,9 +1472,49 @@ def build_discovery_search_args(
     if topic_pivot and bare_focus == "cake":
         return {"q": "cake", "currency": currency}
     if topic_pivot and bare_focus == "flowers":
-        return {"q": "flowers", "currency": currency}
+        # Prefer the customer's wording when they said "fresh flowers" etc.
+        lowered = query.lower()
+        flower_q = "fresh flowers" if "fresh" in lowered else "flowers"
+        return {"q": flower_q, "currency": currency, "category": "Flowers"}
     if topic_pivot and bare_focus == "chocolate":
         return {"q": "chocolate", "currency": currency}
+
+    # Literal color+flower queries (blush roses) — do not expand to generic fresh roses.
+    color_flower = re.search(
+        r"\b(blush|pink|red|white|yellow|purple|lavender)\s+"
+        r"(roses?|flowers?|bouquets?)\b",
+        query,
+        re.I,
+    )
+    if color_flower:
+        color = color_flower.group(1).lower()
+        flower = color_flower.group(2).lower()
+        if flower.startswith("rose"):
+            flower = "roses"
+        elif flower.startswith("flower"):
+            flower = "flowers"
+        else:
+            flower = "bouquet"
+        # Keep trailing modifiers like "combo" when present in the customer message.
+        literal_q = f"{color} {flower}"
+        if re.search(r"\bcombo\b", query, re.I):
+            literal_q = f"{literal_q} combo"
+        args = {
+            "q": literal_q,
+            "currency": currency,
+            "category": "Flowers",
+        }
+        budget_cap = extract_budget(query)
+        if budget_cap is not None:
+            args["max_price"] = budget_cap.amount
+            args["sort"] = _budget_search_sort(query)
+            args["currency"] = budget_cap.currency
+        else:
+            max_price = _extract_max_price(query)
+            if max_price is not None:
+                args["max_price"] = max_price
+                args["sort"] = _budget_search_sort(query)
+        return args
 
     if is_broad_cakes_query(query) and not topic_pivot:
         query = "birthday cake"

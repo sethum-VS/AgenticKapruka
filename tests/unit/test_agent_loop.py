@@ -1568,6 +1568,9 @@ async def test_agent_loop_topic_pivot_nevermind_cakes_skips_planner() -> None:
     assert result["agent_loop_exit_reason"] == "finish"
     assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
 
+
+@pytest.mark.asyncio
+async def test_agent_loop_situational_apology_flowers_skips_planner() -> None:
     """Breakup + apology flowers invokes kapruka_search_products before the planner."""
     mock_service = _mock_kapruka_service()
     state: AgentState = {
@@ -1601,6 +1604,75 @@ async def test_agent_loop_topic_pivot_nevermind_cakes_skips_planner() -> None:
     assert result["agent_loop_exit_reason"] == "finish"
     assert len(result["tool_trace"]) == 1
     assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_situational_breakup_without_flowers_still_searches() -> None:
+    """Distress turns without naming flowers still auto-search apology flowers."""
+    mock_service = _mock_kapruka_service()
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="I broke up with my girlfriend…")],
+        "intent_metadata": {"is_situational": True},
+    }
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step",
+        side_effect=[AgentPlannerStep(action="ask_user", rationale="noop")],
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_not_called()
+    assert mock_service.search_products.await_count == 1
+    assert mock_service.search_products.await_args.kwargs["q"] == "apology flowers"
+    assert result["agent_loop_exit_reason"] == "finish"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_budget_refinement_in_memory_skips_mcp() -> None:
+    """Prior carousel with enough in-budget items finishes without MCP search."""
+    mock_service = _mock_kapruka_service()
+    prior = [
+        {
+            "id": f"choc{i:03d}",
+            "name": f"Chocolate Gift {i}",
+            "price": {"amount": 1000.0 * i, "currency": "LKR"},
+            "in_stock": True,
+            "category": {"name": "Chocolates"},
+        }
+        for i in (1, 2, 3, 4, 25)
+    ]
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="Actually, keep it under 6000 rupees.")],
+        "session_product_focus": "chocolate",
+        "session_search_query": "chocolate gift",
+        "session_budget_max": 6000.0,
+        "session_flavor_hint": "chocolate",
+        "intent_metadata": {"budget_max": 6000.0},
+        "last_search_products": prior,
+    }
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step",
+        side_effect=[AgentPlannerStep(action="ask_user", rationale="noop")],
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_not_called()
+    mock_service.search_products.assert_not_awaited()
+    assert result["agent_loop_exit_reason"] == "finish"
+    products = result.get("last_search_products") or []
+    assert len(products) >= 3
+    assert all(
+        (p.get("price") or {}).get("amount", 0) <= 6000 for p in products
+    )
 
 
 def test_delivery_check_pending_false_on_breakup_with_session_city() -> None:

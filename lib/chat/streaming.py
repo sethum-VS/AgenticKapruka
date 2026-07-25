@@ -26,7 +26,8 @@ from lib.genai.errors import is_rate_limited
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_MESSAGE = (
-    "I'm having trouble right now — please try again in a moment."
+    "That took too long — please try again. Your last results are still above "
+    "if you want to refine the budget or pick another gift."
 )
 _TIMEOUT_PARTIAL_MESSAGE = (
     "Here are options that match what I found so far — "
@@ -275,6 +276,18 @@ async def iter_chat_sse_events(
                                     oob=True,
                                 )
                                 yield format_sse_event(status_html, event="status")
+                        elif isinstance(payload, dict) and payload.get("type") == "carousel":
+                            carousel_html = payload.get("html")
+                            if isinstance(carousel_html, str) and carousel_html.strip():
+                                # Ensure a provisional slot exists so OOB outerHTML can land.
+                                slot_id = str(payload.get("slot_id") or "carousel-slot-provisional")
+                                seed = (
+                                    f'<div id="{slot_id}" class="assistant-products mt-4" '
+                                    f'data-slot="product-carousel" role="region" '
+                                    f'aria-label="Suggested products"></div>'
+                                )
+                                yield format_sse_event(seed)
+                                yield format_sse_event(carousel_html, event="carousel")
                         continue
 
                     if mode != "updates" or not isinstance(payload, dict):

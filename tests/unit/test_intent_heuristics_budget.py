@@ -27,6 +27,12 @@ def test_is_topic_pivot_message_nevermind_cakes() -> None:
     assert not is_topic_pivot_message("cakes")
 
 
+def test_is_topic_pivot_message_rejects_budget_only_actually() -> None:
+    """Budget refinements that start with Actually are not topic pivots."""
+    assert not is_topic_pivot_message("Actually, keep it under 6000 rupees.")
+    assert is_budget_refinement_message("Actually, keep it under 6000 rupees.")
+
+
 def test_is_topic_pivot_message_rejects_full_request() -> None:
     assert not is_topic_pivot_message("birthday cake for mom under 5000")
 

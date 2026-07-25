@@ -114,9 +114,11 @@ async def test_resolve_delivery_context_ambiguous_colombo_clarifies() -> None:
         )
 
     assert result["delivery_city_status"] == "ambiguous"
-    assert result["agent_clarifying_question"] == ambiguous.customer_message
     assert result["delivery_context_ready"] is True
     assert result.get("agent_loop_exit_reason") is None
+    assert result.get("session_delivery_city_canonical") == "Colombo 03"
+    assert result.get("session_delivery_city_confirmed") is False
+    assert "Using Colombo 03" in (result.get("agent_clarifying_question") or "")
     # Must not call check_delivery with bare "Colombo" (MCP Unknown city).
     service.check_delivery.assert_not_awaited()
     assert not (result.get("tool_trace") or [])

@@ -333,6 +333,9 @@ def is_topic_pivot_message(message: str) -> bool:
     stripped = message.strip()
     if not stripped:
         return False
+    # Budget-only refinements often start with "Actually…" but keep the same topic.
+    if is_budget_refinement_message(stripped):
+        return False
     if _TOPIC_PIVOT_PREFIX.search(stripped):
         return True
     if re.search(r"\binstead\b", stripped, re.I):

@@ -930,8 +930,20 @@ def test_build_discovery_search_args_topic_pivot_fresh_flowers() -> None:
         currency="LKR",
         intent_metadata={"topic_pivot": True},
     )
-    assert args["q"] == "flowers"
-    assert "category" not in args
+    assert args["q"] == "fresh flowers"
+    assert args.get("category") == "Flowers"
+
+
+def test_build_discovery_search_args_literal_blush_roses() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "Show me blush roses",
+        {},
+        currency="LKR",
+    )
+    assert args["q"] == "blush roses"
+    assert args.get("category") == "Flowers"
 
 
 def test_merge_planner_search_args_topic_pivot_bare_cakes() -> None:

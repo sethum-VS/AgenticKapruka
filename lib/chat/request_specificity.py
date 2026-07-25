@@ -203,8 +203,9 @@ def _is_minimal_product_only_turn(
     stripped = message.strip().strip("!.?,")
     if not stripped:
         return False
+    # Bare category pivots with a named product type proceed to search (not clarify).
     if is_bare_category_pivot(message) is not None:
-        return True
+        return False
     if _BARE_CATEGORY_REPLY.match(stripped):
         return True
     tokens = re.findall(r"[a-z']+", stripped.lower())
@@ -539,6 +540,8 @@ def score_request_specificity(
         and dimension_scores.get("occasion", 0.0) < 0.5
         and dimension_scores.get("budget", 0.0) < 1.0
         and delivery_score < 1.0
+        # Named product categories are enough to browse; occasion is a soft chip later.
+        and not _PRODUCT_CATEGORY_RE.search(stripped)
     ):
         band = "clarify"
     if dimension_scores.get("product", 0.0) >= 1.0 and delivery_score >= 1.0:
@@ -548,6 +551,12 @@ def score_request_specificity(
     if is_category_browse_message(stripped):
         band = "proceed"
     if _is_explicit_product_browse(stripped):
+        band = "proceed"
+    # Named category (flowers/cakes/roses/…) is enough to search without occasion.
+    if (
+        _PRODUCT_CATEGORY_RE.search(stripped)
+        and dimension_scores.get("product", 0.0) >= 1.0
+    ):
         band = "proceed"
     standalone_tokens = re.findall(r"[a-z']+", stripped.lower())
     if (

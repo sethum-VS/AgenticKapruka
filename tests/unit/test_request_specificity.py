@@ -109,7 +109,8 @@ def test_gifts_for_mom_proceeds() -> None:
     assert result.band == "proceed"
 
 
-def test_bare_cakes_after_pivot_clarifies_occasion() -> None:
+def test_bare_cakes_after_pivot_searches_without_occasion() -> None:
+    """Named category after a pivot is enough to browse — occasion is optional."""
     result = score_request_specificity(
         "cakes",
         session_product_focus="cake",
@@ -118,11 +119,12 @@ def test_bare_cakes_after_pivot_clarifies_occasion() -> None:
         session_budget_max=None,
         intent_metadata={"topic_pivot": True},
     )
-    assert result.band == "clarify"
-    assert result.missing_dimension == "occasion"
+    assert result.band == "proceed"
+    assert result.clarifying_question is None
 
 
-def test_multiturn_chocolate_after_clarify_still_needs_occasion() -> None:
+def test_multiturn_chocolate_after_clarify_searches_without_occasion() -> None:
+    """Bare chocolate follow-up searches the catalog; occasion is a soft chip later."""
     result = score_request_specificity(
         "chocolate",
         session_product_focus="chocolate",
@@ -131,8 +133,8 @@ def test_multiturn_chocolate_after_clarify_still_needs_occasion() -> None:
         session_budget_max=None,
         intent_metadata={},
     )
-    assert result.band == "clarify"
-    assert result.missing_dimension == "occasion"
+    assert result.band == "proceed"
+    assert result.clarifying_question is None
 
 
 def test_multiturn_chocolate_with_session_occasion_proceeds() -> None:
@@ -380,3 +382,34 @@ def test_explicit_product_browse_proceeds_without_occasion() -> None:
             intent_metadata={},
         )
         assert result.band == "proceed", message
+
+
+def test_fresh_flowers_pivot_proceeds_without_occasion() -> None:
+    """Named flower category pivots should search, not force a clarifying question."""
+    for message in (
+        "What about just normal fresh flowers?",
+        "Nevermind. Flowers.",
+        "fresh flowers",
+    ):
+        result = score_request_specificity(
+            message,
+            session_product_focus="cake",
+            session_occasion=None,
+            session_recipient_hint=None,
+            session_budget_max=None,
+            intent_metadata={"topic_pivot": True},
+        )
+        assert result.band == "proceed", message
+        assert result.clarifying_question is None
+
+
+def test_blush_roses_proceeds_to_search() -> None:
+    result = score_request_specificity(
+        "Show me blush roses",
+        session_product_focus=None,
+        session_occasion=None,
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata={},
+    )
+    assert result.band == "proceed"

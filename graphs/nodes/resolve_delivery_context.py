@@ -508,13 +508,22 @@ async def resolve_delivery_context(
             "resolve_delivery_context: soft Colombo zone nudge for gift discovery %r",
             raw_city,
         )
+        default_zone = default_colombo_zone(resolution.candidates)
+        soft_message = (
+            f"Using {default_zone} for now — tap another zone if needed. "
+            f"{customer_message}"
+        ).strip()
         soft_nudge: dict[str, Any] = {
             **resolved_base,
             "delivery_city_raw": raw_city,
             "delivery_city_status": "ambiguous",
             "delivery_city_candidates": resolution.candidates,
             "delivery_context_ready": True,
-            "agent_clarifying_question": customer_message,
+            # Soft default for discovery — not confirmed until the shopper taps a zone.
+            "session_delivery_city_canonical": default_zone,
+            "session_delivery_city_confirmed": False,
+            "delivery_city_canonical": default_zone,
+            "agent_clarifying_question": soft_message,
         }
         return await _attach_ambiguous_colombo_preflight(
             state,
