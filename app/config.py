@@ -26,6 +26,13 @@ class Settings(BaseSettings):
 
     # ── NVIDIA NIM ────────────────────────────────────────────────────────
     nvidia_api_key: str = Field(..., min_length=1, description="NVIDIA NIM API key")
+    nvidia_api_key_backup: str | None = Field(
+        default=None,
+        description=(
+            "Optional secondary NVIDIA NIM API key used when the primary key "
+            "is rate-limited (429)"
+        ),
+    )
     nvidia_base_url: str = Field(
         default="https://integrate.api.nvidia.com/v1",
         description="NVIDIA NIM OpenAI-compatible base URL",

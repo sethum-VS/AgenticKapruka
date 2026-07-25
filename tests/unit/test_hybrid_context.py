@@ -429,6 +429,100 @@ def test_build_discovery_search_args_wife_birthday_chocolate_prefers_confectione
     assert args["max_price"] == 6000.0
 
 
+def test_e2e_budget_6000_discovery_args_and_carousel_filter() -> None:
+    """E2E Scenario 1: under 6000 filters carousel; discovery args carry max_price."""
+    from lib.chat.product_curation import curate_carousel_products
+
+    args = build_discovery_search_args(
+        "Keep it under 6000 rupees.",
+        {"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+        intent_metadata={"budget_max": 6000.0, "budget_currency": "LKR"},
+    )
+    assert args.get("max_price") == 6000.0
+
+    products = [
+        {
+            "id": "under",
+            "name": "Cocoa Bliss Fudge Cake",
+            "price": {"amount": 2920.0, "currency": "LKR"},
+            "in_stock": True,
+            "url": "https://example.com/under",
+        },
+        {
+            "id": "over",
+            "name": "Luxury Chocolate Tower",
+            "price": {"amount": 9800.0, "currency": "LKR"},
+            "in_stock": True,
+            "url": "https://example.com/over",
+        },
+        {
+            "id": "edge",
+            "name": "Chocolate Gift Box",
+            "price": {"amount": 6000.0, "currency": "LKR"},
+            "in_stock": True,
+            "url": "https://example.com/edge",
+        },
+    ]
+    curated = curate_carousel_products(
+        products,
+        query="wife birthday chocolate under 6000",
+        budget_max=6000.0,
+        currency="LKR",
+        session_product_focus="chocolate",
+        strict_budget=True,
+    )
+    ids = {item["id"] for item in curated}
+    assert "under" in ids
+    assert "edge" in ids
+    assert "over" not in ids
+    assert all(
+        float(item["price"]["amount"]) <= 6000.0  # type: ignore[index]
+        for item in curated
+        if isinstance(item.get("price"), dict)
+    )
+
+
+def test_build_discovery_search_args_rejects_chocolate_and_fashion_category() -> None:
+    """Poisoned Neo4j Occasion 'Chocolate And Fashion' must not become MCP category=."""
+    from lib.neo4j.hybrid_context import enrich_chocolate_focus_hints
+
+    poisoned = {"hints": {"occasion": "Chocolate And Fashion"}}
+    enriched = enrich_chocolate_focus_hints(
+        "It's for my wife's birthday. She likes chocolate.",
+        poisoned,
+    )
+    assert "occasion" not in (enriched.get("hints") or {})
+
+    args = build_discovery_search_args(
+        "It's for my wife's birthday. She likes chocolate.",
+        poisoned,
+        currency="LKR",
+    )
+    assert args.get("category") != "Chocolate And Fashion"
+    assert "category" not in args
+    assert "chocolate" in args["q"].lower()
+
+
+def test_enrich_anniversary_hints_overwrites_anniversary_flowers() -> None:
+    from lib.neo4j.hybrid_context import enrich_anniversary_hints
+
+    context = enrich_anniversary_hints(
+        "Show me some anniversary gifts",
+        {"hints": {"occasion": "Anniversary Flowers"}},
+    )
+    assert context["hints"]["occasion"] == "Anniversary"
+    assert "Greeting Cards" in context["hints"]["exclude_categories"]
+
+    args = build_discovery_search_args(
+        "Show me some anniversary gifts",
+        context,
+        currency="LKR",
+    )
+    assert args.get("category") != "Anniversary Flowers"
+    assert "anniversary" in args["q"].lower()
+
+
 def test_is_birthday_cake_intent_detects_explicit_and_occasion_cake() -> None:
     assert is_birthday_cake_intent("Birthday cake for mom in Colombo")
     assert is_birthday_cake_intent("cake for mom's birthday")
@@ -798,6 +892,22 @@ def test_build_discovery_search_args_topic_pivot_bare_cakes_literal() -> None:
         intent_metadata={"topic_pivot": True},
     )
     assert args["q"] == "cake"
+    assert "category" not in args
+
+
+def test_build_discovery_search_args_topic_pivot_fresh_flowers() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "What about just normal fresh flowers?",
+        {
+            "hints": {"occasion": "Anniversary"},
+            "preferences": {"favorite_category": "Anniversary", "past_occasion": "anniversary"},
+        },
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+    assert args["q"] == "flowers"
     assert "category" not in args
 
 

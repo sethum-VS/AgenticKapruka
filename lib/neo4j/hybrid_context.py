@@ -764,6 +764,38 @@ _INVALID_MCP_CATEGORY_FILTERS = frozenset(
     }
 )
 
+# Safe single-token (or short) MCP subcategory filters. Neo4j Occasion display names
+# often look like "Chocolate And Fashion" / "Anniversary Flowers" and return 0 products
+# when passed as category= — those must not reach kapruka_search_products.
+_SAFE_MCP_CATEGORY_FILTERS = frozenset(
+    {
+        "birthday",
+        "anniversary",
+        "valentine",
+        "valentine's day",
+        "valentines day",
+        "mother's day",
+        "mothers day",
+        "father's day",
+        "fathers day",
+        "christmas",
+        "new year",
+        "wedding",
+        "graduation",
+        "get well",
+        "thank you",
+        "sympathy",
+        "congrats",
+        "congratulations",
+    }
+)
+_COMPOUND_OCCASION_AND_RE = re.compile(r"\band\b", re.I)
+_PRODUCT_TYPE_IN_OCCASION_RE = re.compile(
+    r"\b(?:flower|flowers|bouquet|floral|cake|cakes|chocolate|chocolates|"
+    r"fashion|hamper|hampers|card|cards|greeting)\b",
+    re.I,
+)
+
 # Sri Lankan delivery cities often appear in chat queries ("cake for mom in Colombo") but
 # pollute Kapruka keyword search when passed verbatim as q.
 _DELIVERY_CITY_NAMES = (
@@ -1199,13 +1231,33 @@ def build_discovery_delivery_args(intent_metadata: IntentMetadata | None) -> dic
 
 
 def _is_valid_mcp_category_filter(name: str) -> bool:
+    """Return True only for occasion names that Kapruka MCP accepts as category=.
+
+    Rejects parent departments, compound Neo4j Occasion display names
+    (``Chocolate And Fashion``), and occasion+product composites
+    (``Anniversary Flowers``) that yield empty search results.
+    """
     stripped = name.strip()
     if not stripped:
         return False
-    return stripped.lower() not in _INVALID_MCP_CATEGORY_FILTERS
+    lower = stripped.lower()
+    if lower in _INVALID_MCP_CATEGORY_FILTERS:
+        return False
+    if _COMPOUND_OCCASION_AND_RE.search(stripped):
+        return False
+    if lower in _SAFE_MCP_CATEGORY_FILTERS:
+        return True
+    # Unknown multi-word or product-typed occasion labels are unsafe as MCP filters.
+    if _PRODUCT_TYPE_IN_OCCASION_RE.search(stripped) or " " in lower:
+        return False
+    return True
 
 
-def _resolve_mcp_category_filter(hybrid_context: dict[str, Any] | None) -> str | None:
+def _resolve_mcp_category_filter(
+    hybrid_context: dict[str, Any] | None,
+    *,
+    allow_preferences: bool = True,
+) -> str | None:
     """Pick a Kapruka MCP subcategory filter from graph/Zep hints.
 
     Graph reranker stores parent departments under ``hints['category']`` (Neo4j
@@ -1216,10 +1268,11 @@ def _resolve_mcp_category_filter(hybrid_context: dict[str, Any] | None) -> str |
     hints = context.get("hints") or {}
     preferences = context.get("preferences") or {}
 
-    for raw in (
-        hints.get("occasion"),
-        preferences.get("favorite_category"),
-    ):
+    candidates: list[object] = [hints.get("occasion")]
+    if allow_preferences:
+        candidates.append(preferences.get("favorite_category"))
+
+    for raw in candidates:
         if not raw:
             continue
         name = str(raw).strip()
@@ -1300,6 +1353,11 @@ def enrich_chocolate_focus_hints(
         existing,
         CHOCOLATE_NEGATIVE_CATEGORY_HINTS,
     )
+    # Drop poisoned Neo4j Occasion labels (e.g. "Chocolate And Fashion") so they
+    # never become MCP category= filters.
+    occasion = str(hints.get("occasion") or "").strip()
+    if occasion and not _is_valid_mcp_category_filter(occasion):
+        hints.pop("occasion", None)
     context["hints"] = hints
     return context
 
@@ -1313,7 +1371,8 @@ def enrich_anniversary_hints(
     if not is_anniversary_occasion_intent(query, context):
         return context
     hints = dict(context.get("hints") or {})
-    hints.setdefault("occasion", "Anniversary")
+    # Overwrite poisoned composites like "Anniversary Flowers" — setdefault would keep them.
+    hints["occasion"] = "Anniversary"
     existing = str(hints.get("exclude_categories") or "")
     hints["exclude_categories"] = _merge_exclude_category_hints(
         existing,
@@ -1392,7 +1451,10 @@ def build_discovery_search_args(
     from lib.chat.intent_heuristics import is_bare_category_pivot
 
     bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
-    category = _resolve_mcp_category_filter(context)
+    category = _resolve_mcp_category_filter(
+        context,
+        allow_preferences=not topic_pivot,
+    )
     query = strip_location_from_search_query(user_message.strip(), intent_metadata)
     birthday_occasion = birthday_occasion_from_context(
         context,
@@ -1404,6 +1466,10 @@ def build_discovery_search_args(
 
     if topic_pivot and bare_focus == "cake":
         return {"q": "cake", "currency": currency}
+    if topic_pivot and bare_focus == "flowers":
+        return {"q": "flowers", "currency": currency}
+    if topic_pivot and bare_focus == "chocolate":
+        return {"q": "chocolate", "currency": currency}
 
     if is_broad_cakes_query(query) and not topic_pivot:
         query = "birthday cake"
@@ -1480,8 +1546,9 @@ def build_discovery_search_args(
         and not is_birthday_cake_intent(query)
     ):
         args["q"] = "chocolate gift box"
-        if args.get("category") == "Birthday":
-            args.pop("category", None)
+        # Chocolate gift searches must not keep occasion-derived category filters
+        # (Birthday, or poisoned Neo4j labels that slipped through).
+        args.pop("category", None)
 
     if _is_meta_catalog_query(query):
         args["q"] = _fallback_search_query(fallback_category)

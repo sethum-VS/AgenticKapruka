@@ -33,12 +33,19 @@ _FRIENDLY_MESSAGES: Final[dict[str, str]] = {
     "order_not_found": "We could not find an order with that number.",
     "429": "Too many requests. Please wait a moment and try again.",
     "validation_error": "Please check your input and try again.",
+    "upstream_error": "We couldn't reach the catalog just now. Please try again in a moment.",
 }
 
 
 def human_readable_message(exc: KaprukaError) -> str:
     """Return a user-facing message for a Kapruka MCP error."""
-    return _FRIENDLY_MESSAGES.get(exc.code, exc.message)
+    friendly = _FRIENDLY_MESSAGES.get(exc.code)
+    if friendly:
+        return friendly
+    # Soften raw upstream HTTP 500 copy from MCP.
+    if "HTTP 500" in exc.message or "server error" in exc.message.lower():
+        return _FRIENDLY_MESSAGES["upstream_error"]
+    return exc.message
 
 
 def _wants_html_response(request: Request) -> bool:

@@ -6,14 +6,17 @@ import asyncio
 import json
 import logging
 import re
-import time
 from typing import Any, TypeVar
 
-from openai import RateLimitError
+from openai import OpenAI, RateLimitError
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-from lib.genai.client import create_nvidia_client
+from lib.genai.client import (
+    NimKeyRole,
+    create_nvidia_client,
+    has_backup_nvidia_client,
+)
 from lib.genai.rate_limiter import get_rate_limiter
 
 logger = logging.getLogger(__name__)
@@ -22,6 +25,7 @@ T = TypeVar("T", bound=BaseModel)
 
 # ── Retry constants ──────────────────────────────────────────────────────────
 _MAX_RETRIES = 4
+_BACKUP_MAX_RETRIES = 2
 _RETRY_BASE_DELAY = 2.0  # seconds (2s, 4s, 8s, 16s exponential)
 _RETRY_MAX_DELAY = 30.0  # cap any single backoff (incl. Retry-After) at 30s
 
@@ -76,6 +80,83 @@ def _retry_after_delay(exc: RateLimitError) -> float | None:
     return None
 
 
+async def _complete_with_client(
+    *,
+    client: OpenAI,
+    role: NimKeyRole,
+    resolved_model: str,
+    request_messages: list[dict[str, Any]],
+    response_schema: type[T] | None,
+    temperature: float,
+    max_tokens: int,
+    seed: int | None,
+    max_retries: int,
+) -> dict[str, Any] | T:
+    """Run chat completion against one NIM client with rate limit + retry."""
+    limiter = get_rate_limiter(role=role)
+    last_exc: BaseException | None = None
+    for attempt in range(max_retries):
+        await limiter.acquire()
+        try:
+            completion = await asyncio.to_thread(
+                client.chat.completions.create,
+                model=resolved_model,
+                messages=request_messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=1,
+                seed=seed,
+            )
+
+            raw_content = completion.choices[0].message.content or ""
+
+            if response_schema is not None:
+                cleaned = strip_markdown_fences(raw_content)
+                try:
+                    return response_schema.model_validate_json(cleaned)
+                except Exception:
+                    logger.warning(
+                        "generate_content: JSON parse failed on %s attempt %d, raw=%r",
+                        role,
+                        attempt + 1,
+                        raw_content[:500],
+                    )
+                    if attempt < max_retries - 1:
+                        last_exc = ValueError(f"JSON parse failed: {raw_content[:200]}")
+                        delay = _RETRY_BASE_DELAY * (2**attempt)
+                        await asyncio.sleep(delay)
+                        continue
+                    raise
+
+            return {
+                "content": raw_content,
+                "role": completion.choices[0].message.role,
+            }
+
+        except RateLimitError as exc:
+            last_exc = exc
+            if attempt < max_retries - 1:
+                backoff = min(_RETRY_MAX_DELAY, _RETRY_BASE_DELAY * (2**attempt))
+                retry_after = _retry_after_delay(exc)
+                delay = max(backoff, retry_after) if retry_after is not None else backoff
+                logger.warning(
+                    "generate_content: NVIDIA NIM 429 on %s attempt %d; retrying in %.1fs",
+                    role,
+                    attempt + 1,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "generate_content: NVIDIA NIM 429 exhausted %d retries on %s",
+                    max_retries,
+                    role,
+                )
+
+    assert last_exc is not None
+    raise last_exc
+
+
 async def generate_content(
     *,
     model: str | None = None,
@@ -126,8 +207,6 @@ async def generate_content(
 
     cfg = settings or get_settings()
     resolved_model = model or cfg.nvidia_llm_model
-    client = create_nvidia_client(settings=cfg)
-    limiter = get_rate_limiter()
 
     # Inject schema instruction into system prompt if needed
     request_messages = list(messages)
@@ -142,62 +221,34 @@ async def generate_content(
         else:
             request_messages.insert(0, {"role": "system", "content": schema_instruction})
 
-    last_exc: BaseException | None = None
-    for attempt in range(_MAX_RETRIES):
-        await limiter.acquire()
-        try:
-            completion = await asyncio.to_thread(
-                client.chat.completions.create,
-                model=resolved_model,
-                messages=request_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=1,
-                seed=seed,
-            )
-
-            raw_content = completion.choices[0].message.content or ""
-
-            if response_schema is not None:
-                cleaned = strip_markdown_fences(raw_content)
-                try:
-                    return response_schema.model_validate_json(cleaned)
-                except Exception:
-                    logger.warning(
-                        "generate_content: JSON parse failed on attempt %d, raw=%r",
-                        attempt + 1,
-                        raw_content[:500],
-                    )
-                    if attempt < _MAX_RETRIES - 1:
-                        last_exc = ValueError(f"JSON parse failed: {raw_content[:200]}")
-                        delay = _RETRY_BASE_DELAY * (2 ** attempt)
-                        await asyncio.sleep(delay)
-                        continue
-                    raise
-
-            return {
-                "content": raw_content,
-                "role": completion.choices[0].message.role,
-            }
-
-        except RateLimitError as exc:
-            last_exc = exc
-            if attempt < _MAX_RETRIES - 1:
-                backoff = min(_RETRY_MAX_DELAY, _RETRY_BASE_DELAY * (2 ** attempt))
-                # Respect a server-provided Retry-After when it is longer than our backoff.
-                retry_after = _retry_after_delay(exc)
-                delay = max(backoff, retry_after) if retry_after is not None else backoff
-                logger.warning(
-                    "generate_content: NVIDIA NIM 429 on attempt %d; retrying in %.1fs",
-                    attempt + 1,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-            else:
-                logger.error(
-                    "generate_content: NVIDIA NIM 429 exhausted %d retries",
-                    _MAX_RETRIES,
-                )
-
-    assert last_exc is not None
-    raise last_exc
+    primary_client = create_nvidia_client(settings=cfg, role="primary")
+    try:
+        return await _complete_with_client(
+            client=primary_client,
+            role="primary",
+            resolved_model=resolved_model,
+            request_messages=request_messages,
+            response_schema=response_schema,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            seed=seed,
+            max_retries=_MAX_RETRIES,
+        )
+    except RateLimitError:
+        if not has_backup_nvidia_client(settings=cfg):
+            raise
+        logger.warning(
+            "NIM primary rate-limited; failing over to backup key",
+        )
+        backup_client = create_nvidia_client(settings=cfg, role="backup")
+        return await _complete_with_client(
+            client=backup_client,
+            role="backup",
+            resolved_model=resolved_model,
+            request_messages=request_messages,
+            response_schema=response_schema,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            seed=seed,
+            max_retries=_BACKUP_MAX_RETRIES,
+        )

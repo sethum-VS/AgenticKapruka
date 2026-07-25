@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import threading
+import time
+from typing import Literal
 
 from app.config import get_settings
+
+NimLimiterRole = Literal["primary", "backup"]
 
 
 class TokenBucketRateLimiter:
@@ -45,24 +48,25 @@ class TokenBucketRateLimiter:
             await asyncio.sleep(wait_time)
 
 
-_limiter: TokenBucketRateLimiter | None = None
+_limiters: dict[NimLimiterRole, TokenBucketRateLimiter] = {}
 _limiter_lock = threading.Lock()
 
 
-def get_rate_limiter() -> TokenBucketRateLimiter:
-    """Return the singleton rate limiter (lazily created from settings)."""
-    global _limiter
-    if _limiter is not None:
-        return _limiter
+def get_rate_limiter(*, role: NimLimiterRole = "primary") -> TokenBucketRateLimiter:
+    """Return the singleton rate limiter for the given NIM key role."""
+    existing = _limiters.get(role)
+    if existing is not None:
+        return existing
     with _limiter_lock:
-        if _limiter is not None:
-            return _limiter
+        existing = _limiters.get(role)
+        if existing is not None:
+            return existing
         cfg = get_settings()
-        _limiter = TokenBucketRateLimiter(rpm=cfg.nvidia_rate_limit_rpm)
-        return _limiter
+        limiter = TokenBucketRateLimiter(rpm=cfg.nvidia_rate_limit_rpm)
+        _limiters[role] = limiter
+        return limiter
 
 
 def reset_rate_limiter() -> None:
-    """Drop cached limiter (for tests)."""
-    global _limiter
-    _limiter = None
+    """Drop cached limiters (for tests)."""
+    _limiters.clear()

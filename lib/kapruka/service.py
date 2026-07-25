@@ -55,11 +55,13 @@ from lib.kapruka.types import (
 )
 from lib.redis.cache import get_cached, set_cached
 from lib.redis.client import RedisClient
+from lib.redis.product_snapshot import cache_search_product_snapshots
 from lib.redis.rate_limit import check_rate_limit
 
 T = TypeVar("T")
 
-_TRANSIENT_RETRY_DELAY_SECONDS = 0.5
+# Backoff delays between transient MCP retries (after the first failure).
+_TRANSIENT_RETRY_DELAYS_SECONDS: tuple[float, ...] = (0.5, 1.0, 2.0)
 
 
 def _is_transient_fetch_error(exc: BaseException) -> bool:
@@ -132,13 +134,24 @@ class KaprukaService:
         except Exception as exc:
             if not _is_transient_fetch_error(exc):
                 raise
-            logger.info(
-                "Kapruka transient failure on %s; retrying once after %ss",
-                tool_name,
-                _TRANSIENT_RETRY_DELAY_SECONDS,
-            )
-            await asyncio.sleep(_TRANSIENT_RETRY_DELAY_SECONDS)
-            result = await fetch()
+            result = None
+            last_transient = exc
+            for delay in _TRANSIENT_RETRY_DELAYS_SECONDS:
+                logger.info(
+                    "Kapruka transient failure on %s; retrying once after %ss",
+                    tool_name,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                try:
+                    result = await fetch()
+                    break
+                except Exception as retry_exc:
+                    if not _is_transient_fetch_error(retry_exc):
+                        raise
+                    last_transient = retry_exc
+            if result is None:
+                raise last_transient
 
         await set_cached(self._redis, tool_name, cache_args, to_cache(result))
         return result
@@ -172,7 +185,7 @@ class KaprukaService:
         )
         cache_args = _cache_args(search_input)
 
-        return await self._cached_read(
+        result = await self._cached_read(
             client_ip=client_ip,
             tool_name=SEARCH_PRODUCTS_TOOL,
             cache_args=cache_args,
@@ -188,9 +201,15 @@ class KaprukaService:
                 cursor=cursor,
                 currency=currency,
             ),
-            to_cache=lambda result: result.model_dump_json(),
+            to_cache=lambda output: output.model_dump_json(),
             from_cache=lambda text: SearchProductsOutput.model_validate(json.loads(text)),
         )
+        await cache_search_product_snapshots(
+            self._redis,
+            result.results,
+            currency=currency,
+        )
+        return result
 
     async def get_product(
         self,

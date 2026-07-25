@@ -304,6 +304,43 @@ async def test_chat_index_returns_200_html_with_empty_state(chat_index_env: Redi
 
 
 @pytest.mark.asyncio
+async def test_chat_index_refresh_rotates_session_and_clears_cart(
+    chat_index_env: RedisClient,
+) -> None:
+    """GET /chat with an existing cookie starts a fresh thread (no memory bleed)."""
+    old_thread = "thread-refresh-rotate-test"
+    await add_item(
+        chat_index_env,
+        old_thread,
+        product_id="cake00ka001827",
+        name="Happy Birthday Symphony Ribbon Cake",
+        price_amount=6500.0,
+        price_currency="LKR",
+        quantity=1,
+    )
+    application = create_app()
+    application.state.redis = chat_index_env
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/chat",
+            cookies={SESSION_COOKIE_NAME: _sign_thread_id(old_thread)},
+        )
+
+    assert response.status_code == 200
+    assert SESSION_COOKIE_NAME in response.headers.get("set-cookie", "")
+    new_cookie = response.cookies[SESSION_COOKIE_NAME]
+    from lib.chat.session import verify_signed_session_cookie
+
+    new_thread = verify_signed_session_cookie(new_cookie)
+    assert new_thread is not None
+    assert new_thread != old_thread
+    assert await get_cart(chat_index_env, old_thread) == []
+    assert await get_cart(chat_index_env, new_thread) == []
+    assert 'data-item-count="0"' in response.text
+
+
+@pytest.mark.asyncio
 async def test_chat_new_clears_cart_and_oob_empty_panel(chat_index_env: RedisClient) -> None:
     """POST /chat/new rotates session and clears Redis cart for the new thread."""
     old_thread = "thread-cart-clear-test"

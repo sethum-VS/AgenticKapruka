@@ -34,11 +34,12 @@ from lib.chat.session import (
     cookie_params,
     resolve_chat_thread_id,
     rotate_chat_thread,
+    verify_signed_session_cookie,
 )
 from lib.chat.sse import format_sse_event
 from lib.chat.streaming import chat_turn_timeout_seconds, iter_chat_sse_events
 from lib.debug.trace import is_debug_trace_enabled, trace_error, trace_turn_start
-from lib.redis.cart import clear_cart, get_cart, migrate_cart
+from lib.redis.cart import StoredCartItem, clear_cart, get_cart, migrate_cart
 from lib.redis.client import RedisClient
 from lib.redis.session import get_session_currency
 from lib.zep.session import get_or_create_session
@@ -137,13 +138,29 @@ async def _chat_event_stream(
 
 @router.get("")
 async def chat_index(request: Request, redis_client: RedisDep) -> Response:
-    """Full-screen chat viewport with welcome empty state."""
+    """Full-screen chat viewport with welcome empty state.
+
+    Refresh / revisit rotates the session cookie so Zep and LangGraph
+    memory from a prior thread cannot bleed into a visually empty chat.
+    """
     templates = get_templates()
-    currency = await resolve_page_currency(request, redis_client)
-    cart_items = await resolve_page_cart(request, redis_client)
     settings = get_settings()
     stream_timeout_ms = settings.chat_turn_timeout_seconds * 1000
-    return templates.TemplateResponse(
+
+    new_cookie: str | None = None
+    existing = request.cookies.get(SESSION_COOKIE_NAME)
+    if existing and verify_signed_session_cookie(existing):
+        prior_thread_id, new_thread_id, new_cookie = rotate_chat_thread(request)
+        await clear_cart(redis_client, new_thread_id)
+        if prior_thread_id and prior_thread_id != new_thread_id:
+            await clear_cart(redis_client, prior_thread_id)
+        cart_items: list[StoredCartItem] = []
+        currency = await get_session_currency(redis_client, new_thread_id)
+    else:
+        currency = await resolve_page_currency(request, redis_client)
+        cart_items = await resolve_page_cart(request, redis_client)
+
+    response = templates.TemplateResponse(
         request,
         "chat/index.html",
         {
@@ -154,6 +171,9 @@ async def chat_index(request: Request, redis_client: RedisDep) -> Response:
             **cart_template_context(cart_items),
         },
     )
+    if new_cookie is not None:
+        response.set_cookie(SESSION_COOKIE_NAME, new_cookie, **cookie_params())
+    return response
 
 
 @router.post("/stream")

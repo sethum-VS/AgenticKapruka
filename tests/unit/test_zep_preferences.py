@@ -53,6 +53,27 @@ def test_merge_preferences_into_hybrid_context_builds_mcp_hints() -> None:
     assert merged["hints"]["occasion"] == "anniversary"
 
 
+def test_merge_preferences_skips_category_and_occasion_on_topic_pivot() -> None:
+    preferences = {
+        "favorite_category": "Anniversary",
+        "currency": "LKR",
+        "past_occasion": "anniversary gift",
+    }
+
+    merged = merge_preferences_into_hybrid_context(
+        {},
+        preferences,
+        user_message="Nevermind. Cakes.",
+        topic_pivot=True,
+    )
+
+    hints = merged.get("hints") or {}
+    assert "category" not in hints
+    assert "occasion" not in hints
+    assert hints.get("currency") == "LKR"
+    assert merged["preferences"] == preferences
+
+
 @pytest.mark.asyncio
 async def test_extract_preferences_uses_zep_graph_search() -> None:
     search_response = GraphSearchResults(

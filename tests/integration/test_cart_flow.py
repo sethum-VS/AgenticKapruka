@@ -126,7 +126,7 @@ async def test_post_cart_add_kapruka_error_returns_visible_htmx_error(cart_app) 
     mock_service = cart_app.state.kapruka_service
     mock_service.get_product.side_effect = KaprukaError(
         "upstream_error",
-        "Kapruka service unavailable",
+        "Kapruka API server error (HTTP 500)",
     )
 
     transport = ASGITransport(app=cart_app)
@@ -143,10 +143,64 @@ async def test_post_cart_add_kapruka_error_returns_visible_htmx_error(cart_app) 
     assert 'data-testid="cart-add-retry"' in response.text
     assert 'id="cart-panel"' in response.text
     assert "Try again" in response.text
+    assert "reach the catalog" in response.text.lower()
+    assert "HTTP 500" not in response.text
 
     thread_id = verify_signed_session_cookie(_session_cookie_from_response(response))
     assert thread_id is not None
     assert await get_cart(cart_app.state.redis, thread_id) == []
+
+
+@pytest.mark.asyncio
+async def test_post_cart_add_uses_search_snapshot_on_get_product_failure(
+    cart_app,
+) -> None:
+    """When live get_product fails, a recent search snapshot still adds to cart."""
+    from lib.redis.product_snapshot import cache_search_product_snapshots
+    from lib.kapruka.types import CategoryRef, Money, ProductResult
+
+    mock_service = cart_app.state.kapruka_service
+    mock_service.get_product.side_effect = KaprukaError(
+        "upstream_error",
+        "Kapruka API server error (HTTP 500)",
+    )
+    await cache_search_product_snapshots(
+        cart_app.state.redis,
+        [
+            ProductResult(
+                id=_PRODUCT_ID,
+                name=_PRODUCT_NAME,
+                summary="Rich chocolate layers.",
+                price=Money(amount=4500.0, currency="LKR"),
+                compare_at_price=None,
+                in_stock=True,
+                stock_level="high",
+                image_url=None,
+                category=CategoryRef(id="cat_cakes", name="Birthday", slug="birthday"),
+                rating=None,
+                ships_internationally=False,
+                url="https://www.kapruka.com/cake",
+            ),
+        ],
+        currency="LKR",
+    )
+
+    transport = ASGITransport(app=cart_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/cart/add",
+            data={"product_id": _PRODUCT_ID},
+            headers={"HX-Request": "true"},
+        )
+
+    assert response.status_code == 200
+    assert 'data-testid="cart-add-error"' not in response.text
+    thread_id = verify_signed_session_cookie(_session_cookie_from_response(response))
+    assert thread_id is not None
+    cart = await get_cart(cart_app.state.redis, thread_id)
+    assert len(cart) == 1
+    assert cart[0].product_id == _PRODUCT_ID
+    assert cart[0].name == _PRODUCT_NAME
 
 
 @pytest.mark.asyncio

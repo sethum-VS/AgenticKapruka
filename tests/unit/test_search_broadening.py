@@ -25,8 +25,25 @@ def test_broaden_strip_occasion_category_noop_without_category() -> None:
 
 
 def test_broaden_strip_occasion_category_noop_without_anniversary() -> None:
+    """Strip category on any empty-result path — not only anniversary+flowers."""
     args = {"q": "fresh roses bouquet", "category": "Flowers", "currency": "LKR"}
-    assert broaden_search_args(args, "strip_occasion_category") is None
+    broadened = broaden_search_args(args, "strip_occasion_category")
+    assert broadened is not None
+    assert "category" not in broadened
+    assert broadened["q"] == "fresh roses bouquet"
+
+
+def test_broaden_strip_poisoned_chocolate_and_fashion_category() -> None:
+    args = {
+        "q": "chocolate gift box",
+        "category": "Chocolate And Fashion",
+        "currency": "LKR",
+    }
+    broadened, step = apply_first_broaden(args)
+    assert step == "strip_occasion_category"
+    assert broadened is not None
+    assert "category" not in broadened
+    assert broadened["q"] == "chocolate gift box"
 
 
 def test_first_applicable_broaden_step_strip_category_before_simplify() -> None:

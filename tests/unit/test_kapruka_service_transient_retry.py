@@ -21,7 +21,7 @@ from lib.kapruka.types import (
 
 @pytest.mark.asyncio
 async def test_cached_read_retries_once_on_transient_kapruka_error() -> None:
-    """Generic KaprukaError triggers one backoff retry before surfacing failure."""
+    """Generic KaprukaError triggers backoff retries before surfacing failure."""
     redis = AsyncMock()
     mcp = MagicMock()
     service = KaprukaService(redis, mcp)
@@ -54,6 +54,36 @@ async def test_cached_read_retries_once_on_transient_kapruka_error() -> None:
     assert result == expected
     assert calls == 2
     mock_sleep.assert_awaited_once_with(0.5)
+
+
+@pytest.mark.asyncio
+async def test_cached_read_retries_three_times_then_raises() -> None:
+    """Exhaust all transient backoff delays before raising."""
+    redis = AsyncMock()
+    mcp = MagicMock()
+    service = KaprukaService(redis, mcp)
+
+    async def fetch() -> SearchProductsOutput:
+        raise KaprukaError("upstream_error", "Kapruka API server error (HTTP 500)")
+
+    with (
+        patch("lib.kapruka.service.check_rate_limit", new_callable=AsyncMock),
+        patch("lib.kapruka.service.get_cached", new_callable=AsyncMock, return_value=None),
+        patch("lib.kapruka.service.set_cached", new_callable=AsyncMock),
+        patch("lib.kapruka.service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        pytest.raises(KaprukaError),
+    ):
+        await service._cached_read(
+            client_ip="127.0.0.1",
+            tool_name="kapruka_get_product",
+            cache_args={"product_id": "cake00ka002034"},
+            fetch=fetch,
+            to_cache=lambda value: value.model_dump_json(),
+            from_cache=lambda text: SearchProductsOutput.model_validate_json(text),
+        )
+
+    assert mock_sleep.await_count == 3
+    assert [call.args[0] for call in mock_sleep.await_args_list] == [0.5, 1.0, 2.0]
 
 
 @pytest.mark.asyncio

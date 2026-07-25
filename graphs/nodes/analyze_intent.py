@@ -292,8 +292,18 @@ def _resolve_delivery_dates(
 def _resolve_session_situational(
     state: AgentState,
     intent_metadata: IntentMetadata,
+    *,
+    user_message: str = "",
 ) -> bool:
-    """Keep concierge tone after an opening distress/situational turn."""
+    """Keep concierge tone after an opening distress/situational turn.
+
+    Topic pivots and budget-gift discovery resets drop sticky situational tone so
+    empathy from a prior breakup turn does not bleed into a fresh gift search.
+    """
+    if user_message.strip() and classify_query_mode(user_message) == "situational":
+        return True
+    if intent_metadata.get("topic_pivot") or intent_metadata.get("discovery_context_reset"):
+        return False
     if intent_metadata.get("is_situational"):
         return True
     if state.get("session_situational"):
@@ -332,8 +342,11 @@ def _with_session_fields(
         payload["session_recipient_hint"] = session_recipient_hint
     if session_flavor_hint is not None:
         payload["session_flavor_hint"] = session_flavor_hint
-    if session_situational:
+    if session_situational is True:
         payload["session_situational"] = True
+    elif session_situational is False:
+        # Explicit clear (topic pivot / budget-gift discovery reset).
+        payload["session_situational"] = False
     if delivery_date is not None:
         payload["delivery_date"] = delivery_date
     if session_delivery_date is not None:
@@ -601,12 +614,30 @@ async def analyze_intent(
             {**intent_metadata, "session_flavor_hint": session_flavor_hint},
         )
 
-    session_situational = _resolve_session_situational(state, intent_metadata)
+    session_situational = _resolve_session_situational(
+        state,
+        intent_metadata,
+        user_message=user_message,
+    )
     if session_situational:
         intent_metadata = cast(
             IntentMetadata,
             {**intent_metadata, "is_situational": True},
         )
+    elif topic_pivot or budget_gift_pivot:
+        # Explicitly clear sticky situational empathy on pivots / fresh gift discovery.
+        cleared = dict(intent_metadata)
+        cleared.pop("is_situational", None)
+        intent_metadata = cast(IntentMetadata, cleared)
+
+    # Only persist True (sticky empathy) or False (explicit pivot clear); omit otherwise.
+    session_situational_update: bool | None
+    if topic_pivot or budget_gift_pivot:
+        session_situational_update = False
+    elif session_situational:
+        session_situational_update = True
+    else:
+        session_situational_update = None
 
     def _with_budget(payload: dict[str, Any]) -> dict[str, Any]:
         result = _with_session_fields(
@@ -617,7 +648,7 @@ async def analyze_intent(
             session_occasion=session_occasion,
             session_recipient_hint=session_recipient_hint,
             session_flavor_hint=session_flavor_hint,
-            session_situational=session_situational,
+            session_situational=session_situational_update,
             delivery_date=delivery_date,
             session_delivery_date=session_delivery_date,
         )
@@ -625,6 +656,7 @@ async def analyze_intent(
             result["session_search_query"] = None
             result["session_occasion"] = None
             result["session_recipient_hint"] = None
+            result["session_situational"] = False
             if session_budget_max is None:
                 result["session_budget_max"] = None
                 result["session_budget_currency"] = None
@@ -632,6 +664,7 @@ async def analyze_intent(
             if hybrid_context_update is not None:
                 result["hybrid_context"] = hybrid_context_update
         elif budget_gift_pivot:
+            result["session_situational"] = False
             result.update(pivot_session_clear)
             if hybrid_context_update is not None:
                 result["hybrid_context"] = hybrid_context_update

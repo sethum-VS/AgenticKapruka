@@ -12,7 +12,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from app.config import Settings, get_settings
 from lib.embeddings.embedding_cache import get_cached_embedding, set_cached_embedding
-from lib.genai.client import create_nvidia_client
+from lib.genai.client import create_nvidia_client, has_backup_nvidia_client
 from lib.genai.rate_limiter import get_rate_limiter
 from lib.redis.client import RedisClient
 
@@ -27,6 +27,25 @@ def _is_rate_limit(exc: BaseException) -> bool:
     return isinstance(exc, openai.RateLimitError)
 
 
+def _embed_texts_once(
+    texts: Sequence[str],
+    *,
+    client: OpenAI,
+) -> list[list[float]]:
+    """Single-shot embed via nvidia/nv-embed-v1; returns 4096-dim vectors."""
+    response = client.embeddings.create(
+        input=list(texts),
+        model=EMBEDDING_MODEL,
+        extra_body={"input_type": "query", "truncate": "NONE"},
+    )
+    if not response.data:
+        msg = "NVIDIA NIM returned no embeddings"
+        raise ValueError(msg)
+
+    sorted_data = sorted(response.data, key=lambda x: x.index)
+    return [item.embedding for item in sorted_data]
+
+
 @retry(
     retry=retry_if_exception(_is_rate_limit),
     wait=wait_exponential(multiplier=1, min=2, max=60),
@@ -38,19 +57,8 @@ def _embed_texts_sync(
     *,
     client: OpenAI,
 ) -> list[list[float]]:
-    """Embed texts via nvidia/nv-embed-v1; returns 4096-dim vectors."""
-    response = client.embeddings.create(
-        input=list(texts),
-        model=EMBEDDING_MODEL,
-        extra_body={"input_type": "query", "truncate": "NONE"}
-    )
-    if not response.data:
-        msg = "NVIDIA NIM returned no embeddings"
-        raise ValueError(msg)
-    
-    # Sort data by index to ensure ordering matches the input array
-    sorted_data = sorted(response.data, key=lambda x: x.index)
-    return [item.embedding for item in sorted_data]
+    """Embed texts with retries on 429; returns 4096-dim vectors."""
+    return _embed_texts_once(texts, client=client)
 
 
 async def embed_texts(
@@ -72,14 +80,38 @@ async def embed_texts(
                 return [cached]
 
     cfg = settings or get_settings()
-    embedding_client = client or create_nvidia_client(settings=cfg)
-    await get_rate_limiter().acquire()
-
-    vectors = await asyncio.to_thread(
-        _embed_texts_sync,
-        texts,
-        client=embedding_client,
-    )
+    if client is not None:
+        await get_rate_limiter(role="primary").acquire()
+        vectors = await asyncio.to_thread(_embed_texts_sync, texts, client=client)
+    elif has_backup_nvidia_client(settings=cfg):
+        primary_client = create_nvidia_client(settings=cfg, role="primary")
+        await get_rate_limiter(role="primary").acquire()
+        try:
+            # Fail over quickly when a backup key is configured.
+            vectors = await asyncio.to_thread(
+                _embed_texts_once,
+                texts,
+                client=primary_client,
+            )
+        except openai.RateLimitError:
+            logger.warning(
+                "NIM primary rate-limited; failing over to backup key (embeddings)",
+            )
+            backup_client = create_nvidia_client(settings=cfg, role="backup")
+            await get_rate_limiter(role="backup").acquire()
+            vectors = await asyncio.to_thread(
+                _embed_texts_sync,
+                texts,
+                client=backup_client,
+            )
+    else:
+        embedding_client = create_nvidia_client(settings=cfg, role="primary")
+        await get_rate_limiter(role="primary").acquire()
+        vectors = await asyncio.to_thread(
+            _embed_texts_sync,
+            texts,
+            client=embedding_client,
+        )
 
     if redis_client is not None and len(texts) == 1 and vectors:
         stripped = texts[0].strip()

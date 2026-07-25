@@ -448,6 +448,41 @@ async def test_analyze_intent_topic_pivot_clears_hybrid_hints_and_search_query()
 
 
 @pytest.mark.asyncio
+async def test_analyze_intent_topic_pivot_clears_session_situational() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Nevermind. Cakes.")],
+        "session_id": "sess-pivot-situational",
+        "session_situational": True,
+        "session_occasion": "anniversary",
+        "intent_metadata": {"is_situational": True},
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result.get("session_situational") is False
+    assert result["intent_metadata"].get("topic_pivot") is True
+    assert result["intent_metadata"].get("is_situational") is not True
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_flower_pivot_sets_topic_pivot() -> None:
+    mock_client = MagicMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="What about just normal fresh flowers?")],
+        "session_id": "sess-flower-pivot",
+        "session_occasion": "anniversary",
+        "session_product_focus": "gift",
+    }
+
+    result = await analyze_intent(state, genai_client=mock_client)
+
+    assert result["intent_metadata"].get("topic_pivot") is True
+    assert result.get("session_occasion") is None
+    assert result.get("session_product_focus") == "flowers"
+
+
+@pytest.mark.asyncio
 async def test_analyze_intent_occasion_change_sets_budget_confirmation_pending() -> None:
     mock_client = MagicMock()
     state: AgentState = {

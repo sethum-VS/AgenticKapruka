@@ -1599,6 +1599,56 @@ async def _try_confident_discovery_fast_path(
         rate_limit_key=rate_limit_key,
         currency=currency,
     )
+    # Broaden once when primary (and anniversary) search returned 0 — strips
+    # poisoned category filters like "Chocolate And Fashion".
+    if not _search_has_products(result):
+        intent_meta = state.get("intent_metadata")
+        broadened_args, _broaden_step = apply_first_broaden(
+            enriched_args,
+            preserve_max_price=has_explicit_budget_constraint(
+                user_message,
+                state.get("session_budget_max")
+                if isinstance(state.get("session_budget_max"), (int, float))
+                else None,
+                topic_pivot=bool(
+                    isinstance(intent_meta, dict) and intent_meta.get("topic_pivot"),
+                ),
+            ),
+            intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+        )
+        if broadened_args is not None and not _is_duplicate_invocation(
+            tool_trace,
+            SEARCH_PRODUCTS_TOOL,
+            broadened_args,
+        ):
+            broadened_args = _inject_tool_currency(
+                SEARCH_PRODUCTS_TOOL,
+                broadened_args,
+                state,
+                currency,
+            )
+            _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+            broaden_result = await _invoke_tool_with_rate_limit_retry(
+                SEARCH_PRODUCTS_TOOL,
+                broadened_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+            broaden_result = _curate_search_trace_result(broaden_result, state=state)
+            tool_trace = [
+                *tool_trace,
+                {
+                    "name": SEARCH_PRODUCTS_TOOL,
+                    "args": broadened_args,
+                    "result": broaden_result,
+                },
+            ]
+            retry_calls += 1
+            if _search_has_products(broaden_result):
+                result = broaden_result
+                enriched_args = broadened_args
+
     session_search_query_update: str | None = None
     search_q_arg = enriched_args.get("q")
     intent_meta = state.get("intent_metadata")
