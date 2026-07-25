@@ -98,9 +98,12 @@ def route_after_analyze_intent(state: AgentState) -> RouteAfterAnalyzeIntent:
 
     intent = state.get("intent")
     checkout_state = state.get("checkout_state")
-    
+
     from lib.chat.master_flow import is_checkout_field_answer
-    if intent == "checkout" or (checkout_state and is_checkout_field_answer(user_message, checkout_state)):
+
+    if intent == "checkout" or (
+        checkout_state and is_checkout_field_answer(user_message, checkout_state)
+    ):
         logger.debug("route_after_analyze_intent: routing to checkout sub-graph")
         trace_route_decision(
             from_node="analyze_intent",

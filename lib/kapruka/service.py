@@ -173,7 +173,7 @@ class KaprukaService:
                             raise
                         last_transient = retry_exc
                 if result is None:
-                    raise last_transient
+                    raise last_transient from None
 
             await set_cached(self._redis, tool_name, cache_args, to_cache(result))
             if not waiter.done():

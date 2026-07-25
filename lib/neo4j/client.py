@@ -6,8 +6,9 @@ import asyncio
 import logging
 from typing import Any
 
-from neo4j import AsyncDriver, AsyncGraphDatabase
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
+
+from neo4j import AsyncDriver, AsyncGraphDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ class Neo4jClient:
         cypher: str,
         params: dict[str, Any] | None = None,
         *,
-        timeout: float | None = None,
+        timeout: float | None = None,  # noqa: ASYNC109
     ) -> list[dict[str, Any]]:
         """Run Cypher and return each record as a plain dict.
 

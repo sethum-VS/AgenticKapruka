@@ -12,7 +12,6 @@ from langchain_core.messages import HumanMessage
 
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.agent_loop import (
-    CONFIDENT_DISCOVERY_MAX_ITERATIONS,
     GRAPH_HINTS_MAX_ITERATIONS,
     MAX_ITERATIONS,
     PLANNER_CATEGORY_NODE_LIMIT,
@@ -1406,7 +1405,7 @@ async def test_agent_loop_utility_general_iteration_cap_at_two() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_loop_budget_refinement_exits_without_second_planner_iteration() -> None:
-    """Budget-only turns finish immediately after one contextual search when carousel is over budget."""
+    """Budget-only turns finish after one contextual search when carousel is over budget."""
     mock_service = _mock_kapruka_service()
     greeting_card = ProductResult(
         id="card001",
@@ -1512,6 +1511,7 @@ async def test_agent_loop_budget_refinement_single_in_budget_skips_mcp() -> None
     products = result.get("last_search_products") or []
     assert len(products) >= 1
     assert all((p.get("price") or {}).get("amount", 0) <= 6000 for p in products)
+
 
 @pytest.mark.asyncio
 async def test_agent_loop_discovery_city_gift_searches_before_planner() -> None:
@@ -1715,9 +1715,7 @@ async def test_agent_loop_budget_refinement_in_memory_skips_mcp() -> None:
     assert result["agent_loop_exit_reason"] == "finish"
     products = result.get("last_search_products") or []
     assert len(products) >= 1
-    assert all(
-        (p.get("price") or {}).get("amount", 0) <= 6000 for p in products
-    )
+    assert all((p.get("price") or {}).get("amount", 0) <= 6000 for p in products)
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,7 @@ import pytest
 
 from graphs.nodes.generate_response import render_assistant_html
 from lib.chat.sse import chunk_text, format_sse_event
-from lib.chat.streaming import chat_turn_timeout_seconds, iter_chat_sse_events
+from lib.chat.streaming import iter_chat_sse_events
 
 
 def test_format_sse_event_includes_event_and_data_lines() -> None:

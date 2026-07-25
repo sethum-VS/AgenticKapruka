@@ -7,9 +7,10 @@ import json
 import logging
 import re
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Iterator, TypeVar
+from typing import Any, TypeVar
 
 from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 from pydantic import BaseModel
@@ -135,7 +136,7 @@ def _backoff_delay(attempt: int, *, base_delay: float, max_delay: float) -> floa
     return min(max_delay, base_delay * (2**attempt))
 
 
-async def _complete_with_client(
+async def _complete_with_client(  # noqa: UP047
     *,
     client: OpenAI,
     role: NimKeyRole,
@@ -190,9 +191,7 @@ async def _complete_with_client(
                             last_exc = ValueError(f"JSON parse failed: {raw_content[:200]}")
                             break
                         last_exc = ValueError(f"JSON parse failed: {raw_content[:200]}")
-                        delay = _backoff_delay(
-                            attempt, base_delay=base_delay, max_delay=max_delay
-                        )
+                        delay = _backoff_delay(attempt, base_delay=base_delay, max_delay=max_delay)
                         await asyncio.sleep(delay)
                         continue
                     raise
@@ -207,13 +206,12 @@ async def _complete_with_client(
             if attempt < max_retries - 1:
                 if _should_abort_retry(reserve_seconds=deadline_reserve_seconds):
                     logger.warning(
-                        "generate_content: aborting %s 429 retries — turn deadline reserve exhausted",
+                        "generate_content: aborting %s 429 retries — "
+                        "turn deadline reserve exhausted",
                         role,
                     )
                     break
-                backoff = _backoff_delay(
-                    attempt, base_delay=base_delay, max_delay=max_delay
-                )
+                backoff = _backoff_delay(attempt, base_delay=base_delay, max_delay=max_delay)
                 retry_after = _retry_after_delay(exc, max_delay)
                 delay = max(backoff, retry_after) if retry_after is not None else backoff
                 logger.warning(
@@ -235,14 +233,13 @@ async def _complete_with_client(
             if attempt < max_retries - 1:
                 if _should_abort_retry(reserve_seconds=deadline_reserve_seconds):
                     logger.warning(
-                        "generate_content: aborting %s %s retries — turn deadline reserve exhausted",
+                        "generate_content: aborting %s %s retries — "
+                        "turn deadline reserve exhausted",
                         role,
                         type(exc).__name__,
                     )
                     break
-                delay = _backoff_delay(
-                    attempt, base_delay=base_delay, max_delay=max_delay
-                )
+                delay = _backoff_delay(attempt, base_delay=base_delay, max_delay=max_delay)
                 logger.warning(
                     "generate_content: NVIDIA NIM %s on %s attempt %d; retrying in %.1fs",
                     type(exc).__name__,
@@ -263,7 +260,7 @@ async def _complete_with_client(
     raise last_exc
 
 
-async def generate_content(
+async def generate_content(  # noqa: UP047
     *,
     model: str | None = None,
     messages: list[dict[str, Any]],

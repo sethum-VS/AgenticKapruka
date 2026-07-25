@@ -17,13 +17,16 @@ def ensure_compiled_css() -> None:
     if not APP_CSS.exists():
         APP_CSS.write_text(_MINIMAL_CSS, encoding="utf-8")
 
+
 @pytest.fixture(autouse=True)
 def cleanup_genai_patchers() -> None:
     """Clean up any active genai patchers created by test helpers."""
     yield
     try:
         from tests.helpers.mock_genai import ACTIVE_PATCHERS
+
         from lib.genai.completions import set_override_generate_content
+
         ACTIVE_PATCHERS.clear()
         set_override_generate_content(None)
     except ImportError:

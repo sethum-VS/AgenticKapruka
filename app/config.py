@@ -29,8 +29,7 @@ class Settings(BaseSettings):
     nvidia_api_key_backup: str | None = Field(
         default=None,
         description=(
-            "Optional secondary NVIDIA NIM API key used when the primary key "
-            "is rate-limited (429)"
+            "Optional secondary NVIDIA NIM API key used when the primary key is rate-limited (429)"
         ),
     )
     nvidia_base_url: str = Field(

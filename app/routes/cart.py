@@ -152,10 +152,7 @@ async def cart_add(
                 new_cookie=new_cookie,
                 product_id=product_id,
                 error_code=exc.code,
-                message=(
-                    "We couldn't reach the catalog just now. "
-                    "Please try again in a moment."
-                ),
+                message=("We couldn't reach the catalog just now. Please try again in a moment."),
                 quantity=quantity,
                 icing_text=icing_text,
             )

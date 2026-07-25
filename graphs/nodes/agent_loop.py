@@ -10,7 +10,7 @@ from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
 from langgraph.config import get_stream_writer
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.analyze_intent import _extract_latest_user_message
@@ -608,10 +608,8 @@ def _should_run_situational_flowers_search(
     if already_ran:
         return False
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
-    if not intent_metadata.get("is_situational"):
-        return False
     # Proactively show apology flowers even when the shopper did not name a product.
-    return True
+    return bool(intent_metadata.get("is_situational"))
 
 
 def _situational_flowers_search_args(user_message: str) -> dict[str, Any]:
@@ -678,10 +676,7 @@ async def _invoke_tool_with_rate_limit_retry(
     if max_retries is None:
         remaining = seconds_until_deadline()
         # Under deadline pressure, skip 429 backoff so the turn can still finish.
-        if remaining is not None and remaining < 30.0:
-            max_retries = 0
-        else:
-            max_retries = 2
+        max_retries = 0 if remaining is not None and remaining < 30.0 else 2
     result: dict[str, Any] = {}
     for attempt in range(max_retries + 1):
         _emit_status(_status_message_for_tool(tool_name))
@@ -1050,7 +1045,7 @@ def _format_planner_query_rewrite_hints(
         hints.append(
             "Topic pivot with bare category: prefer action call_tool with "
             f'kapruka_search_products using literal q="{flower_q}" '
-            "(or q=\"fresh flowers\" when the customer said flowers) — do not inherit "
+            '(or q="fresh flowers" when the customer said flowers) — do not inherit '
             "prior occasion context. Do NOT ask_user for occasion before searching. "
             "Only ask_user if search returns no products."
         )
@@ -1290,7 +1285,10 @@ async def _plan_next_step(
         step = await generate_content(
             model=PLANNER_MODEL,
             messages=[
-                {"role": "system", "content": _build_planner_system_instruction(state, tool_trace=tool_trace)},
+                {
+                    "role": "system",
+                    "content": _build_planner_system_instruction(state, tool_trace=tool_trace),
+                },
                 {"role": "user", "content": _build_planner_user_prompt(state)},
             ],
             response_schema=AgentPlannerStep,
@@ -1353,6 +1351,7 @@ def _planner_transient_error(exc: BaseException) -> dict[str, str]:
 def _planner_rate_limit_error(exc: BaseException) -> dict[str, str]:
     """Backward-compatible alias for rate-limit planner degradation."""
     return _planner_transient_error(exc)
+
 
 def _emit_status(message: str) -> None:
     """Emit a LangGraph custom stream status event when a writer is available."""
@@ -1683,10 +1682,9 @@ async def _maybe_retry_literal_color_flower_search(
     if not _top_results_lack_color_modifier(result, color=color):
         return result, enriched_args, tool_trace, 0
     current_q = str(enriched_args.get("q") or "").strip().lower()
-    if current_q == literal_q:
+    if current_q == literal_q and _search_has_products(result):
         # Already searched literally — still weak; nothing more to do.
-        if _search_has_products(result):
-            return result, enriched_args, tool_trace, 0
+        return result, enriched_args, tool_trace, 0
     retry_args = _inject_tool_currency(
         SEARCH_PRODUCTS_TOOL,
         {
@@ -2119,15 +2117,11 @@ async def _try_budget_refinement_fast_path(
     tool_name = SEARCH_PRODUCTS_TOOL
     # Prefer last_visible (what the shopper saw) then last_search.
     prior_products = [
-        item
-        for item in list(state.get("last_visible_products") or [])
-        if isinstance(item, dict)
+        item for item in list(state.get("last_visible_products") or []) if isinstance(item, dict)
     ]
     if not prior_products:
         prior_products = [
-            item
-            for item in list(state.get("last_search_products") or [])
-            if isinstance(item, dict)
+            item for item in list(state.get("last_search_products") or []) if isinstance(item, dict)
         ]
     budget_max_val = state.get("session_budget_max")
     if not isinstance(budget_max_val, (int, float)) or budget_max_val <= 0:
@@ -2142,11 +2136,7 @@ async def _try_budget_refinement_fast_path(
                 budget_max_val = float(turn_budget)
     session_search_query_update: str | None = None
 
-    if (
-        prior_products
-        and isinstance(budget_max_val, (int, float))
-        and budget_max_val > 0
-    ):
+    if prior_products and isinstance(budget_max_val, (int, float)) and budget_max_val > 0:
         refined_in_memory = refine_last_search_by_budget(
             prior_products,
             budget_max=float(budget_max_val),
@@ -2297,11 +2287,7 @@ async def _try_budget_refinement_fast_path(
         {"name": tool_name, "args": enriched_args, "result": result},
     )
     if _search_has_products(result):
-        mcp_products = [
-            item
-            for item in (result.get("results") or [])
-            if isinstance(item, dict)
-        ]
+        mcp_products = [item for item in (result.get("results") or []) if isinstance(item, dict)]
         if mcp_products:
             _emit_provisional_carousel(
                 mcp_products,
@@ -2365,9 +2351,7 @@ async def _try_agent_loop_fast_path(
         user_message,
         intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
         session_delivery_city=(
-            delivery_only_session_city
-            if isinstance(delivery_only_session_city, str)
-            else None
+            delivery_only_session_city if isinstance(delivery_only_session_city, str) else None
         ),
     ):
         if _trace_has_check_delivery(tool_trace):
@@ -2603,11 +2587,7 @@ async def agent_loop(
             ]
             budget_max_val = state.get("session_budget_max")
             refined_in_memory: list[dict[str, Any]] | None = None
-            if (
-                prior_products
-                and isinstance(budget_max_val, (int, float))
-                and budget_max_val > 0
-            ):
+            if prior_products and isinstance(budget_max_val, (int, float)) and budget_max_val > 0:
                 refined_in_memory = refine_last_search_by_budget(
                     prior_products,
                     budget_max=float(budget_max_val),
@@ -2664,9 +2644,7 @@ async def agent_loop(
             discovery_search_merged = True
             budget_refinement_search_applied = True
             if prior_products and refined_in_memory is None:
-                _emit_status(
-                    "None of the current picks fit that budget — searching the catalog…"
-                )
+                _emit_status("None of the current picks fit that budget — searching the catalog…")
             result = await _invoke_tool_with_rate_limit_retry(
                 tool_name,
                 enriched_args,
@@ -2732,7 +2710,7 @@ async def agent_loop(
                         "or tell me a higher budget."
                     )
                     clear_carousel_on_budget_miss = True
-                    # Replace error result with an empty success so stale carousel fallback is skipped.
+                    # Empty success so stale carousel fallback is skipped.
                     tool_trace[-1] = {
                         "name": tool_name,
                         "args": enriched_args,
@@ -2747,9 +2725,7 @@ async def agent_loop(
                 break
             if _search_has_products(result):
                 mcp_products = [
-                    item
-                    for item in (result.get("results") or [])
-                    if isinstance(item, dict)
+                    item for item in (result.get("results") or []) if isinstance(item, dict)
                 ]
                 if mcp_products:
                     _emit_provisional_carousel(
@@ -3059,8 +3035,7 @@ async def agent_loop(
                     enriched_args["city"] = resolution.canonical
                 else:
                     agent_clarifying_question = (
-                        resolution.customer_message
-                        or "Which city should we deliver to?"
+                        resolution.customer_message or "Which city should we deliver to?"
                     )
                     if resolution.candidates:
                         delivery_city_candidates_update = list(resolution.candidates)

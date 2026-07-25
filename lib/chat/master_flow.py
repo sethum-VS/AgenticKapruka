@@ -6,9 +6,8 @@ import logging
 import re
 from typing import Any, Literal, cast
 
-
 from langchain_core.messages import BaseMessage, HumanMessage
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from graphs.state import AgentState, Intent
@@ -255,10 +254,13 @@ def should_invoke_master_flow(
     focus_str = focus.strip() if isinstance(focus, str) else None
     if is_budget_refinement_message(user_message, session_product_focus=focus_str):
         return False, "budget_refinement_fast_path"
-    if classify_routing_guard(
-        user_message,
-        has_carousel=_has_stale_discovery_context(state),
-    ) is not None:
+    if (
+        classify_routing_guard(
+            user_message,
+            has_carousel=_has_stale_discovery_context(state),
+        )
+        is not None
+    ):
         return False, "routing_guard_fast_path"
     if is_off_topic_message(user_message) or is_impossible_catalog_request(user_message):
         return False, "off_topic_fast_path"

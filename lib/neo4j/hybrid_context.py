@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import re
 import statistics
 from dataclasses import dataclass
 from typing import Any, Literal
 
-
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.config import get_settings
-
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import select_rewrite_model
 from lib.chat.product_curation import (
@@ -1255,9 +1251,7 @@ def _is_valid_mcp_category_filter(name: str) -> bool:
     if lower in _SAFE_MCP_CATEGORY_FILTERS:
         return True
     # Unknown multi-word or product-typed occasion labels are unsafe as MCP filters.
-    if _PRODUCT_TYPE_IN_OCCASION_RE.search(stripped) or " " in lower:
-        return False
-    return True
+    return not (_PRODUCT_TYPE_IN_OCCASION_RE.search(stripped) or " " in lower)
 
 
 def _resolve_mcp_category_filter(

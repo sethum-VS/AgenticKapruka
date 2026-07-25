@@ -329,8 +329,13 @@ async def iter_chat_sse_events(
                         partial_state.update(node_update)
                         trace_node_update(node_name, node_update)
 
-                        if node_name == "analyze_intent" and node_update.get("specificity_band") == "clarify":
-                            clarify_html = _render_streaming_assistant(THINKING, pending_id, oob=True)
+                        if (
+                            node_name == "analyze_intent"
+                            and node_update.get("specificity_band") == "clarify"
+                        ):
+                            clarify_html = _render_streaming_assistant(
+                                THINKING, pending_id, oob=True
+                            )
                             yield format_sse_event(clarify_html, event="status")
                             stream_started = True
 
@@ -379,9 +384,7 @@ async def iter_chat_sse_events(
             partial_state,
             initial_state=state,
         )
-        cleanup = (
-            f'<div id="{pending_id}" hx-swap-oob="delete"></div>' if stream_started else ""
-        )
+        cleanup = f'<div id="{pending_id}" hx-swap-oob="delete"></div>' if stream_started else ""
         if carousel_oob:
             yield format_sse_event(cleanup + partial_html)
             yield format_sse_event(carousel_oob, event="carousel")

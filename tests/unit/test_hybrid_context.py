@@ -656,13 +656,16 @@ def test_occasion_rewrite_needed_when_terms_absent() -> None:
 
 @pytest.mark.asyncio
 async def test_rewrite_search_query_with_occasion_uses_gemini() -> None:
-    with patch(
-        "lib.neo4j.hybrid_context.select_rewrite_model",
-        return_value="gemini-2.5-flash",
-    ), patch(
-        "lib.neo4j.hybrid_context.generate_content",
-        return_value=RewrittenSearchQuery(q="birthday cake for mom"),
-    ) as mock_generate:
+    with (
+        patch(
+            "lib.neo4j.hybrid_context.select_rewrite_model",
+            return_value="gemini-2.5-flash",
+        ),
+        patch(
+            "lib.neo4j.hybrid_context.generate_content",
+            return_value=RewrittenSearchQuery(q="birthday cake for mom"),
+        ) as mock_generate,
+    ):
         rewritten = await rewrite_search_query_with_occasion(
             "cake for mom",
             "Birthday",
@@ -677,13 +680,16 @@ async def test_rewrite_search_query_with_occasion_uses_gemini() -> None:
 async def test_rewrite_search_query_uses_lora_endpoint_when_configured() -> None:
     lora_model = "projects/test/locations/us-central1/endpoints/lora-rewrite"
 
-    with patch(
-        "lib.neo4j.hybrid_context.select_rewrite_model",
-        return_value=lora_model,
-    ), patch(
-        "lib.neo4j.hybrid_context.generate_content",
-        return_value=RewrittenSearchQuery(q="avurudu cake gifts"),
-    ) as mock_generate:
+    with (
+        patch(
+            "lib.neo4j.hybrid_context.select_rewrite_model",
+            return_value=lora_model,
+        ),
+        patch(
+            "lib.neo4j.hybrid_context.generate_content",
+            return_value=RewrittenSearchQuery(q="avurudu cake gifts"),
+        ) as mock_generate,
+    ):
         rewritten = await rewrite_search_query_with_occasion(
             "cake ona",
             "Avurudu",

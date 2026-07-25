@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from lib.chat.delivery_dates import is_ambiguous_weekday_phrase
 from lib.chat.intent_heuristics import (
@@ -556,10 +556,7 @@ def score_request_specificity(
     if _is_explicit_product_browse(stripped):
         band = "proceed"
     # Named category (flowers/cakes/roses/…) is enough to search without occasion.
-    if (
-        _PRODUCT_CATEGORY_RE.search(stripped)
-        and dimension_scores.get("product", 0.0) >= 1.0
-    ):
+    if _PRODUCT_CATEGORY_RE.search(stripped) and dimension_scores.get("product", 0.0) >= 1.0:
         band = "proceed"
     standalone_tokens = re.findall(r"[a-z']+", stripped.lower())
     if (
@@ -694,7 +691,9 @@ async def refine_specificity_with_llm(
     missing = refinement.missing_dimension or heuristic.missing_dimension
     question = None
     if refinement.band in ("clarify", "ambiguous"):
-        question = _build_clarifying_question(missing, is_situational=bool(meta.get("is_situational")))
+        question = _build_clarifying_question(
+            missing, is_situational=bool(meta.get("is_situational"))
+        )
 
     return SpecificityResult(
         score=refinement.score,

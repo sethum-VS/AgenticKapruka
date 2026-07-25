@@ -98,7 +98,7 @@ def build_city_choice_chips_html(candidates: list[str] | None) -> str | None:
         if not label:
             continue
         buttons.append(
-            "<button type=\"button\" "
+            '<button type="button" '
             f'class="chip-suggestion" '
             f'data-chat-suggestion="{label}" '
             f'data-testid="delivery-zone-chip">{label}</button>'

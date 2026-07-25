@@ -156,8 +156,8 @@ async def test_post_cart_add_uses_search_snapshot_on_get_product_failure(
     cart_app,
 ) -> None:
     """When live get_product fails, a recent search snapshot still adds to cart."""
-    from lib.redis.product_snapshot import cache_search_product_snapshots
     from lib.kapruka.types import CategoryRef, Money, ProductResult
+    from lib.redis.product_snapshot import cache_search_product_snapshots
 
     mock_service = cart_app.state.kapruka_service
     mock_service.get_product.side_effect = KaprukaError(

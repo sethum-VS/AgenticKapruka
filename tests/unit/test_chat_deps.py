@@ -6,9 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.runnables import RunnableConfig
-from starlette.requests import Request
-
 from starlette.applications import Starlette
+from starlette.requests import Request
 
 from lib.chat.deps import build_shopping_graph_deps, client_ip_from_request, resolve_turn_state
 

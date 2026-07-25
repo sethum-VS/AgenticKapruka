@@ -69,7 +69,7 @@ def test_chat_sse_js_uses_abort_controller_with_backend_timeout_buffer() -> None
     assert "CHAT_STREAM_TIMEOUT_BUFFER_MS = 10_000" in source
     assert "CHAT_STREAM_TIMEOUT_DEFAULT_MS = 130_000" in source
     assert "getChatStreamTimeoutMs" in source
-    assert 'dataset?.chatTimeoutMs' in source
+    assert "dataset?.chatTimeoutMs" in source
     assert 'chatStreamAbortReason = "timeout"' in source
     assert "controller.abort()" in source
     assert "signal: controller.signal" in source

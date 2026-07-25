@@ -37,7 +37,7 @@ from lib.chat.session import (
     verify_signed_session_cookie,
 )
 from lib.chat.sse import format_sse_event
-from lib.chat.streaming import chat_turn_timeout_seconds, iter_chat_sse_events
+from lib.chat.streaming import iter_chat_sse_events
 from lib.debug.trace import is_debug_trace_enabled, trace_error, trace_turn_start
 from lib.redis.cart import StoredCartItem, clear_cart, get_cart, migrate_cart
 from lib.redis.client import RedisClient

@@ -104,8 +104,6 @@ Rules:
 )
 
 
-
-
 def build_general_welcome_message() -> str:
     """Static concierge welcome for general turns with no catalog tool calls."""
     return normalize_catalog_text(

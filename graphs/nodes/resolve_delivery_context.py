@@ -273,9 +273,7 @@ async def _attach_ambiguous_colombo_preflight(
 
     candidates = updates.get("delivery_city_candidates")
     candidate_list = (
-        [str(c) for c in candidates if isinstance(c, str)]
-        if isinstance(candidates, list)
-        else None
+        [str(c) for c in candidates if isinstance(c, str)] if isinstance(candidates, list) else None
     )
     preflight_city = default_colombo_zone(candidate_list)
     logger.info(
@@ -510,8 +508,7 @@ async def resolve_delivery_context(
         )
         default_zone = default_colombo_zone(resolution.candidates)
         soft_message = (
-            f"Using {default_zone} for now — tap another zone if needed. "
-            f"{customer_message}"
+            f"Using {default_zone} for now — tap another zone if needed. {customer_message}"
         ).strip()
         soft_nudge: dict[str, Any] = {
             **resolved_base,

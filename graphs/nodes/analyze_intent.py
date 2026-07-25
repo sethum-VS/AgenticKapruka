@@ -386,19 +386,15 @@ def _is_category_switch_pivot(state: AgentState, user_message: str) -> bool:
         if derived_focus == prior_norm:
             return False
         # Cake <-> chocolate is a same-family refinement, not a pivot.
-        if {derived_focus, prior_norm} <= {"cake", "chocolate"}:
-            return False
-        return True
+        return not ({derived_focus, prior_norm} <= {"cake", "chocolate"})
     # No prior focus: treat as a pivot when a sticky occasion is being abandoned
     # (bare category turn that names no occasion of its own).
     prior_occasion = state.get("session_occasion")
-    if (
+    return (
         isinstance(prior_occasion, str)
-        and prior_occasion.strip()
+        and bool(prior_occasion.strip())
         and _derive_session_occasion(user_message) is None
-    ):
-        return True
-    return False
+    )
 
 
 def _clear_budget_on_pivot(
@@ -550,9 +546,7 @@ async def analyze_intent(
         intent_metadata,
     )
     focus_for_refine = state.get("session_product_focus")
-    focus_for_refine_str = (
-        focus_for_refine.strip() if isinstance(focus_for_refine, str) else None
-    )
+    focus_for_refine_str = focus_for_refine.strip() if isinstance(focus_for_refine, str) else None
     budget_refine = is_budget_refinement_message(
         user_message,
         session_product_focus=focus_for_refine_str,

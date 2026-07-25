@@ -3,6 +3,8 @@ name: Main
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 concurrency:
   group: main-${{ github.ref }}
@@ -42,6 +44,7 @@ jobs:
   e2e-smoke:
     name: Playwright E2E smoke tests
     needs: lint-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -67,6 +70,7 @@ jobs:
   ragas-eval:
     name: Ragas golden dataset eval
     needs: lint-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -94,13 +98,73 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Heroku CLI
+        run: curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
+
+      - name: Sync config vars to Heroku
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+          HEROKU_APP_NAME: ${{ secrets.HEROKU_APP_NAME }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          ZEP_API_KEY: ${{ secrets.ZEP_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_API_KEY_BACKUP: ${{ secrets.NVIDIA_API_KEY_BACKUP }}
+          NVIDIA_BASE_URL: ${{ secrets.NVIDIA_BASE_URL }}
+          NVIDIA_LLM_MODEL: ${{ secrets.NVIDIA_LLM_MODEL }}
+          NVIDIA_EMBEDDING_MODEL: ${{ secrets.NVIDIA_EMBEDDING_MODEL }}
+          NVIDIA_RATE_LIMIT_RPM: ${{ secrets.NVIDIA_RATE_LIMIT_RPM }}
+          NVIDIA_VECTOR_THRESHOLD: ${{ secrets.NVIDIA_VECTOR_THRESHOLD }}
+          KAPRUKA_MCP_URL: ${{ secrets.KAPRUKA_MCP_URL }}
+          RERANKER_THRESHOLD: ${{ secrets.RERANKER_THRESHOLD }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+        run: |
+          heroku config:set \
+            REDIS_URL="$REDIS_URL" \
+            NEO4J_URI="$NEO4J_URI" \
+            NEO4J_USER="$NEO4J_USER" \
+            NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+            ZEP_API_KEY="$ZEP_API_KEY" \
+            NVIDIA_API_KEY="$NVIDIA_API_KEY" \
+            NVIDIA_API_KEY_BACKUP="$NVIDIA_API_KEY_BACKUP" \
+            NVIDIA_BASE_URL="$NVIDIA_BASE_URL" \
+            NVIDIA_LLM_MODEL="$NVIDIA_LLM_MODEL" \
+            NVIDIA_EMBEDDING_MODEL="$NVIDIA_EMBEDDING_MODEL" \
+            NVIDIA_RATE_LIMIT_RPM="$NVIDIA_RATE_LIMIT_RPM" \
+            NVIDIA_VECTOR_THRESHOLD="$NVIDIA_VECTOR_THRESHOLD" \
+            KAPRUKA_MCP_URL="$KAPRUKA_MCP_URL" \
+            RERANKER_THRESHOLD="$RERANKER_THRESHOLD" \
+            SESSION_SECRET="$SESSION_SECRET" \
+            APP_ENV=production \
+            DEBUG_TRACE=0 \
+            LOG_LEVEL=INFO \
+            -a "$HEROKU_APP_NAME"
+
       - name: Deploy to Heroku
         env:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
           HEROKU_APP_NAME: ${{ secrets.HEROKU_APP_NAME }}
         run: |
-          curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
           heroku container:login
           heroku stack:set container -a $HEROKU_APP_NAME
           heroku container:push web -a $HEROKU_APP_NAME
           heroku container:release web -a $HEROKU_APP_NAME
+
+      - name: Verify deployment health
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+          HEROKU_APP_NAME: ${{ secrets.HEROKU_APP_NAME }}
+        run: |
+          APP_URL="https://${HEROKU_APP_NAME}.herokuapp.com"
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS "${APP_URL}/health" | grep -q '"status"'; then
+              curl -fsS "${APP_URL}/health"
+              exit 0
+            fi
+            echo "Health check attempt ${attempt} failed; retrying in 15s..."
+            sleep 15
+          done
+          echo "Health check failed after 5 attempts"
+          exit 1

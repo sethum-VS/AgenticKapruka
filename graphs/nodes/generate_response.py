@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -10,7 +9,6 @@ import secrets
 from collections.abc import Mapping
 from datetime import date
 from typing import Any, cast
-
 
 from langchain_core.messages import HumanMessage
 from langgraph.config import get_stream_writer
@@ -28,12 +26,12 @@ from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
-from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.city_resolution import (
     build_city_choice_chips_html,
     build_city_not_found_message,
     is_unknown_city_error,
 )
+from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.intent_heuristics import build_guest_checkout_reply, is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.off_topic import (
@@ -92,8 +90,8 @@ from lib.checkout.tracking import (
     tracking_error_from_tool_results,
     tracking_output_from_tool_results,
 )
-from lib.genai.errors import is_rate_limited, is_transient_nim_error
 from lib.genai.completions import generate_content
+from lib.genai.errors import is_transient_nim_error
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -263,7 +261,10 @@ def _carousel_strict_budget(
 ) -> bool:
     if budget_max is None or budget_max <= 0:
         return False
-    from lib.chat.intent_heuristics import has_explicit_budget_constraint, is_budget_refinement_message
+    from lib.chat.intent_heuristics import (
+        has_explicit_budget_constraint,
+        is_budget_refinement_message,
+    )
 
     # Budget-refine turns always use strict filtering even if topic_pivot leaked.
     focus = state.get("session_product_focus") if state else None
@@ -1136,7 +1137,7 @@ def build_apology_suggestion_chips_html() -> str:
         safe_label = html_lib.escape(label)
         safe_suggestion = html_lib.escape(suggestion)
         buttons.append(
-            "<button type=\"button\" "
+            '<button type="button" '
             f'class="chip-suggestion" '
             f'data-chat-suggestion="{safe_suggestion}" '
             f'data-testid="apology-suggestion-chip">{safe_label}</button>'
@@ -1154,13 +1155,11 @@ def _should_offer_apology_chips(state: AgentState, user_message: str) -> bool:
     if not isinstance(intent_metadata, dict) or not intent_metadata.get("is_situational"):
         return False
     # When the shopper already named flowers, chips are redundant.
-    if re.search(
+    return not re.search(
         r"\b(?:flower|flowers|rose|roses|bouquet|bouquets|floral)\b",
         user_message,
         re.I,
-    ):
-        return False
-    return True
+    )
 
 
 def _prepend_budget_confirmation(
@@ -1987,9 +1986,7 @@ async def generate_response(
         )
         candidates = state.get("delivery_city_candidates")
         chips_html = (
-            build_city_choice_chips_html(candidates)
-            if isinstance(candidates, list)
-            else None
+            build_city_choice_chips_html(candidates) if isinstance(candidates, list) else None
         )
         if chips_html is None and _should_offer_apology_chips(state, user_message):
             chips_html = build_apology_suggestion_chips_html()
@@ -2156,7 +2153,6 @@ async def generate_response(
                 review_html if isinstance(review_html, str) and review_html.strip() else None
             )
 
-            client = genai_client
             model = select_model(state)
             user_prompt = _build_checkout_review_prompt(user_message, checkout)
             zep_memory_facts = state.get("zep_memory_facts")
@@ -2521,7 +2517,6 @@ async def generate_response(
             updates["last_visible_products"] = visible_products
             return updates
 
-    client = genai_client
     model = select_model(state)
     _emit_synthesis_status()
     user_prompt = _build_user_prompt(

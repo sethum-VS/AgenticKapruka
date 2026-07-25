@@ -30,11 +30,11 @@ async def test_long_session_budget_drift_invokes_master_flow() -> None:
     }
     with patch("lib.chat.master_flow.generate_content") as mock_llm:
         mock_llm.return_value = MasterFlowAlignment(
-                decision="pivot",
-                confidence=0.9,
-                active_flow="carousel_context",
-                context_reset=True,
-            )
+            decision="pivot",
+            confidence=0.9,
+            active_flow="carousel_context",
+            context_reset=True,
+        )
         updates = await master_flow(state, genai_client=_genai_client())  # type: ignore[arg-type]
     assert updates.get("master_flow_invoked") is True
     assert updates.get("last_visible_products") is None
@@ -54,11 +54,11 @@ async def test_delivery_only_clarify_short_circuit() -> None:
     }
     with patch("lib.chat.master_flow.generate_content") as mock_llm:
         mock_llm.return_value = MasterFlowAlignment(
-                decision="redirect",
-                confidence=0.85,
-                active_flow="delivery_resolution",
-                resolved_intent="general",
-            )
+            decision="redirect",
+            confidence=0.85,
+            active_flow="delivery_resolution",
+            resolved_intent="general",
+        )
         updates = await master_flow(state, genai_client=_genai_client())  # type: ignore[arg-type]
     assert updates.get("master_flow_invoked") is True
 
@@ -72,11 +72,11 @@ async def test_awaiting_date_unrelated_product_clarifies() -> None:
     }
     with patch("lib.chat.master_flow.generate_content") as mock_llm:
         mock_llm.return_value = MasterFlowAlignment(
-                decision="clarify",
-                confidence=0.88,
-                active_flow="awaiting_delivery_date",
-                clarifying_question="Before we browse cakes — which delivery date do you need?",
-            )
+            decision="clarify",
+            confidence=0.88,
+            active_flow="awaiting_delivery_date",
+            clarifying_question="Before we browse cakes — which delivery date do you need?",
+        )
         updates = await master_flow(state, genai_client=_genai_client())  # type: ignore[arg-type]
     assert "Before we browse" in (updates.get("master_clarifying_question") or "")
 
@@ -90,11 +90,11 @@ async def test_checkout_interrupt_pauses() -> None:
     }
     with patch("lib.chat.master_flow.generate_content") as mock_llm:
         mock_llm.return_value = MasterFlowAlignment(
-                decision="redirect",
-                confidence=0.9,
-                active_flow="checkout_active",
-                checkout_action="pause",
-            )
+            decision="redirect",
+            confidence=0.9,
+            active_flow="checkout_active",
+            checkout_action="pause",
+        )
         updates = await master_flow(state, genai_client=_genai_client())  # type: ignore[arg-type]
     assert updates.get("checkout_paused") is True
 
