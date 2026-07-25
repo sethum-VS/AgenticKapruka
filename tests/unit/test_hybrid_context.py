@@ -934,6 +934,29 @@ def test_build_discovery_search_args_topic_pivot_fresh_flowers() -> None:
     assert args.get("category") == "Flowers"
 
 
+def test_build_discovery_search_args_normal_fresh_flowers_without_pivot_flag() -> None:
+    """Bare 'Normal fresh flowers?' searches even before topic_pivot is stamped."""
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "Normal fresh flowers?",
+        {},
+        currency="LKR",
+        intent_metadata={},
+    )
+    assert args["q"] == "fresh flowers"
+    assert args.get("category") == "Flowers"
+
+
+def test_is_confident_discovery_normal_fresh_flowers() -> None:
+    assert is_confident_discovery_turn(
+        "Normal fresh flowers?",
+        {},
+        currency="LKR",
+        intent_metadata={},
+    )
+
+
 def test_build_discovery_search_args_literal_blush_roses() -> None:
     from lib.neo4j.hybrid_context import build_discovery_search_args
 

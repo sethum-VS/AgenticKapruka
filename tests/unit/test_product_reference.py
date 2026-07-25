@@ -76,7 +76,7 @@ def test_resolve_deictic_single_product() -> None:
     assert result["product"]["id"] == "a"
 
 
-def test_resolve_deictic_multi_asks_which() -> None:
+def test_resolve_deictic_multi_defaults_to_first() -> None:
     mojibake = {
         "id": "gift-mens",
         "name": "Power Drive Menâ€™s Gift Box For Him",
@@ -87,22 +87,20 @@ def test_resolve_deictic_multi_asks_which() -> None:
         last_search_products=[mojibake, _RED],
     )
     assert result is not None
-    assert result["status"] == "clarify"
-    assert "Which one would you like me to add" in (result["clarifying_question"] or "")
-    assert "Power Drive" in (result["clarifying_question"] or "")
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "gift-mens"
 
 
-def test_resolve_deictic_multi_numbered_clarify() -> None:
-    """Deictic 'that' with multiple carousel items asks for a numbered choice."""
+def test_resolve_deictic_multi_defaults_to_first_visible() -> None:
+    """Deictic 'that' with multiple carousel items resolves to the first visible item."""
     result = resolve_product_reference(
         "that",
         last_visible_products=[_BLUSH, _RED],
         last_search_products=[_BLUSH, _RED],
     )
     assert result is not None
-    assert result["status"] == "clarify"
-    assert "1)" in (result["clarifying_question"] or "")
-    assert "2)" in (result["clarifying_question"] or "")
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "a"
 
 
 def test_resolve_deictic_add_that_to_cart_phrase() -> None:

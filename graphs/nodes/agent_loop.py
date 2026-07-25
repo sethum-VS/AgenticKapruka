@@ -1040,7 +1040,7 @@ def _format_planner_query_rewrite_hints(
             "with broad discovery queries rather than graph-based context."
         )
     has_budget = budget_max is not None and budget_max > 0
-    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
+    bare_focus = is_bare_category_pivot(user_message)
     if bare_focus:
         flower_q = (
             "fresh flowers"
@@ -1343,7 +1343,10 @@ def _planner_transient_error(exc: BaseException) -> dict[str, str]:
     return {
         "tool": SEARCH_PRODUCTS_TOOL,
         "error": "timeout",
-        "message": "NVIDIA NIM timed out; using catalog results already gathered.",
+        "message": (
+            "That took too long — please try again. "
+            "Your last results are still above if you want to refine or pick another gift."
+        ),
     }
 
 
@@ -2091,7 +2094,9 @@ async def _try_budget_refinement_fast_path(
 ) -> dict[str, Any] | None:
     """Filter prior carousel (or MCP search) for budget-only turns — skip planner."""
     user_message = _extract_latest_user_message(state.get("messages") or [])
-    if not is_budget_refinement_message(user_message):
+    focus = state.get("session_product_focus")
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if not is_budget_refinement_message(user_message, session_product_focus=focus_str):
         return None
     if not (
         state.get("session_search_query")
@@ -2112,15 +2117,29 @@ async def _try_budget_refinement_fast_path(
     base_tool_count = int(state.get("tool_call_count") or 0)
     working_trace = list(tool_trace)
     tool_name = SEARCH_PRODUCTS_TOOL
+    # Prefer last_visible (what the shopper saw) then last_search.
     prior_products = [
         item
-        for item in (
-            list(state.get("last_search_products") or [])
-            or list(state.get("last_visible_products") or [])
-        )
+        for item in list(state.get("last_visible_products") or [])
         if isinstance(item, dict)
     ]
+    if not prior_products:
+        prior_products = [
+            item
+            for item in list(state.get("last_search_products") or [])
+            if isinstance(item, dict)
+        ]
     budget_max_val = state.get("session_budget_max")
+    if not isinstance(budget_max_val, (int, float)) or budget_max_val <= 0:
+        from lib.neo4j.hybrid_context import extract_budget
+
+        turn_cap = extract_budget(user_message)
+        if turn_cap is not None and turn_cap.amount > 0:
+            budget_max_val = float(turn_cap.amount)
+        else:
+            turn_budget = state.get("budget_max")
+            if isinstance(turn_budget, (int, float)) and turn_budget > 0:
+                budget_max_val = float(turn_budget)
     session_search_query_update: str | None = None
 
     if (

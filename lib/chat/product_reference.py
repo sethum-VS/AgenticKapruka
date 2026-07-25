@@ -219,12 +219,10 @@ def resolve_product_reference(
             "status": "resolved",
             "product": products[0],
         }
-    # Multi-item carousel: ask which numbered option instead of guessing.
+    # Multi-item carousel: default to the first visible item (same as "first one").
     return {
-        "status": "clarify",
-        "product": None,
-        "clarifying_question": _numbered_clarify(products),
-        "candidates": products,
+        "status": "resolved",
+        "product": products[0],
     }
 
 

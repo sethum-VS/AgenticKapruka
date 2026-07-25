@@ -13,7 +13,11 @@ from pydantic import BaseModel, Field, ValidationError
 from app.config import Settings, get_settings
 from graphs.state import AgentState, Intent
 from lib.chat.delivery_dates import normalize_delivery_date
-from lib.chat.intent_heuristics import classify_routing_guard, is_bare_category_pivot
+from lib.chat.intent_heuristics import (
+    classify_routing_guard,
+    is_bare_category_pivot,
+    is_budget_refinement_message,
+)
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import FLASH_MODEL
 from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
@@ -86,6 +90,9 @@ Inputs describe:
 Rules:
 - Do not invent product facts or catalog results.
 - Prefer decision=clarify over guessing when the mismatch is ambiguous.
+- Budget-only follow-ups with an existing carousel (e.g. "under 6000", "keep it
+  under 5000 rupees") must use decision=proceed — never clarify, pivot, or
+  context_reset. Downstream filters the carousel in-memory.
 - decision=pivot or redirect with context_reset=true when stale carousel/search context
   should be cleared for a fresh discovery turn.
 - checkout_action=exit only when the user explicitly cancels or changes topic away
@@ -213,10 +220,16 @@ def _long_session_drift_signals(
     user_message: str,
     intent_metadata: IntentMetadata | dict[str, Any],
 ) -> bool:
+    # Budget-only refine is handled by the in-memory filter — never treat as drift.
+    focus = state.get("session_product_focus")
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return False
     return (
         (
             extract_budget(user_message) is not None
             and not intent_metadata.get("discovery_context_reset")
+            and not is_budget_refinement_message(user_message, session_product_focus=focus_str)
         )
         or (_RECIPIENT_RE.search(user_message) is not None and _has_stale_discovery_context(state))
         or (bool(intent_metadata.get("topic_pivot")) and _has_stale_discovery_context(state))
@@ -238,6 +251,10 @@ def should_invoke_master_flow(
 
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
+    focus = state.get("session_product_focus")
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return False, "budget_refinement_fast_path"
     if classify_routing_guard(
         user_message,
         has_carousel=_has_stale_discovery_context(state),

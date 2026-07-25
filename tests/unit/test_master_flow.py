@@ -125,7 +125,8 @@ def test_should_invoke_topic_pivot_stale_carousel() -> None:
 
 def test_should_invoke_long_session_drift() -> None:
     messages = [HumanMessage(content=f"turn {i}") for i in range(8)]
-    messages.append(HumanMessage(content="gift for wife under 5000"))
+    # Recipient switch with stale carousel (no budget refine) still triggers drift.
+    messages.append(HumanMessage(content="actually for my sister"))
     state = _state(
         messages=messages,
         last_visible_products=[{"id": "stale"}],
@@ -133,6 +134,32 @@ def test_should_invoke_long_session_drift() -> None:
     invoke, reason = should_invoke_master_flow(state)
     assert invoke is True
     assert reason == "long_session_drift"
+
+
+def test_should_not_invoke_budget_refinement_long_session() -> None:
+    """Budget-only refine must skip master-flow even after many turns."""
+    messages = [HumanMessage(content=f"turn {i}") for i in range(8)]
+    messages.append(HumanMessage(content="under 6000"))
+    state = _state(
+        messages=messages,
+        last_visible_products=[{"id": "chocolate-1", "price": 5000}],
+        session_product_focus="chocolate",
+        session_budget_max=6000,
+    )
+    invoke, reason = should_invoke_master_flow(state)
+    assert invoke is False
+    assert reason == "budget_refinement_fast_path"
+
+
+def test_should_not_invoke_bare_category_normal_fresh_flowers() -> None:
+    state = _state(
+        messages=[HumanMessage(content="Normal fresh flowers?")],
+        last_visible_products=[{"id": "cake-1"}],
+        session_product_focus="cake",
+    )
+    invoke, reason = should_invoke_master_flow(state)
+    assert invoke is False
+    assert reason == "bare_category_pivot_fast_path"
 
 
 def test_should_not_invoke_when_specificity_band_is_clarify() -> None:

@@ -18,6 +18,7 @@ from lib.chat.delivery_dates import (
 from lib.chat.intent_heuristics import (
     PROCEED_CHECKOUT_MESSAGE,
     classify_routing_guard,
+    is_budget_refinement_message,
     is_budgeted_gift_ideas_message,
     is_cart_add_trigger,
     is_guest_checkout_question,
@@ -548,12 +549,25 @@ async def analyze_intent(
         user_message,
         intent_metadata,
     )
-    explicit_pivot = is_topic_pivot_message(user_message)
+    focus_for_refine = state.get("session_product_focus")
+    focus_for_refine_str = (
+        focus_for_refine.strip() if isinstance(focus_for_refine, str) else None
+    )
+    budget_refine = is_budget_refinement_message(
+        user_message,
+        session_product_focus=focus_for_refine_str,
+    )
+    explicit_pivot = is_topic_pivot_message(user_message) and not budget_refine
     # Broader signal: bare category switches (e.g. "fresh flowers" after an
     # anniversary-gift turn) clear stale occasion/search seeds too. Budget clearing
     # stays gated on explicit pivots so implicit category changes keep the existing
     # "still keeping under <budget>?" confirmation flow instead of silently dropping it.
-    context_pivot = explicit_pivot or _is_category_switch_pivot(state, user_message)
+    # Budget-only refine must never clear the carousel or set topic_pivot.
+    context_pivot = (
+        False
+        if budget_refine
+        else (explicit_pivot or _is_category_switch_pivot(state, user_message))
+    )
     session_budget_max, session_budget_currency, intent_metadata = _clear_budget_on_pivot(
         user_message,
         session_budget_max,

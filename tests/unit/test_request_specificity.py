@@ -390,6 +390,7 @@ def test_fresh_flowers_pivot_proceeds_without_occasion() -> None:
         "What about just normal fresh flowers?",
         "Nevermind. Flowers.",
         "fresh flowers",
+        "Normal fresh flowers?",
     ):
         result = score_request_specificity(
             message,
@@ -401,6 +402,20 @@ def test_fresh_flowers_pivot_proceeds_without_occasion() -> None:
         )
         assert result.band == "proceed", message
         assert result.clarifying_question is None
+
+
+def test_normal_fresh_flowers_proceeds_without_topic_pivot_flag() -> None:
+    """Bare 'Normal fresh flowers?' must proceed even before topic_pivot is set."""
+    result = score_request_specificity(
+        "Normal fresh flowers?",
+        session_product_focus="cake",
+        session_occasion="anniversary",
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata={},
+    )
+    assert result.band == "proceed"
+    assert result.clarifying_question is None
 
 
 def test_blush_roses_proceeds_to_search() -> None:

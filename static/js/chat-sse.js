@@ -401,8 +401,16 @@
         return true;
       }
       if (reason === "timeout") {
+        // Server soft-timeout already replaced the pending bubble and sent done —
+        // avoid a duplicate client-side timeout notice.
+        const pendingLeft = document.querySelectorAll('[id^="assistant-stream-"]').length;
+        const alreadyHasNotice = Boolean(
+          document.querySelector(".chat-stream-timeout, .chat-stream-error"),
+        );
         removePendingAssistantBubbles();
-        showStreamTimeoutMessage();
+        if (pendingLeft > 0 && !alreadyHasNotice) {
+          showStreamTimeoutMessage();
+        }
         chatDebugLog(form, "stream timed out");
         toggleRequestState(form, false);
         document.body.dispatchEvent(
@@ -446,6 +454,7 @@
     const controller = new AbortController();
     chatStreamController = controller;
     chatStreamAbortReason = null;
+    let streamReceivedDone = false;
     const timeoutMs = getChatStreamTimeoutMs(form);
     const timeoutId = setTimeout(() => {
       chatStreamAbortReason = "timeout";
@@ -488,6 +497,7 @@
 
         for (const event of parsed.events) {
           if (event.eventName === "done") {
+            streamReceivedDone = true;
             toggleRequestState(form, false);
             continue;
           }
@@ -512,6 +522,7 @@
         const parsed = parseSseChunk(`${buffer}\n\n`);
         for (const event of parsed.events) {
           if (event.eventName === "done") {
+            streamReceivedDone = true;
             toggleRequestState(form, false);
             continue;
           }
@@ -538,6 +549,12 @@
       form.reset();
     } catch (error) {
       clearTimeout(timeoutId);
+      if (streamReceivedDone && error?.name === "AbortError") {
+        // Server already finished; ignore late client abort.
+        chatStreamAbortReason = null;
+        toggleRequestState(form, false);
+        return;
+      }
       const handled = handleStreamError(form, error);
       if (!handled) {
         throw error;

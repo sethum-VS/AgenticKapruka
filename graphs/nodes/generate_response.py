@@ -233,13 +233,16 @@ def _turn_search_has_products(tool_trace: list[ToolInvocation] | None) -> bool:
 
 
 def _session_budget_applies(state: AgentState, user_message: str) -> bool:
+    # Budget refine / explicit turn budget always applies — even if topic_pivot leaked.
+    focus = state.get("session_product_focus")
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if extract_budget(user_message) is not None:
+        return True
+    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return True
     pivot_meta = state.get("intent_metadata") or {}
     if isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"):
         return False
-    if extract_budget(user_message) is not None:
-        return True
-    if is_budget_refinement_message(user_message):
-        return True
     session_budget = state.get("session_budget_max")
     if isinstance(session_budget, (int, float)) and session_budget > 0:
         return True
@@ -250,6 +253,35 @@ def _session_budget_applies(state: AgentState, user_message: str) -> bool:
         if isinstance(prior, str) and extract_budget(prior) is not None:
             return True
     return False
+
+
+def _carousel_strict_budget(
+    user_message: str,
+    budget_max: float | None,
+    *,
+    state: AgentState | None = None,
+) -> bool:
+    if budget_max is None or budget_max <= 0:
+        return False
+    from lib.chat.intent_heuristics import has_explicit_budget_constraint, is_budget_refinement_message
+
+    # Budget-refine turns always use strict filtering even if topic_pivot leaked.
+    focus = state.get("session_product_focus") if state else None
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return True
+    if extract_budget(user_message) is not None:
+        return True
+    pivot_meta = state.get("intent_metadata") if state else None
+    topic_pivot = bool(
+        isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"),
+    )
+    session_budget = state.get("session_budget_max") if state else None
+    return has_explicit_budget_constraint(
+        user_message,
+        session_budget if isinstance(session_budget, (int, float)) else None,
+        topic_pivot=topic_pivot,
+    )
 
 
 def _suppress_delivery_tool_results(
@@ -326,6 +358,11 @@ def build_agent_tool_error_message(
         return delivery_date_clarifying_question()
     if error_code in ("429", "rate_limit_exceeded"):
         return "I'm checking our catalog — one moment."
+    if error_code == "timeout":
+        return (
+            "That took too long — please try again. "
+            "Your last results are still above if you want to refine or pick another gift."
+        )
     if error_code == "date_not_deliverable":
         return (
             "That delivery date is not available. "
@@ -629,6 +666,28 @@ def _apply_perishable_delivery_honesty(
     updated_reply = reply_text
     delivery_html: str | None = None
 
+    # Synthesize far-ahead perishability copy before rendering the delivery partial
+    # so the warning is included in delivery_status_html.
+    warning = delivery_output.perishable_warning
+    if (not isinstance(warning, str) or not warning.strip()) and _turn_implies_perishable_gift(
+        user_message,
+        session_product_focus=session_product_focus,
+    ):
+        checked_date = delivery_output.checked_date
+        if (
+            checked_date
+            and not _is_city_only_check_delivery(invocation)
+            and _delivery_date_more_than_one_day_out(checked_date)
+        ):
+            warning = (
+                "Fresh cakes, flowers, and gift combos are best within a day or two of "
+                "delivery. Your date is more than a day out — consider ordering closer to "
+                "the event."
+            )
+            delivery_output = delivery_output.model_copy(
+                update={"perishable_warning": warning},
+            )
+
     if delivery_output.available:
         city = _canonical_city_from_check_delivery_invocation(invocation)
         if city and not _reply_has_verified_delivery_fee(
@@ -653,22 +712,6 @@ def _apply_perishable_delivery_honesty(
         if not _is_city_only_check_delivery(invocation):
             delivery_html = render_delivery_date_status(result=delivery_output)
 
-    warning = delivery_output.perishable_warning
-    if (not isinstance(warning, str) or not warning.strip()) and _turn_implies_perishable_gift(
-        user_message,
-        session_product_focus=session_product_focus,
-    ):
-        checked_date = delivery_output.checked_date
-        if (
-            checked_date
-            and not _is_city_only_check_delivery(invocation)
-            and _delivery_date_more_than_one_day_out(checked_date)
-        ):
-            warning = (
-                "Fresh cakes, flowers, and gift combos are best within a day or two of "
-                "delivery. Your date is more than a day out — consider ordering closer to "
-                "the event."
-            )
     if isinstance(warning, str) and warning.strip():
         warning = warning.strip()
         dated_delivery = not _is_city_only_check_delivery(invocation)
@@ -1063,28 +1106,6 @@ async def _generate_reply(
     if isinstance(reply, AssistantReply):
         return reply.message.strip()
     return ""
-
-
-def _carousel_strict_budget(
-    user_message: str,
-    budget_max: float | None,
-    *,
-    state: AgentState | None = None,
-) -> bool:
-    if budget_max is None or budget_max <= 0:
-        return False
-    from lib.chat.intent_heuristics import has_explicit_budget_constraint
-
-    pivot_meta = state.get("intent_metadata") if state else None
-    topic_pivot = bool(
-        isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"),
-    )
-    session_budget = state.get("session_budget_max") if state else None
-    return has_explicit_budget_constraint(
-        user_message,
-        session_budget if isinstance(session_budget, (int, float)) else None,
-        topic_pivot=topic_pivot,
-    )
 
 
 def _prepend_situational_empathy(
@@ -2569,6 +2590,16 @@ async def generate_response(
             visible_products,
             user_message=user_message,
         )
+        # Situational distress with no products yet: still emit empathy + chips path.
+        if not template and (
+            (isinstance(pivot_meta, dict) and pivot_meta.get("is_situational"))
+            or state.get("session_situational")
+        ):
+            template = (
+                "I'm sorry to hear you're going through this. "
+                "I can help with apology flowers, a sorry card, or a small chocolate gift — "
+                "what would feel right?"
+            )
         reply_text = template or "I could not generate a response. Please try again."
 
     reply_text = normalize_catalog_text(reply_text)

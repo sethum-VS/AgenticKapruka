@@ -1458,7 +1458,7 @@ def build_discovery_search_args(
     topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
     from lib.chat.intent_heuristics import is_bare_category_pivot
 
-    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
+    bare_focus = is_bare_category_pivot(user_message)
     category = _resolve_mcp_category_filter(
         context,
         allow_preferences=not topic_pivot,
@@ -1472,14 +1472,14 @@ def build_discovery_search_args(
     anniversary_occasion = is_anniversary_occasion_intent(query, context)
     fallback_category = category or ("Birthday" if birthday_occasion else None)
 
-    if topic_pivot and bare_focus == "cake":
+    if (topic_pivot or bare_focus) and bare_focus == "cake":
         return {"q": "cake", "currency": currency}
-    if topic_pivot and bare_focus == "flowers":
+    if (topic_pivot or bare_focus) and bare_focus == "flowers":
         # Prefer the customer's wording when they said "fresh flowers" etc.
         lowered = query.lower()
         flower_q = "fresh flowers" if "fresh" in lowered else "flowers"
         return {"q": flower_q, "currency": currency, "category": "Flowers"}
-    if topic_pivot and bare_focus == "chocolate":
+    if (topic_pivot or bare_focus) and bare_focus == "chocolate":
         return {"q": "chocolate", "currency": currency}
     # Topic pivot with category tokens but bare_focus gated out — still search category.
     if topic_pivot and bare_focus is None:
@@ -1755,9 +1755,8 @@ def is_confident_discovery_turn(
     intent_metadata = intent_metadata or {}
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
     from lib.chat.intent_heuristics import is_bare_category_pivot
-    from lib.chat.request_specificity import _PRODUCT_CATEGORY_RE
 
-    bare_focus = is_bare_category_pivot(stripped) if topic_pivot else None
+    bare_focus = is_bare_category_pivot(stripped)
     # Topic pivot naming a product category is always confident — never ask_user for occasion.
     _named_category = re.compile(
         r"\b(?:cakes?|cupcakes?|flower|flowers|rose|roses|bouquet|chocolate|chocolates)\b",
@@ -1770,6 +1769,9 @@ def is_confident_discovery_turn(
             bare_focus = "cake"
         elif re.search(r"\b(?:chocolate|chocolates)\b", stripped, re.I):
             bare_focus = "chocolate"
+    # Bare category utterance (e.g. "Normal fresh flowers?") is always confident.
+    if bare_focus is not None:
+        return True
     discovery_message = enrich_message_with_session_slots(stripped, state)
     # On topic pivots, ignore stale session slots so cake/anniversary context does not
     # poison a fresh flowers/cakes search.
@@ -1870,21 +1872,21 @@ def merge_planner_search_args(
     topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
     from lib.chat.intent_heuristics import is_bare_category_pivot
 
-    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
+    bare_focus = is_bare_category_pivot(user_message)
 
-    if topic_pivot and bare_focus == "cake":
+    if bare_focus == "cake":
         merged["q"] = "cake"
         merged.pop("category", None)
         return merged
 
-    if topic_pivot and bare_focus == "flowers":
+    if bare_focus == "flowers":
         lowered = user_message.lower()
         flower_q = "fresh flowers" if "fresh" in lowered else "flowers"
         merged["q"] = flower_q
         merged["category"] = "Flowers"
         return merged
 
-    if topic_pivot and bare_focus == "chocolate":
+    if bare_focus == "chocolate":
         merged["q"] = "chocolate"
         merged.pop("category", None)
         return merged

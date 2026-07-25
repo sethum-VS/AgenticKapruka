@@ -209,7 +209,7 @@ async def test_resolve_cart_product_add_two_to_cart_skips_cold_mcp() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_cart_product_deictic_multi_clarifies_without_mcp() -> None:
+async def test_resolve_cart_product_deictic_multi_defaults_to_first() -> None:
     mock_service = AsyncMock()
     state: AgentState = {
         "messages": [HumanMessage(content="Add that to my cart")],
@@ -225,8 +225,8 @@ async def test_resolve_cart_product_deictic_multi_clarifies_without_mcp() -> Non
     )
 
     action = result["cart_action_result"]
-    assert action["status"] == "clarify"
-    assert "Which one would you like me to add" in (action.get("clarifying_question") or "")
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00blush001"
     mock_service.search_products.assert_not_awaited()
 
 

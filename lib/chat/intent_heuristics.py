@@ -318,12 +318,28 @@ _PRODUCT_CATEGORY_TOKENS = re.compile(
     r"hamper|voucher|gift|gifts|combo|combopack)\b",
     re.I,
 )
+# Hard product nouns — naming a *new* hard category exits budget-refine mode.
+_HARD_CATEGORY_TOKENS = re.compile(
+    r"\b(?:cake|cupcakes?|flower|flowers|rose|roses|bouquet|chocolate|chocolates|"
+    r"hamper|voucher|combo|combopack)\b",
+    re.I,
+)
+_SOFT_GIFT_CATEGORY_TOKENS = re.compile(r"\b(?:gift|gifts)\b", re.I)
 _TOPIC_PIVOT_PREFIX = re.compile(
     r"^(?:never\s*mind|nevermind|instead|actually|what\s+about)\b",
     re.I,
 )
 _BARE_CATEGORY_REPLY = re.compile(
     r"^(?:cakes?|flowers?|chocolates?|roses?|bouquets?|gifts?)\s*[!.?]*$",
+    re.I,
+)
+# Category-only browse with optional fillers (no nevermind/what-about required).
+_BARE_CATEGORY_UTTERANCE = re.compile(
+    r"^(?:(?:just|normal|fresh|some|only|regular)\s+)*"
+    r"(?:cakes?|cupcakes?|flowers?|roses?|bouquets?|chocolates?|gifts?)"
+    r"(?:\s+(?:just|normal|fresh|some|only|regular))*"
+    r"(?:\s+(?:please|pls))?"
+    r"$",
     re.I,
 )
 
@@ -335,19 +351,38 @@ def has_explicit_budget_constraint(
     topic_pivot: bool = False,
 ) -> bool:
     """True when the turn carries an explicit budget cap (strict carousel filter mode)."""
-    if topic_pivot:
-        return False
     stripped = message.strip()
     if not stripped:
         return False
+    # Budget refine / explicit turn budget always wins over a leaked topic_pivot.
     if extract_budget(stripped) is not None or extract_max_price(stripped) is not None:
         return True
     if is_budget_refinement_message(stripped):
         return True
+    if topic_pivot:
+        return False
     return is_budgeted_gift_ideas_message(stripped)
 
 
-def is_budget_refinement_message(message: str) -> bool:
+def _category_focus_from_tokens(message: str) -> str | None:
+    """Map hard/soft category nouns in a message to a session product focus."""
+    lowered = message.lower()
+    if re.search(r"\b(?:cup)?cakes?\b", lowered):
+        return "cake"
+    if re.search(r"\b(?:flower|flowers|rose|roses|bouquet)s?\b", lowered):
+        return "flowers"
+    if re.search(r"\b(?:chocolate|chocolates)\b", lowered):
+        return "chocolate"
+    if re.search(r"\bgifts?\b", lowered):
+        return "gift"
+    return None
+
+
+def is_budget_refinement_message(
+    message: str,
+    *,
+    session_product_focus: str | None = None,
+) -> bool:
     """True when the turn states a budget without naming a new product category."""
     stripped = message.strip()
     if not stripped or is_off_topic_message(stripped):
@@ -355,7 +390,18 @@ def is_budget_refinement_message(message: str) -> bool:
     has_budget = extract_budget(stripped) is not None or extract_max_price(stripped) is not None
     if not has_budget:
         return False
-    return not _PRODUCT_CATEGORY_TOKENS.search(stripped)
+    if not _PRODUCT_CATEGORY_TOKENS.search(stripped):
+        return True
+    # Soft/generic "gifts" alone keeps the same carousel topic.
+    if _SOFT_GIFT_CATEGORY_TOKENS.search(stripped) and not _HARD_CATEGORY_TOKENS.search(stripped):
+        return True
+    # Same hard category as the active session focus is a budget refine, not a pivot.
+    if session_product_focus:
+        named = _category_focus_from_tokens(stripped)
+        focus = session_product_focus.strip().lower()
+        if named is not None and named == focus:
+            return True
+    return False
 
 
 def is_topic_pivot_message(message: str) -> bool:
@@ -387,10 +433,21 @@ def is_category_browse_message(message: str) -> bool:
     return any(token in lowered for token in _CATEGORY_BROWSE_TOKENS)
 
 
+def _is_bare_category_utterance(stripped: str) -> bool:
+    """True for category-only phrases like 'Normal fresh flowers?' (no pivot cue)."""
+    normalized = stripped.strip().strip("!.?")
+    if not normalized:
+        return False
+    return bool(_BARE_CATEGORY_UTTERANCE.match(normalized))
+
+
 def is_bare_category_pivot(message: str) -> str | None:
     """Return the bare category noun when a pivot is category-only (no occasion in turn)."""
     stripped = message.strip().strip("!.?")
-    if not stripped or not is_topic_pivot_message(message):
+    if not stripped:
+        return None
+    # Explicit pivot cues (nevermind/what about) OR bare category-only utterances.
+    if not is_topic_pivot_message(message) and not _is_bare_category_utterance(stripped):
         return None
     if re.search(r"\b(?:birthday|anniversary|wedding|valentine)\b", stripped, re.I):
         return None
@@ -404,16 +461,7 @@ def is_bare_category_pivot(message: str) -> str | None:
         re.I,
     ):
         return None
-    lowered = stripped.lower()
-    if re.search(r"\b(?:cup)?cakes?\b", lowered):
-        return "cake"
-    if re.search(r"\b(?:flower|flowers|rose|roses|bouquet)s?\b", lowered):
-        return "flowers"
-    if re.search(r"\b(?:chocolate|chocolates)\b", lowered):
-        return "chocolate"
-    if re.search(r"\bgifts?\b", lowered):
-        return "gift"
-    return None
+    return _category_focus_from_tokens(stripped)
 
 
 def infer_intent_from_message(message: str) -> Intent:

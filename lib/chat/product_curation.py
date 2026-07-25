@@ -669,14 +669,21 @@ def apply_recipient_curation(
     products: list[dict[str, Any]],
     session_recipient_hint: str | None,
 ) -> list[dict[str, Any]]:
-    """Drop gender-mismatched gift sets; fall back to demote-only if fewer than 3 would remain."""
+    """Drop gender-mismatched gift sets for female/male recipients (hard exclude).
+
+    Neutral recipients still soft-demote (append mismatched after preferred) when
+    fewer than 3 preferred items remain.
+    """
     if not products or not session_recipient_hint:
         return list(products)
     recipient = session_recipient_hint.strip().lower()
+    hard_drop = False
     if recipient in _FEMALE_RECIPIENTS:
         mismatch = _FOR_HIM_RE
+        hard_drop = True
     elif recipient in _MALE_RECIPIENTS:
         mismatch = _FOR_HER_RE
+        hard_drop = True
     elif recipient in _NEUTRAL_RECIPIENTS:
         mismatch = re.compile(
             r"\b(?:for him|for her|for dad|for mom|father'?s?|mother'?s?|"
@@ -696,9 +703,53 @@ def apply_recipient_curation(
             mismatched.append(product)
         else:
             preferred.append(product)
+    if hard_drop:
+        # Wife/mom/her (and male recipients): never resurface Dad/for-him noise.
+        return preferred if preferred else list(products)
     if len(preferred) >= 3:
         return preferred
     return preferred + mismatched
+
+
+_REQUESTED_FLOWER_COLORS = re.compile(
+    r"\b(?:blush|pink|lavender|purple|peach|yellow|orange|blue)\b",
+    re.I,
+)
+_GENERIC_ROSE_COLORS = re.compile(r"\b(?:red|white)\b", re.I)
+_FLOWER_PRODUCT_RE = re.compile(
+    r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b",
+    re.I,
+)
+
+
+def demote_wrong_flower_color(
+    products: list[dict[str, Any]],
+    query: str,
+) -> list[dict[str, Any]]:
+    """Demote red/white-only roses when the shopper asked for blush/pink/etc."""
+    if not products or not query.strip():
+        return list(products)
+    requested = {m.group(0).lower() for m in _REQUESTED_FLOWER_COLORS.finditer(query)}
+    if not requested:
+        return list(products)
+    preferred: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        name = str(product.get("name") or "")
+        blob = _product_text_blob(product)
+        if not _FLOWER_PRODUCT_RE.search(blob):
+            preferred.append(product)
+            continue
+        name_lower = name.lower()
+        has_requested = any(color in name_lower for color in requested)
+        has_generic_only = bool(_GENERIC_ROSE_COLORS.search(name_lower)) and not has_requested
+        if has_generic_only:
+            demoted.append(product)
+        else:
+            preferred.append(product)
+    if not preferred:
+        return list(products)
+    return preferred + demoted
 
 
 def _merge_exclude_category_tokens(existing: str, additions: tuple[str, ...]) -> str:
@@ -988,6 +1039,7 @@ def curate_carousel_products(
     )
     scoped = demote_off_focus_products(scoped, session_product_focus)
     scoped = apply_recipient_curation(scoped, session_recipient_hint)
+    scoped = demote_wrong_flower_color(scoped, query)
     scoped = demote_kids_themed_products(
         scoped,
         session_recipient_hint=session_recipient_hint,

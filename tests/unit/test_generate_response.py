@@ -1239,6 +1239,16 @@ def test_build_agent_tool_error_message_rate_limit() -> None:
     assert "checking our catalog" in message.lower()
 
 
+def test_build_agent_tool_error_message_timeout() -> None:
+    message = build_agent_tool_error_message(
+        tool=SEARCH_PRODUCTS_TOOL,
+        raw_message="NVIDIA NIM timed out; using catalog results already gathered.",
+        error_code="timeout",
+    )
+    assert "NVIDIA" not in message
+    assert "too long" in message.lower()
+
+
 def test_build_agent_tool_error_message_city_not_deliverable() -> None:
     message = build_agent_tool_error_message(
         tool=CHECK_DELIVERY_TOOL,
@@ -2152,6 +2162,41 @@ def test_apply_perishable_delivery_honesty_warning_only_in_partial_when_dated() 
     assert delivery_html is not None
     assert warning in delivery_html
     assert delivery_html.count(warning) == 1
+
+
+def test_apply_perishable_delivery_honesty_synthesizes_far_ahead_warning() -> None:
+    """Perishable gift + delivery ≥7 days out gets a freshness warning when MCP omits one."""
+    from datetime import timedelta
+
+    from lib.chat.delivery_dates import colombo_today
+
+    far_date = (colombo_today() + timedelta(days=10)).isoformat()
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {"city": "Kandy", "delivery_date": far_date},
+            "result": {
+                "city": "Kandy",
+                "now": f"{colombo_today().isoformat()}T10:00:00+05:30",
+                "checked_date": far_date,
+                "available": True,
+                "rate": 1075.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": None,
+            },
+        },
+    ]
+    reply, delivery_html = _apply_perishable_delivery_honesty(
+        "Delivery to Kandy is available.",
+        tool_trace,
+        user_message="Deliver these cakes to Kandy",
+        session_product_focus="cake",
+    )
+    assert delivery_html is not None
+    assert "more than a day out" in delivery_html.lower() or "more than a day out" in reply.lower()
+    assert "closer to the event" in (delivery_html or reply).lower()
 
 
 @pytest.mark.asyncio

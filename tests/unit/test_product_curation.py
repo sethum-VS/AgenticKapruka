@@ -530,8 +530,7 @@ def test_apply_recipient_curation_demotes_for_him_on_wife_flow() -> None:
         _product("her", 5200.0, name="Chocolate Truffles Gift Box"),
     ]
     curated = apply_recipient_curation(products, "wife")
-    assert curated[0]["id"] == "her"
-    assert curated[-1]["id"] == "him"
+    assert [item["id"] for item in curated] == ["her"]
 
 
 def test_curate_carousel_products_strict_budget_excludes_noise() -> None:
@@ -575,8 +574,8 @@ def test_apply_recipient_curation_drops_for_him_on_wife_when_enough_remain() -> 
     assert len(curated) >= 3
 
 
-def test_apply_recipient_curation_falls_back_to_demote_when_few_remain() -> None:
-    """Fall back to demote-only when dropping would leave fewer than 3 items."""
+def test_apply_recipient_curation_hard_drops_dad_when_few_remain() -> None:
+    """Wife flow: Dad/for-him titles are hard-dropped even when fewer than 3 remain."""
     products = [
         _product("dad1", 4500.0, name="Gift for Dad Combo"),
         _product("her1", 5200.0, name="Chocolate Gift Box"),
@@ -584,9 +583,38 @@ def test_apply_recipient_curation_falls_back_to_demote_when_few_remain() -> None
     ]
     curated = apply_recipient_curation(products, "wife")
     ids = [item["id"] for item in curated]
-    # 2 preferred items — fallback: demoted item appended at end
-    assert ids[-1] == "dad1", "mismatched item falls to end on demote fallback"
-    assert len(curated) == 3
+    assert "dad1" not in ids
+    assert ids == ["her1", "her2"]
+
+
+def test_demote_wrong_flower_color_blush_demotes_red() -> None:
+    from lib.chat.product_curation import demote_wrong_flower_color
+
+    products = [
+        _product("red", 4500.0, name="6 Red Rose Bouquet"),
+        _product("blush", 5200.0, name="Blush Roses Combo"),
+        _product("pink", 4800.0, name="Pink Rose Arrangement"),
+    ]
+    curated = demote_wrong_flower_color(products, "Blush Roses combo")
+    ids = [item["id"] for item in curated]
+    assert ids[0] in ("blush", "pink")
+    assert ids[-1] == "red"
+
+
+def test_curate_carousel_blush_ranks_above_red() -> None:
+    products = [
+        _product("red", 4500.0, name="6 Red Rose Bouquet"),
+        _product("blush", 5200.0, name="Blush Roses Combo Hamper"),
+        _product("white", 4000.0, name="White Rose Bouquet"),
+    ]
+    curated = curate_carousel_products(
+        products,
+        query="Blush Roses combo",
+        budget_max=None,
+        currency="LKR",
+        session_product_focus="flowers",
+    )
+    assert curated[0]["id"] == "blush"
 
 
 def test_apply_recipient_curation_drops_for_her_on_dad_flow() -> None:

@@ -21,7 +21,7 @@ from lib.chat.sse import chunk_text, format_sse_event
 from lib.chat.status_copy import SEARCHING_CATALOG, THINKING
 from lib.debug.trace import trace_error, trace_node_update, trace_turn_complete
 from lib.genai.completions import turn_deadline
-from lib.genai.errors import is_rate_limited
+from lib.genai.errors import is_rate_limited, is_transient_nim_error
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +147,18 @@ def _partial_timeout_payload(
         if budget_applied or is_budget_refinement_message(user_message)
         else _TIMEOUT_PARTIAL_MESSAGE
     )
+    # Situational/empathy turns: prepend a brief apology so timeout partials still feel human.
+    intent_metadata = merged.get("intent_metadata") or {}
+    situational = bool(
+        (isinstance(intent_metadata, dict) and intent_metadata.get("is_situational"))
+        or merged.get("session_situational")
+    )
+    if situational:
+        head = message.strip().lower()[:120]
+        if not any(
+            phrase in head for phrase in ("sorry", "hear that", "heartbroken", "going through")
+        ):
+            message = f"I'm sorry to hear you're going through this. {message}"
     if not products_html:
         return message, None
 
@@ -250,6 +262,7 @@ async def iter_chat_sse_events(
             "session_product_focus",
             "session_search_query",
             "session_recipient_hint",
+            "session_situational",
             "last_search_products",
             "last_visible_products",
             "currency",
@@ -399,6 +412,28 @@ async def iter_chat_sse_events(
             )
             if stream_started:
                 error_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{error_html}'
+        elif is_transient_nim_error(exc):
+            # Escaped APITimeoutError / connection errors: soft timeout UX + partials.
+            partial_html, carousel_oob = _partial_timeout_payload(
+                partial_state,
+                initial_state=state,
+            )
+            cleanup = (
+                f'<div id="{pending_id}" hx-swap-oob="delete"></div>' if stream_started else ""
+            )
+            if carousel_oob:
+                yield format_sse_event(cleanup + partial_html)
+                yield format_sse_event(carousel_oob, event="carousel")
+                yield format_sse_event("", event="done")
+                done_emitted = True
+                return
+            error_html = _render_streaming_assistant(
+                partial_html or _TIMEOUT_MESSAGE,
+                pending_id,
+                oob=stream_started,
+            )
+            if stream_started:
+                error_html = f"{cleanup}{error_html}"
         else:
             error_html = (
                 '<div class="flex justify-start">'
