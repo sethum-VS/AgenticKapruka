@@ -2612,9 +2612,16 @@ async def generate_response(
     )
     reply_text = _prepend_situational_empathy(reply_text, pivot_meta)
     clarifying = state.get("agent_clarifying_question")
+    clarifier_for_reply: str | None = None
+    if (
+        isinstance(clarifying, str)
+        and clarifying.strip()
+        and state.get("agent_loop_exit_reason") == "ask_user"
+    ):
+        clarifier_for_reply = clarifying
     reply_text = _maybe_prepend_clarifier(
         reply_text,
-        clarifying if isinstance(clarifying, str) else None,
+        clarifier_for_reply,
         state=state,
         user_message=user_message,
         has_carousel=bool(visible_products or products_html),

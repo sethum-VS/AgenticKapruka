@@ -32,7 +32,7 @@ def test_setup_script_contract() -> None:
 
 
 def test_main_workflow_contract() -> None:
-    """Scaffolded main.yml runs quality gates and deploys to Cloud Run on main."""
+    """Scaffolded main.yml runs quality gates and deploys to Heroku on main."""
     content = MAIN_WORKFLOW.read_text(encoding="utf-8")
 
     assert "branches: [main]" in content
@@ -46,7 +46,9 @@ def test_main_workflow_contract() -> None:
     assert "pytest tests/unit" in content
     assert "pytest tests/e2e" in content
     assert "evals.ragas_eval --ci" in content
-    assert "curl" in content
+    assert "heroku config:set" in content
+    assert "heroku container:push" in content
+    assert "/health" in content
 
 
 def test_main_workflow_yaml_syntax() -> None:

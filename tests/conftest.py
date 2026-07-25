@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+_DEFAULT_TEST_ENV: dict[str, str] = {
+    "REDIS_URL": "redis://localhost:6379/0",
+    "NEO4J_URI": "bolt://localhost:7687",
+    "NEO4J_USER": "neo4j",
+    "NEO4J_PASSWORD": "test-password",
+    "ZEP_API_KEY": "zep-test-key",
+    "NVIDIA_API_KEY": "nvidia-test-key",
+    "KAPRUKA_MCP_URL": "https://mcp.kapruka.com/mcp",
+    "SESSION_SECRET": "x" * 32,
+}
+for _key, _value in _DEFAULT_TEST_ENV.items():
+    os.environ.setdefault(_key, _value)
 
 APP_CSS = Path("static/css/app.css")
 _MINIMAL_CSS = "/* pytest fixture */\n"

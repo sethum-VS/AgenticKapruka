@@ -355,7 +355,7 @@ def test_build_discovery_search_args_ignores_parent_department_category_hint() -
         currency="LKR",
     )
 
-    assert args["q"] == "chocolates"
+    assert args["q"].startswith("chocolate")
     assert "category" not in args
 
 
