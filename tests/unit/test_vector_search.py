@@ -345,7 +345,7 @@ async def test_vector_search_rejects_wrong_embedding_dimension() -> None:
     store = _VectorSearchMockStore()
     client = _client_with_store(store)
 
-    with pytest.raises(ValueError, match="768 dimensions"):
+    with pytest.raises(ValueError, match="4096 dimensions"):
         await vector_search(client, [0.1, 0.2, 0.3])
 
     await client.close()
@@ -426,7 +426,7 @@ async def test_occasion_vector_search_rejects_wrong_embedding_dimension() -> Non
     store = _VectorSearchMockStore()
     client = _client_with_store(store)
 
-    with pytest.raises(ValueError, match="768 dimensions"):
+    with pytest.raises(ValueError, match="4096 dimensions"):
         await occasion_vector_search(client, [0.1, 0.2, 0.3])
 
     await client.close()

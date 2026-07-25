@@ -96,7 +96,7 @@ def test_chat_sse_js_handles_timeout_by_clearing_pending_bubbles() -> None:
     assert "That took too long" in source
     assert "clearOrphanedPendingBubblesWithNotice" in source
     timeout_block_start = source.index('if (reason === "timeout")')
-    timeout_block = source[timeout_block_start : timeout_block_start + 350]
+    timeout_block = source[timeout_block_start : timeout_block_start + 700]
     assert "removePendingAssistantBubbles();" in timeout_block
     assert "showStreamTimeoutMessage();" in timeout_block
 

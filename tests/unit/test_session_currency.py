@@ -102,7 +102,8 @@ async def test_post_session_currency_persists_in_redis(session_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_currency_persists_across_page_refresh(session_app) -> None:
+async def test_currency_resets_when_chat_page_rotates_session(session_app) -> None:
+    """Visiting /chat with a valid cookie starts a fresh thread and default currency."""
     transport = ASGITransport(app=session_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         post = await client.post(
@@ -119,14 +120,14 @@ async def test_currency_persists_across_page_refresh(session_app) -> None:
         )
         second = await client.get(
             "/chat",
-            headers={"Cookie": f"{SESSION_COOKIE_NAME}={session_cookie}"},
+            cookies=dict(first.cookies),
         )
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert '<option value="EUR" selected>EUR</option>' in first.text
-    assert '<option value="EUR" selected>EUR</option>' in second.text
-    assert '<option value="LKR" selected>LKR</option>' not in first.text
+    assert '<option value="LKR" selected>LKR</option>' in first.text
+    assert '<option value="LKR" selected>LKR</option>' in second.text
+    assert '<option value="EUR" selected>EUR</option>' not in first.text
 
 
 @pytest.mark.asyncio

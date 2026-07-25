@@ -12,7 +12,7 @@ import pytest
 from app.templating import render_checkout_review
 from graphs.checkout_graph import build_checkout_graph
 from graphs.checkout_state import initial_checkout_state
-from graphs.model_router import PRO_MODEL, select_model, select_model_tier
+from graphs.model_router import FLASH_MODEL, select_model, select_model_tier
 from graphs.nodes.run_checkout_graph import run_checkout_graph
 from graphs.state import AgentState
 from lib.checkout.review import CheckoutReviewContext, review_context_from_checkout_state
@@ -121,14 +121,14 @@ async def test_review_step_renders_response_html() -> None:
     assert "Chocolate Birthday Cake" in review_html
 
 
-def test_model_router_returns_pro_when_checkout_state_is_review() -> None:
+def test_model_router_returns_flash_for_all_states() -> None:
     state: AgentState = {
         "messages": [],
         "session_id": _SESSION_ID,
         "checkout_state": "review",
     }
-    assert select_model_tier(state) == "pro"
-    assert select_model(state) == PRO_MODEL
+    assert select_model_tier(state) == "flash"
+    assert select_model(state) == FLASH_MODEL
 
 
 @pytest.mark.asyncio

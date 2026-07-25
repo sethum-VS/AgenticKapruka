@@ -74,7 +74,7 @@ def test_gunicorn_workers_timeout_and_keepalive() -> None:
     else:
         assert conf.workers == 1
     assert conf.worker_class == "uvicorn.workers.UvicornWorker"
-    assert conf.timeout == 120
+    assert conf.timeout == 150
     assert conf.graceful_timeout == 30
     assert conf.keepalive == 5
 
