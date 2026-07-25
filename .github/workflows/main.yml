@@ -87,6 +87,14 @@ jobs:
       - name: Run Ragas evaluation (mock MCP)
         env:
           RAGAS_DO_NOT_TRACK: "true"
+          REDIS_URL: redis://localhost:6379/0
+          NEO4J_URI: bolt://localhost:7687
+          NEO4J_USER: neo4j
+          NEO4J_PASSWORD: test-password
+          ZEP_API_KEY: zep-test-key
+          NVIDIA_API_KEY: nvidia-test-key
+          KAPRUKA_MCP_URL: https://mcp.kapruka.com/mcp
+          SESSION_SECRET: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         run: python -m evals.ragas_eval --ci
 
   deploy:
