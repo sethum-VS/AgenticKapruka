@@ -61,6 +61,7 @@ from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
+from lib.genai.completions import set_override_generate_content
 from lib.redis.cart import add_item
 from lib.redis.client import RedisClient
 from lib.utils.timezone import colombo_today_iso
@@ -80,8 +81,7 @@ def _minimal_eval_settings() -> Settings:
         neo4j_user="neo4j",
         neo4j_password="eval-password",
         zep_api_key="eval-zep-key",
-        gcp_project_id="eval-project",
-        gcp_location="us-central1",
+        nvidia_api_key="eval-nvidia-key",
         session_secret="x" * 32,
         _env_file=None,
     )
@@ -92,6 +92,8 @@ def _patch_eval_settings() -> Iterator[None]:
     """Patch get_settings at import sites used by graph nodes during Ragas eval."""
     settings = _minimal_eval_settings()
     with (
+        patch("app.config.get_settings", return_value=settings),
+        patch("graphs.model_router.get_settings", return_value=settings),
         patch("lib.chat.model_router.get_settings", return_value=settings),
         patch("graphs.nodes.retrieve_hybrid_context.get_settings", return_value=settings),
         patch("lib.chat.master_flow.get_settings", return_value=settings),
@@ -634,6 +636,46 @@ def build_eval_genai_client(
     return client
 
 
+def build_eval_nim_override(
+    intent: Intent | None = None,
+    *,
+    case: GoldenCase | None = None,
+):
+    """NVIDIA NIM override that reuses the deterministic Gemini eval mock logic."""
+    mock_client = build_eval_genai_client(intent, case=case)
+
+    async def fake_generate_content(
+        *,
+        model: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        response_schema: type[Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        _ = model, kwargs
+        contents = ""
+        if messages:
+            for message in reversed(messages):
+                if message.get("role") == "user" and message.get("content"):
+                    contents = str(message["content"])
+                    break
+        config = (
+            types.GenerateContentConfig(response_schema=response_schema)
+            if response_schema is not None
+            else None
+        )
+        response = mock_client.models.generate_content(
+            model=model or "",
+            contents=contents,
+            config=config,
+        )
+        parsed = getattr(response, "parsed", None)
+        if parsed is not None:
+            return parsed
+        return response
+
+    return fake_generate_content
+
+
 def contexts_from_tool_results(tool_results: dict[str, Any] | None) -> list[str]:
     """Serialize MCP tool payloads as Ragas retrieved_contexts strings."""
     if not tool_results:
@@ -791,6 +833,7 @@ async def build_eval_graph_for_case(
         genai_client=build_eval_genai_client(intent_for_case(case), case=case),
         redis_client=redis_client,
     )
+    set_override_generate_content(build_eval_nim_override(intent_for_case(case), case=case))
     return build_shopping_graph(checkpointer=None, deps=deps)
 
 
@@ -910,7 +953,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 async def _async_main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    scores = await run_full_ragas_eval(args.dataset)
+    with _patch_eval_settings():
+        scores = await run_full_ragas_eval(args.dataset)
     print(
         f"Ragas eval ({scores.case_count} cases): "
         f"context_precision={scores.context_precision:.4f} "
