@@ -39,7 +39,7 @@
     <div
       id="chat-messages"
       x-ref="messages"
-      class="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-margin-page py-8 pb-[140px]"
+      class="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-margin-page py-8 pb-[180px]"
       role="log"
       aria-live="polite"
       aria-label="Chat messages"
@@ -53,9 +53,9 @@
   </div>
 
   <div
-    class="absolute bottom-0 left-0 z-[60] w-full border-t border-surface-variant bg-white/95 p-4 backdrop-blur-md"
+    class="pointer-events-none absolute bottom-0 left-0 z-[60] w-full border-t border-surface-variant bg-white/95 p-4 backdrop-blur-md"
   >
-    <div class="mx-auto max-w-4xl">
+    <div class="pointer-events-auto mx-auto max-w-4xl">
       <form
         id="chat-form"
         hx-post="/chat/stream"
@@ -64,7 +64,7 @@
         hx-trigger="submit"
         hx-indicator="#chat-loading"
         class="relative"
-        data-chat-timeout-ms="{{ chat_timeout_ms | default(120000) }}"
+        data-chat-timeout-ms="{{ chat_timeout_ms | default(90000) }}"
         {% if debug_trace %}data-chat-debug="true"{% endif %}
       >
         <div
@@ -101,8 +101,11 @@
         <div
           id="chat-loading"
           class="htmx-indicator absolute -top-8 left-0 flex items-center gap-2 text-label-sm text-on-surface-variant"
+          role="status"
           aria-live="polite"
+          aria-atomic="true"
           aria-label="Sending message"
+          data-testid="chat-loading"
         >
           <svg
             class="h-4 w-4 animate-spin text-primary"

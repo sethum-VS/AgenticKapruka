@@ -66,9 +66,12 @@ class Settings(BaseSettings):
         description="Cap on a single NIM retry sleep (seconds), including Retry-After",
     )
     nvidia_max_retries: int = Field(
-        default=4,
+        default=2,
         ge=1,
-        description="Max primary-key NIM completion attempts (429/timeout/JSON parse)",
+        description=(
+            "Max primary-key NIM completion attempts (429/timeout/JSON parse). "
+            "Kept low so worst-case retries fit inside chat_turn_timeout_seconds."
+        ),
     )
     nvidia_backup_max_retries: int = Field(
         default=2,
@@ -76,14 +79,22 @@ class Settings(BaseSettings):
         description="Max backup-key NIM completion attempts after primary exhaustion",
     )
     nvidia_http_timeout: float = Field(
-        default=30.0,
+        default=20.0,
         ge=5.0,
         description="HTTP timeout (seconds) for each NVIDIA NIM OpenAI client request",
     )
     chat_turn_timeout_seconds: int = Field(
-        default=120,
+        default=90,
         ge=30,
         description="Wall-clock timeout for a single chat SSE turn before graceful fallback",
+    )
+    nvidia_deadline_reserve_seconds: float = Field(
+        default=15.0,
+        ge=5.0,
+        description=(
+            "Stop NIM retries when fewer than this many seconds remain before "
+            "the chat turn wall-clock deadline"
+        ),
     )
     nvidia_vector_threshold: float = Field(
         default=0.65,

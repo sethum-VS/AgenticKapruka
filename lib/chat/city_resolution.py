@@ -14,6 +14,10 @@ CityResolutionStatus = Literal["resolved", "ambiguous", "not_found", "missing"]
 _COLOMBO_ZONE = re.compile(r"^colombo\s+\d{2}$", re.I)
 _AMBIGUOUS_CANDIDATE_LIMIT = 8
 
+# Default zone when the shopper says bare "Colombo" during gift discovery.
+# Used for soft delivery preflight — never send raw "Colombo" to MCP check_delivery.
+DEFAULT_COLOMBO_ZONE = "Colombo 03"
+
 
 @dataclass(frozen=True, slots=True)
 class CityResolution:
@@ -53,6 +57,18 @@ def _ambiguous_colombo_message(candidates: list[str]) -> str:
         "Please choose one of these routes so we can check delivery: "
         f"{examples}."
     )
+
+
+def default_colombo_zone(candidates: list[str] | None = None) -> str:
+    """Pick a canonical Colombo zone for soft gift-discovery preflight."""
+    if candidates:
+        for city in candidates:
+            if _COLOMBO_ZONE.match(city.strip()) and city.strip().endswith("03"):
+                return city.strip()
+        for city in candidates:
+            if _COLOMBO_ZONE.match(city.strip()):
+                return city.strip()
+    return DEFAULT_COLOMBO_ZONE
 
 
 def build_city_not_found_message() -> str:

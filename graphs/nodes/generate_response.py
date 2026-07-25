@@ -92,7 +92,7 @@ from lib.checkout.tracking import (
     tracking_error_from_tool_results,
     tracking_output_from_tool_results,
 )
-from lib.genai.errors import is_rate_limited
+from lib.genai.errors import is_rate_limited, is_transient_nim_error
 from lib.genai.completions import generate_content
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
@@ -239,6 +239,9 @@ def _session_budget_applies(state: AgentState, user_message: str) -> bool:
     if extract_budget(user_message) is not None:
         return True
     if is_budget_refinement_message(user_message):
+        return True
+    session_budget = state.get("session_budget_max")
+    if isinstance(session_budget, (int, float)) and session_budget > 0:
         return True
     messages = state.get("messages") or []
     user_turns = [message for message in messages if isinstance(message, HumanMessage)]
@@ -394,6 +397,20 @@ def _user_named_city_and_date(user_message: str) -> bool:
     if not city:
         return False
     return normalize_delivery_date({}, user_message) is not None
+
+
+def _sanitize_unknown_city_leak(reply_text: str) -> str:
+    """Strip raw MCP 'Unknown city' phrasing that should never reach the customer."""
+    if not reply_text or "unknown city" not in reply_text.lower():
+        return reply_text
+    cleaned = re.sub(
+        r"(?i)\s*(?:error\s*\([^)]*\)\s*:?\s*)?unknown city\s+'[^']*'\.?",
+        "",
+        reply_text,
+    )
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip() or build_city_not_found_message()
 
 
 def delivery_claim_guard(
@@ -1082,6 +1099,50 @@ def _prepend_situational_empathy(
     return f"I'm sorry to hear you're going through this. {reply_text.strip()}"
 
 
+_APOLOGY_SUGGESTION_CHIPS: tuple[tuple[str, str], ...] = (
+    ("Apology roses bouquet", "Apology roses bouquet"),
+    ("Sorry flowers hamper", "Sorry flowers hamper"),
+    ("Chocolate apology gift", "Chocolate apology gift"),
+)
+
+
+def build_apology_suggestion_chips_html() -> str:
+    """Tappable chips after empathy-only breakup turns (before auto-search)."""
+    import html as html_lib
+
+    buttons: list[str] = []
+    for label, suggestion in _APOLOGY_SUGGESTION_CHIPS:
+        safe_label = html_lib.escape(label)
+        safe_suggestion = html_lib.escape(suggestion)
+        buttons.append(
+            "<button type=\"button\" "
+            f'class="chip-suggestion" '
+            f'data-chat-suggestion="{safe_suggestion}" '
+            f'data-testid="apology-suggestion-chip">{safe_label}</button>'
+        )
+    return (
+        '<div class="mt-3 flex flex-wrap gap-2" role="group" '
+        'aria-label="Apology gift suggestions">'
+        f"{''.join(buttons)}</div>"
+    )
+
+
+def _should_offer_apology_chips(state: AgentState, user_message: str) -> bool:
+    """True for situational distress turns that have not yet named flowers."""
+    intent_metadata = state.get("intent_metadata") or {}
+    if not isinstance(intent_metadata, dict) or not intent_metadata.get("is_situational"):
+        return False
+    if re.search(
+        r"\b(?:flower|flowers|rose|roses|bouquet|bouquets|floral)\b",
+        user_message,
+        re.I,
+    ):
+        return False
+    if _turn_search_has_products(state.get("tool_trace")):
+        return False
+    return True
+
+
 def _prepend_budget_confirmation(
     reply_text: str,
     intent_metadata: IntentMetadata | None,
@@ -1418,6 +1479,16 @@ def _should_use_discovery_template_fast_path(
     intent_metadata = state.get("intent_metadata")
     if isinstance(intent_metadata, dict) and intent_metadata.get("is_situational"):
         return False
+    # Budget-only follow-ups already have curated products from agent_loop —
+    # skip a second NIM call that commonly times out.
+    if is_budget_refinement_message(user_message):
+        return True
+    # Topic pivots with a bare category ("Nevermind. Cakes.") also skip synthesis.
+    if isinstance(intent_metadata, dict) and intent_metadata.get("topic_pivot"):
+        from lib.chat.intent_heuristics import is_bare_category_pivot
+
+        if is_bare_category_pivot(user_message) is not None:
+            return True
     hybrid_context = state.get("hybrid_context") or {}
     currency = state.get("currency") or "LKR"
     return is_confident_discovery_turn(
@@ -1900,6 +1971,8 @@ async def generate_response(
             if isinstance(candidates, list)
             else None
         )
+        if chips_html is None and _should_offer_apology_chips(state, user_message):
+            chips_html = build_apology_suggestion_chips_html()
         return {
             "response_html": render_assistant_html(
                 question,
@@ -2382,6 +2455,7 @@ async def generate_response(
                 len(visible_products),
             )
             reply_text = normalize_catalog_text(reply_text)
+            reply_text = _sanitize_unknown_city_leak(reply_text)
             reply_text = _prepend_budget_confirmation(
                 reply_text,
                 intent_metadata,
@@ -2482,12 +2556,12 @@ async def generate_response(
             else None,
         )
     except Exception as exc:
-        if not is_rate_limited(exc):
+        if not is_transient_nim_error(exc):
             raise
         reply_text = _build_discovery_template_reply(visible_products, user_message=user_message)
         logger.warning(
-            "generate_response: NVIDIA NIM rate limited; template fallback (%d products)",
-            len(visible_products),
+            "generate_response: NVIDIA NIM transient error; template fallback (%d products)",
+            len(visible_products or []),
             exc_info=True,
         )
 
@@ -2499,6 +2573,7 @@ async def generate_response(
         reply_text = template or "I could not generate a response. Please try again."
 
     reply_text = normalize_catalog_text(reply_text)
+    reply_text = _sanitize_unknown_city_leak(reply_text)
     # Prepend Sunday-ambiguity clarification before other post-processing
     if isinstance(pivot_meta, dict) and pivot_meta.get("delivery_date_ambiguous"):
         clarification = pivot_meta.get("delivery_date_clarification") or ""
@@ -2599,6 +2674,11 @@ async def generate_response(
         reply_text,
         products_html=products_html,
         delivery_status_html=delivery_status_html,
+        suggestion_chips_html=(
+            build_apology_suggestion_chips_html()
+            if _should_offer_apology_chips(state, user_message)
+            else None
+        ),
     )
     if visible_products:
         updates["last_visible_products"] = visible_products

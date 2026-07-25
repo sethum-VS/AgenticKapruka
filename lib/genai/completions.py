@@ -6,7 +6,10 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, TypeVar
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Iterator, TypeVar
 
 from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 from pydantic import BaseModel
@@ -26,6 +29,12 @@ T = TypeVar("T", bound=BaseModel)
 # Transient transport errors worth retrying (plus RateLimitError handled separately).
 _TRANSIENT_ERRORS = (APITimeoutError, APIConnectionError)
 
+# Absolute monotonic deadline for the current chat turn (set by streaming layer).
+_turn_deadline_monotonic: ContextVar[float | None] = ContextVar(
+    "nim_turn_deadline_monotonic",
+    default=None,
+)
+
 # ── Markdown fence stripper ──────────────────────────────────────────────────
 _JSON_FENCE_RE = re.compile(
     r"```(?:json)?\s*\n?(.*?)```",
@@ -33,6 +42,31 @@ _JSON_FENCE_RE = re.compile(
 )
 
 _concurrency_semaphores: dict[int, asyncio.Semaphore] = {}
+
+
+@contextmanager
+def turn_deadline(seconds: float) -> Iterator[None]:
+    """Bound NIM retries to a wall-clock deadline relative to now."""
+    token = _turn_deadline_monotonic.set(time.monotonic() + max(0.0, seconds))
+    try:
+        yield
+    finally:
+        _turn_deadline_monotonic.reset(token)
+
+
+def _seconds_until_deadline() -> float | None:
+    deadline = _turn_deadline_monotonic.get()
+    if deadline is None:
+        return None
+    return deadline - time.monotonic()
+
+
+def _should_abort_retry(*, reserve_seconds: float) -> bool:
+    """True when fewer than reserve_seconds remain before the turn deadline."""
+    remaining = _seconds_until_deadline()
+    if remaining is None:
+        return False
+    return remaining < reserve_seconds
 
 
 def strip_markdown_fences(text: str) -> str:
@@ -108,11 +142,18 @@ async def _complete_with_client(
     max_retries: int,
     base_delay: float,
     max_delay: float,
+    deadline_reserve_seconds: float = 15.0,
 ) -> dict[str, Any] | T:
     """Run chat completion against one NIM client with rate limit + retry."""
     limiter = get_rate_limiter(role=role)
     last_exc: BaseException | None = None
     for attempt in range(max_retries):
+        if attempt > 0 and _should_abort_retry(reserve_seconds=deadline_reserve_seconds):
+            logger.warning(
+                "generate_content: aborting %s retries — turn deadline reserve exhausted",
+                role,
+            )
+            break
         await limiter.acquire()
         try:
             completion = await asyncio.to_thread(
@@ -139,6 +180,9 @@ async def _complete_with_client(
                         raw_content[:500],
                     )
                     if attempt < max_retries - 1:
+                        if _should_abort_retry(reserve_seconds=deadline_reserve_seconds):
+                            last_exc = ValueError(f"JSON parse failed: {raw_content[:200]}")
+                            break
                         last_exc = ValueError(f"JSON parse failed: {raw_content[:200]}")
                         delay = _backoff_delay(
                             attempt, base_delay=base_delay, max_delay=max_delay
@@ -155,6 +199,12 @@ async def _complete_with_client(
         except RateLimitError as exc:
             last_exc = exc
             if attempt < max_retries - 1:
+                if _should_abort_retry(reserve_seconds=deadline_reserve_seconds):
+                    logger.warning(
+                        "generate_content: aborting %s 429 retries — turn deadline reserve exhausted",
+                        role,
+                    )
+                    break
                 backoff = _backoff_delay(
                     attempt, base_delay=base_delay, max_delay=max_delay
                 )
@@ -177,6 +227,13 @@ async def _complete_with_client(
         except _TRANSIENT_ERRORS as exc:
             last_exc = exc
             if attempt < max_retries - 1:
+                if _should_abort_retry(reserve_seconds=deadline_reserve_seconds):
+                    logger.warning(
+                        "generate_content: aborting %s %s retries — turn deadline reserve exhausted",
+                        role,
+                        type(exc).__name__,
+                    )
+                    break
                 delay = _backoff_delay(
                     attempt, base_delay=base_delay, max_delay=max_delay
                 )
@@ -255,6 +312,7 @@ async def generate_content(
     primary_retries = int(cfg.nvidia_max_retries)
     backup_retries = int(cfg.nvidia_backup_max_retries)
     max_concurrent = int(cfg.nvidia_max_concurrent)
+    deadline_reserve = float(getattr(cfg, "nvidia_deadline_reserve_seconds", 15.0))
 
     # Inject schema instruction into system prompt if needed
     request_messages = list(messages)
@@ -285,9 +343,12 @@ async def generate_content(
                 max_retries=primary_retries,
                 base_delay=base_delay,
                 max_delay=max_delay,
+                deadline_reserve_seconds=deadline_reserve,
             )
         except (APITimeoutError, APIConnectionError, RateLimitError):
             if not has_backup_nvidia_client(settings=cfg):
+                raise
+            if _should_abort_retry(reserve_seconds=deadline_reserve):
                 raise
             logger.warning(
                 "NIM primary exhausted; failing over to backup key",
@@ -305,4 +366,5 @@ async def generate_content(
                 max_retries=backup_retries,
                 base_delay=base_delay,
                 max_delay=max_delay,
+                deadline_reserve_seconds=deadline_reserve,
             )

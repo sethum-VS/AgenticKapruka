@@ -590,15 +590,21 @@ def boost_carousel_relevance(
 
     from graphs.nodes.resolve_cart_product import phrase_product_overlap_score
 
+    # Prefer distinctive modifiers (blush/combo) over generic color+flower tokens.
+    distinctive = bool(
+        re.search(r"\b(?:blush|combo|lavender|hamper|arrangement)\b", stripped, re.I)
+    )
+    threshold = 0.45 if distinctive else 0.6
+
     scored = [
         (phrase_product_overlap_score(stripped, str(product.get("name") or "")), product)
         for product in products
     ]
     best_score = max(score for score, _ in scored)
-    if best_score < 0.6:
+    if best_score < threshold:
         return list(products)
-    top = [product for score, product in scored if score == best_score]
-    rest = [product for score, product in scored if score < best_score]
+    top = [product for score, product in scored if score >= best_score - 0.05]
+    rest = [product for score, product in scored if score < best_score - 0.05]
     return top + rest
 
 
@@ -1006,8 +1012,8 @@ def curate_carousel_products(
 
     def _finalize_carousel(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         sorted_items = _budget_sort(items)
-        if budget_max is None:
-            sorted_items = boost_carousel_relevance(sorted_items, query)
+        # Always boost name overlap so "Blush Roses combo" beats generic red roses.
+        sorted_items = boost_carousel_relevance(sorted_items, query)
         if budget_max is not None and budget_max > 0 and is_flower_fruit_intent(query):
             sorted_items = ensure_flower_price_tier_diversity(sorted_items, budget_max)
         return sorted_items

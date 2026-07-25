@@ -60,7 +60,7 @@ from lib.chat.status_copy import SEARCHING_CATALOG, long_search_status_message
 from lib.chat.support_faq import is_support_question
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.completions import generate_content
-from lib.genai.errors import is_rate_limited
+from lib.genai.errors import is_rate_limited, is_transient_nim_error
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tool_executor import (
     canonical_tool_args_for_dedup,
@@ -408,7 +408,7 @@ _APOLOGY_PATTERN = re.compile(r"\b(?:apolog(?:y|ize|ise)|sorry|forgive|make\s+up
 _FLORAL_DESIGN = re.compile(r"\b(?:floral|design|designs)\b", re.I)
 _GIFT_VOUCHER_Q = re.compile(r"\bgift\s+voucher\b", re.I)
 _CATALOG_INTENT = re.compile(
-    r"\b(?:cake|flower|chocolate|gift|hamper|bouquet|roses?|product|search|find|show|"
+    r"\b(?:cakes?|flowers?|chocolates?|gifts?|hampers?|bouquets?|roses?|product|search|find|show|"
     r"deliver|track|VIMP)\b",
     re.I,
 )
@@ -1255,10 +1255,10 @@ async def _plan_next_step(
             raise ValueError(msg)
         return step
     except Exception as exc:
-        # Preserve rate-limit errors so the loop can degrade gracefully instead of
+        # Preserve transient NIM errors so the loop can degrade gracefully instead of
         # hard-failing the turn (wrapping as ValueError would strip the type and
         # trip the generic "Something went wrong" SSE error path).
-        if is_rate_limited(exc):
+        if is_transient_nim_error(exc):
             raise
         msg = f"NVIDIA NIM planner call failed: {exc}"
         raise ValueError(msg) from exc
@@ -1276,24 +1276,34 @@ def _retry_after_seconds(exc: BaseException) -> int | None:
     return None
 
 
-def _planner_rate_limit_error(exc: BaseException) -> dict[str, str]:
+def _planner_transient_error(exc: BaseException) -> dict[str, str]:
     """Build an agent_tool_error dict so generate_response degrades gracefully.
 
-    A rate-limited planner call would otherwise escape agent_loop uncaught and be
-    rendered as the generic "Something went wrong" SSE error. Routing it through the
-    tool_error path lets generate_response show friendly rate-limit copy, reuse any
-    prior carousel products, and attach the retry banner.
+    A rate-limited or timed-out planner call would otherwise escape agent_loop
+    uncaught and be rendered as the generic "Something went wrong" SSE error.
+    Routing it through the tool_error path lets generate_response show friendly
+    copy, reuse any prior carousel products, and attach the retry banner.
     """
-    error: dict[str, str] = {
+    if is_rate_limited(exc):
+        error: dict[str, str] = {
+            "tool": SEARCH_PRODUCTS_TOOL,
+            "error": "rate_limit_exceeded",
+            "message": "NVIDIA NIM is temporarily rate limited.",
+        }
+        retry_after = _retry_after_seconds(exc)
+        if retry_after is not None:
+            error["retry_after_seconds"] = str(retry_after)
+        return error
+    return {
         "tool": SEARCH_PRODUCTS_TOOL,
-        "error": "rate_limit_exceeded",
-        "message": "NVIDIA NIM is temporarily rate limited.",
+        "error": "timeout",
+        "message": "NVIDIA NIM timed out; using catalog results already gathered.",
     }
-    retry_after = _retry_after_seconds(exc)
-    if retry_after is not None:
-        error["retry_after_seconds"] = str(retry_after)
-    return error
 
+
+def _planner_rate_limit_error(exc: BaseException) -> dict[str, str]:
+    """Backward-compatible alias for rate-limit planner degradation."""
+    return _planner_transient_error(exc)
 
 def _emit_status(message: str) -> None:
     """Emit a LangGraph custom stream status event when a writer is available."""
@@ -1556,6 +1566,11 @@ async def _try_confident_discovery_fast_path(
         hybrid_context,
         currency=currency,
         intent_metadata=state.get("intent_metadata"),
+        session_budget_max=(
+            float(state["session_budget_max"])
+            if isinstance(state.get("session_budget_max"), (int, float))
+            else None
+        ),
     )
     enriched_args = merge_planner_search_args(
         search_args,
@@ -2202,15 +2217,15 @@ async def agent_loop(
                 tool_trace=tool_trace,
             )
         except Exception as exc:
-            if not is_rate_limited(exc):
+            if not is_transient_nim_error(exc):
                 raise
             logger.warning(
-                "agent_loop: planner rate limited at iteration %s; "
-                "finishing gracefully with rate-limit fallback",
+                "agent_loop: planner transient NIM error at iteration %s; "
+                "finishing gracefully with fallback",
                 iteration,
                 exc_info=True,
             )
-            agent_tool_error = _planner_rate_limit_error(exc)
+            agent_tool_error = _planner_transient_error(exc)
             exit_reason = "tool_error"
             agent_loop_done = True
             break

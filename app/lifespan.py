@@ -52,6 +52,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Connect external services on startup; release resources on shutdown."""
     configure_dev_logging()
     settings = get_settings()
+
+    from pathlib import Path
+
+    app_css = Path(__file__).resolve().parent.parent / "static" / "css" / "app.css"
+    if not app_css.is_file():
+        logger.warning(
+            "static/css/app.css is missing — UI will be unstyled. "
+            "Run `make css` or `.\\scripts\\dev.ps1 start` to build Tailwind CSS.",
+        )
+
     app.state.redis = await _connect_optional(
         "Redis",
         lambda: RedisClient.connect(settings.redis_url),

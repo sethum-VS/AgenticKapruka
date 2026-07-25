@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CONNECTION_TIMEOUT = 30.0
 _DEFAULT_MAX_CONNECTION_LIFETIME = 3600
+_DEFAULT_QUERY_TIMEOUT = 8.0
 _HEALTH_CHECK_CYPHER = "RETURN 1 AS ok"
 _EXECUTE_MAX_ATTEMPTS = 3
 _EXECUTE_RETRY_BASE_DELAY = 0.25
@@ -38,6 +39,7 @@ class Neo4jClient:
         driver: AsyncDriver | None = None,
         connection_timeout: float = _DEFAULT_CONNECTION_TIMEOUT,
         max_connection_lifetime: int = _DEFAULT_MAX_CONNECTION_LIFETIME,
+        query_timeout: float = _DEFAULT_QUERY_TIMEOUT,
     ) -> None:
         self._uri = uri
         self._user = user
@@ -46,6 +48,7 @@ class Neo4jClient:
             "connection_timeout": connection_timeout,
             "max_connection_lifetime": max_connection_lifetime,
         }
+        self._query_timeout = query_timeout
         self._driver = driver
 
     @classmethod
@@ -111,18 +114,49 @@ class Neo4jClient:
         self,
         cypher: str,
         params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
     ) -> list[dict[str, Any]]:
         """Run Cypher and return each record as a plain dict.
 
         Retries transient connection failures (e.g. ConnectionResetError) with
-        a short backoff and driver reconnect.
+        a short backoff and driver reconnect. Each attempt is capped by
+        ``timeout`` (default ``query_timeout``) so Aura stalls cannot consume
+        the full chat turn budget.
         """
+        import time
+
+        query_timeout = self._query_timeout if timeout is None else timeout
         last_exc: BaseException | None = None
+        started = time.monotonic()
         for attempt in range(_EXECUTE_MAX_ATTEMPTS):
             try:
-                async with self.driver.session() as session:
-                    result = await session.run(cypher, params or {})
-                    return await result.data()
+                async with asyncio.timeout(query_timeout):
+                    async with self.driver.session() as session:
+                        result = await session.run(cypher, params or {})
+                        rows = await result.data()
+                elapsed_ms = (time.monotonic() - started) * 1000
+                logger.debug(
+                    "Neo4j execute ok in %.0fms (attempt %d)",
+                    elapsed_ms,
+                    attempt + 1,
+                )
+                return rows
+            except TimeoutError as exc:
+                last_exc = exc
+                logger.warning(
+                    "Neo4j execute timed out after %.1fs on attempt %d/%d",
+                    query_timeout,
+                    attempt + 1,
+                    _EXECUTE_MAX_ATTEMPTS,
+                )
+                if attempt >= _EXECUTE_MAX_ATTEMPTS - 1:
+                    raise
+                try:
+                    await self._reconnect()
+                except Exception as reconnect_exc:
+                    logger.warning("Neo4j reconnect failed: %s", reconnect_exc)
+                await asyncio.sleep(_EXECUTE_RETRY_BASE_DELAY * (2**attempt))
             except Exception as exc:
                 last_exc = exc
                 if not self._is_transient_error(exc) or attempt >= _EXECUTE_MAX_ATTEMPTS - 1:

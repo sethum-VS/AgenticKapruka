@@ -1076,6 +1076,27 @@ def test_is_confident_discovery_turn_birthday_cake_with_graph() -> None:
     )
 
 
+def test_is_confident_discovery_turn_topic_pivot_bare_cakes() -> None:
+    """Bare category pivots are confident — deterministic search args skip the planner."""
+    assert is_confident_discovery_turn(
+        "Nevermind. Cakes.",
+        {},
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+
+
+def test_build_discovery_search_args_preserves_blush_roses_combo() -> None:
+    """Budgeted rose rewrite must not drop blush/combo product modifiers."""
+    args = build_discovery_search_args(
+        "blush roses combo under 6000",
+        {},
+        currency="LKR",
+    )
+    assert "blush" in str(args.get("q") or "").lower()
+    assert args.get("max_price") == 6000.0
+
+
 def test_is_confident_discovery_turn_rejects_vague_gifts() -> None:
     assert not is_confident_discovery_turn(
         "show me gifts",

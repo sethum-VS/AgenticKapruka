@@ -10,7 +10,11 @@ from google import genai
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.address_resolution import resolve_shipment_address
-from lib.chat.city_resolution import _is_bare_colombo, resolve_delivery_city
+from lib.chat.city_resolution import (
+    _is_bare_colombo,
+    default_colombo_zone,
+    resolve_delivery_city,
+)
 from lib.chat.delivery_dates import is_delivery_date_only_message, normalize_delivery_date
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.query_preprocessor import (
@@ -234,7 +238,12 @@ async def _attach_ambiguous_colombo_preflight(
     kapruka_service: KaprukaService,
     client_ip: str,
 ) -> dict[str, Any]:
-    """Run kapruka_check_delivery for bare-Colombo gift discovery with zone soft nudge."""
+    """Optionally preflight delivery for bare-Colombo gift discovery with zone soft nudge.
+
+    Never calls ``kapruka_check_delivery`` with raw ``Colombo`` — MCP rejects that as
+    ``Unknown city``. Soft gift-discovery turns skip preflight entirely; dated turns
+    use ``DEFAULT_COLOMBO_ZONE`` (or the first candidate zone).
+    """
     intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
     if not intent_metadata.get("requires_delivery_validation"):
         return updates
@@ -247,31 +256,43 @@ async def _attach_ambiguous_colombo_preflight(
         raw_city = _resolve_session_delivery_city(state, user_message)
     if not isinstance(raw_city, str) or not raw_city.strip():
         return updates
+
     delivery_date = updates.get("delivery_date")
     if delivery_date is not None and not isinstance(delivery_date, str):
         delivery_date = None
     if delivery_date is None:
         delivery_date = normalize_delivery_date({}, user_message)
-    preflight_city = raw_city.strip()
-    if delivery_date:
-        preflight = await _preflight_check_delivery(
-            kapruka_service=kapruka_service,
-            client_ip=client_ip,
-            city=preflight_city,
-            delivery_date=delivery_date,
-            product_id=_resolve_delivery_product_id(state),
+
+    # Gift discovery without a date: soft-nudge only — do not call check_delivery
+    # with bare "Colombo" (MCP returns Unknown city and poisons the reply).
+    if delivery_date is None:
+        logger.info(
+            "resolve_delivery_context: skipping bare-Colombo preflight (no delivery date)",
         )
-    else:
-        preflight = await _preflight_check_delivery(
-            kapruka_service=kapruka_service,
-            client_ip=client_ip,
-            city=preflight_city,
-            product_id=_resolve_delivery_product_id(state),
-        )
+        return updates
+
+    candidates = updates.get("delivery_city_candidates")
+    candidate_list = (
+        [str(c) for c in candidates if isinstance(c, str)]
+        if isinstance(candidates, list)
+        else None
+    )
+    preflight_city = default_colombo_zone(candidate_list)
+    logger.info(
+        "resolve_delivery_context: bare-Colombo preflight using zone %r (not %r)",
+        preflight_city,
+        raw_city.strip(),
+    )
+    preflight = await _preflight_check_delivery(
+        kapruka_service=kapruka_service,
+        client_ip=client_ip,
+        city=preflight_city,
+        delivery_date=delivery_date,
+        product_id=_resolve_delivery_product_id(state),
+    )
     merged: dict[str, Any] = {**updates, "tool_trace": [preflight]}
-    if delivery_date is not None:
-        merged.setdefault("delivery_date", delivery_date)
-        merged.setdefault("session_delivery_date", delivery_date)
+    merged.setdefault("delivery_date", delivery_date)
+    merged.setdefault("session_delivery_date", delivery_date)
     preflight_result = preflight.get("result")
     if isinstance(preflight_result, dict) and not preflight_result.get("available"):
         reason = preflight_result.get("reason")
@@ -280,6 +301,12 @@ async def _attach_ambiguous_colombo_preflight(
             if isinstance(reason, str) and reason.strip()
             else f"Kapruka cannot deliver to {preflight_city}."
         )
+        # Don't surface MCP "Unknown city" raw text to the customer.
+        if "unknown city" in customer_message.lower():
+            customer_message = updates.get("agent_clarifying_question") or (
+                "Colombo has several supported delivery zones. "
+                "Please choose a zone (for example Colombo 03) so we can check delivery."
+            )
         return {
             **merged,
             "delivery_context_ready": False,

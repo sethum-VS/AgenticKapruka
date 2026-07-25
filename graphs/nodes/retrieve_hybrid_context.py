@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -146,6 +147,15 @@ async def retrieve_hybrid_context(
     skip_graph_reembed = bool(
         is_budget_refinement_message(user_message) and hybrid_context,
     )
+    # Skip re-embed when GraphRAG was already degraded this session — avoid
+    # burning turn budget on Aura reconnects for budget-only refinements.
+    if (
+        not skip_graph_reembed
+        and isinstance(intent_metadata, dict)
+        and intent_metadata.get("graph_degraded")
+        and is_budget_refinement_message(user_message)
+    ):
+        skip_graph_reembed = True
     if topic_pivot:
         hybrid_context = {}
 
@@ -180,6 +190,7 @@ async def retrieve_hybrid_context(
         task_kinds.append("graph")
 
     graph_context: dict[str, Any] = {}
+    graph_started = time.monotonic() if graph_task is not None else None
     if async_tasks:
         results = await asyncio.gather(*async_tasks, return_exceptions=True)
         for kind, result in zip(task_kinds, results, strict=True):
@@ -194,6 +205,11 @@ async def retrieve_hybrid_context(
                 else:
                     preferences = result
             elif kind == "graph":
+                if graph_started is not None:
+                    logger.info(
+                        "retrieve_hybrid_context: Neo4j GraphRAG finished in %.0fms",
+                        (time.monotonic() - graph_started) * 1000,
+                    )
                 if isinstance(result, BaseException):
                     logger.exception(
                         "retrieve_hybrid_context: Neo4j GraphRAG failed; continuing with Zep only",

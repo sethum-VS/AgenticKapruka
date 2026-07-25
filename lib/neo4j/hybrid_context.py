@@ -1444,6 +1444,7 @@ def build_discovery_search_args(
     *,
     currency: str,
     intent_metadata: IntentMetadata | None = None,
+    session_budget_max: float | None = None,
 ) -> dict[str, Any]:
     """Map graph/Zep hybrid_context hints to kapruka_search_products arguments."""
     context = hybrid_context or {}
@@ -1501,22 +1502,18 @@ def build_discovery_search_args(
         args["max_price"] = budget_cap.amount
         args["sort"] = _budget_search_sort(query)
         args["currency"] = budget_cap.currency
-        primary_token = _primary_product_token(query)
-        if primary_token:
-            args["q"] = _birthday_biased_product_keyword(
-                primary_token,
-                birthday_occasion=birthday_occasion,
-                query=query,
+        # Preserve distinctive product modifiers (blush/combo) instead of collapsing
+        # to a bare primary token like "rose".
+        if re.search(r"\b(?:blush|combo|lavender|arrangement)\b", query, re.I):
+            preserved = re.sub(
+                r"\b(?:under|below|less\s+than|around|about|budget\s+of)\s+"
+                r"(?:rs\.?\s*|lkr\s*|usd\s*|\$)?[\d,]+(?:\s*(?:rupees?|lkr))?",
+                "",
+                query,
+                flags=re.I,
             )
-        elif _MOM_BIRTHDAY_RE.search(query):
-            args["q"] = "Happy Birthday Mom"
+            args["q"] = re.sub(r"\s{2,}", " ", preserved).strip(" ,.-") or query.strip()
         else:
-            args["q"] = _fallback_search_query(fallback_category)
-    else:
-        max_price = _extract_max_price(query)
-        if max_price is not None:
-            args["max_price"] = max_price
-            args["sort"] = _budget_search_sort(query)
             primary_token = _primary_product_token(query)
             if primary_token:
                 args["q"] = _birthday_biased_product_keyword(
@@ -1524,8 +1521,34 @@ def build_discovery_search_args(
                     birthday_occasion=birthday_occasion,
                     query=query,
                 )
+            elif _MOM_BIRTHDAY_RE.search(query):
+                args["q"] = "Happy Birthday Mom"
             else:
                 args["q"] = _fallback_search_query(fallback_category)
+    else:
+        max_price = _extract_max_price(query)
+        if max_price is not None:
+            args["max_price"] = max_price
+            args["sort"] = _budget_search_sort(query)
+            if re.search(r"\b(?:blush|combo|lavender|arrangement)\b", query, re.I):
+                preserved = re.sub(
+                    r"\b(?:under|below|less\s+than|around|about|budget\s+of)\s+"
+                    r"(?:rs\.?\s*|lkr\s*|usd\s*|\$)?[\d,]+(?:\s*(?:rupees?|lkr))?",
+                    "",
+                    query,
+                    flags=re.I,
+                )
+                args["q"] = re.sub(r"\s{2,}", " ", preserved).strip(" ,.-") or query.strip()
+            else:
+                primary_token = _primary_product_token(query)
+                if primary_token:
+                    args["q"] = _birthday_biased_product_keyword(
+                        primary_token,
+                        birthday_occasion=birthday_occasion,
+                        query=query,
+                    )
+                else:
+                    args["q"] = _fallback_search_query(fallback_category)
 
     if _MOM_BIRTHDAY_RE.search(query) and "gift" in query.lower():
         if _CHOCOLATE_FLAVOR_RE.search(query) and _CAKE_TERM.search(query):
@@ -1583,11 +1606,24 @@ def build_discovery_search_args(
         if isinstance(budget_currency, str) and budget_currency.strip():
             args["currency"] = budget_currency.strip().upper()
 
+    # Multi-turn: apply persisted session budget when the turn did not restate it.
+    if (
+        "max_price" not in args
+        and not topic_pivot
+        and isinstance(session_budget_max, (int, float))
+        and session_budget_max > 0
+    ):
+        args["max_price"] = float(session_budget_max)
+        args.setdefault("sort", _budget_search_sort(query))
+
     effective_budget = args.get("max_price")
+    # Only simplify to bare "roses" for generic budgeted rose searches —
+    # preserve modifiers like "blush" / "combo" for product-name precision.
     if (
         isinstance(effective_budget, (int, float))
         and effective_budget > 0
         and re.search(r"\b(?:rose|roses)\b", query, re.I)
+        and not re.search(r"\b(?:blush|combo|pink|white|yellow|lavender)\b", query, re.I)
     ):
         if re.search(r"\bred\b", query, re.I):
             args["q"] = "red roses"
@@ -1659,18 +1695,25 @@ def is_confident_discovery_turn(
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
     from lib.chat.intent_heuristics import is_bare_category_pivot
 
-    if topic_pivot and is_bare_category_pivot(stripped):
-        return False
+    bare_focus = is_bare_category_pivot(stripped) if topic_pivot else None
     discovery_message = enrich_message_with_session_slots(stripped, state)
+    session_budget = None
+    if state is not None and isinstance(state.get("session_budget_max"), (int, float)):
+        session_budget = float(state["session_budget_max"])
     args = build_discovery_search_args(
         discovery_message,
         hybrid_context,
         currency=currency,
         intent_metadata=intent_metadata,
+        session_budget_max=session_budget,
     )
     query = str(args.get("q") or "").strip()
     if not query or _is_meta_catalog_query(query):
         return False
+    # Bare category pivots ("Nevermind. Cakes.") have deterministic args from
+    # build_discovery_search_args — skip the planner instead of blocking.
+    if bare_focus is not None:
+        return True
     if _is_budgeted_flower_discovery(stripped, args):
         return True
     return has_strong_hybrid_hints(hybrid_context)
@@ -1756,11 +1799,15 @@ def merge_planner_search_args(
         return merged
 
     discovery_message = enrich_message_with_session_slots(user_message, state)
+    session_budget = None
+    if state is not None and isinstance(state.get("session_budget_max"), (int, float)):
+        session_budget = float(state["session_budget_max"])
     canonical = build_discovery_search_args(
         discovery_message,
         hybrid_context,
         currency=currency,
         intent_metadata=intent_metadata,
+        session_budget_max=session_budget,
     )
     planner_q = str(planner_args.get("q") or "").strip()
     if planner_q:

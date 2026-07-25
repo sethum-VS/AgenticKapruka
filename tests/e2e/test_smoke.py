@@ -70,6 +70,23 @@ def test_add_to_cart_shows_item_in_drawer(page: Page, base_url: str) -> None:
     expect(page.locator('[data-testid="cart-badge"]')).to_have_text("1")
 
 
+def test_add_to_cart_clickable_on_mobile_viewport(page: Page, base_url: str) -> None:
+    """Add to cart remains clickable above the fixed composer on a phone viewport."""
+    page.set_viewport_size({"width": 375, "height": 812})
+    page.goto(f"{base_url}/chat")
+    _wait_for_alpine(page)
+    _search_and_wait_for_product_card(page)
+
+    add_btn = page.locator('[data-testid="product-card"]').first.get_by_role(
+        "button", name="Add to cart"
+    )
+    add_btn.scroll_into_view_if_needed()
+    expect(add_btn).to_be_visible()
+    add_btn.click()
+    page.wait_for_selector('[data-testid="cart-badge"]', state="visible", timeout=15_000)
+    expect(page.locator('[data-testid="cart-badge"]')).to_have_text("1")
+
+
 def test_checkout_delivery_form_renders_without_create_order(page: Page, base_url: str) -> None:
     """Proceed to checkout and validate delivery form; mock MCP never calls create_order."""
     page.goto(f"{base_url}/chat")

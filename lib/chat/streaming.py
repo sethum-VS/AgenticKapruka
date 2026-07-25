@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import secrets
 from collections.abc import AsyncIterator
 from typing import Any
@@ -19,12 +20,21 @@ from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_messa
 from lib.chat.sse import chunk_text, format_sse_event
 from lib.chat.status_copy import SEARCHING_CATALOG, THINKING
 from lib.debug.trace import trace_error, trace_node_update, trace_turn_complete
+from lib.genai.completions import turn_deadline
 from lib.genai.errors import is_rate_limited
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_MESSAGE = (
     "I'm having trouble right now — please try again in a moment."
+)
+_TIMEOUT_PARTIAL_MESSAGE = (
+    "Here are options that match what I found so far — "
+    "I'm still polishing the reply. Feel free to ask for refinements."
+)
+_TIMEOUT_BUDGET_PARTIAL_MESSAGE = (
+    "Here are options within your budget — "
+    "I'm still polishing the reply. Feel free to ask for refinements."
 )
 _CART_ERROR_FALLBACK = "I couldn't add that — try naming the product."
 _RATE_LIMIT_MESSAGE = (
@@ -37,6 +47,97 @@ def chat_turn_timeout_seconds() -> float:
     return float(get_settings().chat_turn_timeout_seconds)
 
 
+def _partial_timeout_payload(
+    partial_state: dict[str, Any],
+    *,
+    initial_state: AgentState | None = None,
+) -> tuple[str, str | None]:
+    """Build timeout reply text and optional carousel HTML from partial graph state.
+
+    Returns ``(message_or_html, carousel_oob_or_none)``. When no products are
+    available, returns the generic timeout message with no carousel.
+    """
+    from graphs.nodes.generate_response import (
+        build_products_carousel_html,
+        render_assistant_html,
+        render_carousel_oob_html,
+    )
+    from lib.chat.intent_heuristics import is_budget_refinement_message
+    from lib.chat.product_curation import refine_last_search_by_budget
+
+    merged: dict[str, Any] = {}
+    if initial_state:
+        merged.update(dict(initial_state))
+    merged.update(partial_state)
+
+    products = list(merged.get("last_search_products") or [])
+    if not products:
+        products = list(merged.get("last_visible_products") or [])
+    budget_max = merged.get("session_budget_max")
+    currency = str(merged.get("currency") or "LKR")
+    user_message = _extract_latest_user_message(merged.get("messages") or [])
+    budget_applied = False
+    if isinstance(budget_max, (int, float)) and budget_max > 0 and products:
+        refined = refine_last_search_by_budget(
+            products,
+            budget_max=float(budget_max),
+            currency=currency,
+            session_product_focus=(
+                merged.get("session_product_focus")
+                if isinstance(merged.get("session_product_focus"), str)
+                else None
+            ),
+            session_search_query=(
+                merged.get("session_search_query")
+                if isinstance(merged.get("session_search_query"), str)
+                else None
+            ),
+            session_recipient_hint=(
+                merged.get("session_recipient_hint")
+                if isinstance(merged.get("session_recipient_hint"), str)
+                else None
+            ),
+            user_message=user_message,
+            hybrid_context=merged.get("hybrid_context")
+            if isinstance(merged.get("hybrid_context"), dict)
+            else None,
+        )
+        if refined:
+            products = refined
+            budget_applied = True
+
+    if not products:
+        return _TIMEOUT_MESSAGE, None
+
+    tool_results = {
+        "kapruka_search_products": {"results": products},
+    }
+    products_html = build_products_carousel_html(
+        tool_results,
+        budget_max=float(budget_max) if isinstance(budget_max, (int, float)) else None,
+        currency=currency,
+        user_message=user_message,
+        session_product_focus=merged.get("session_product_focus")
+        if isinstance(merged.get("session_product_focus"), str)
+        else None,
+        last_search_products=products,
+        visible_products=products,
+        allow_stale_fallback=False,
+    )
+    message = (
+        _TIMEOUT_BUDGET_PARTIAL_MESSAGE
+        if budget_applied or is_budget_refinement_message(user_message)
+        else _TIMEOUT_PARTIAL_MESSAGE
+    )
+    if not products_html:
+        return message, None
+
+    slot_id = f"carousel-slot-timeout-{secrets.token_hex(4)}"
+    response_html = render_assistant_html(message, carousel_slot_id=slot_id)
+    carousel_oob = render_carousel_oob_html(products_html, carousel_slot_id=slot_id)
+    return response_html, carousel_oob
+
+
 def _skip_early_search_status(state: AgentState) -> bool:
     """Skip generic search status when the turn routes straight to a reply."""
     intent = state.get("intent")
@@ -46,7 +147,14 @@ def _skip_early_search_status(state: AgentState) -> bool:
         return True
     intent_metadata = state.get("intent_metadata") or {}
     if isinstance(intent_metadata, dict) and intent_metadata.get("is_situational"):
-        return True
+        # Situational turns that will still search (e.g. apology flowers) need status.
+        user_message = _extract_latest_user_message(state.get("messages") or [])
+        if not re.search(
+            r"\b(?:flower|flowers|rose|roses|bouquet|bouquets)\b",
+            user_message,
+            re.I,
+        ):
+            return True
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if not user_message.strip():
         return False
@@ -115,7 +223,23 @@ async def iter_chat_sse_events(
 
     pending_id = f"assistant-stream-{stream_id or secrets.token_hex(4)}"
     stream_started = False
-    partial_state: dict[str, Any] = {}
+    # Seed with session fields so timeout partials can budget-filter prior carousels.
+    partial_state: dict[str, Any] = {
+        key: state[key]
+        for key in (
+            "messages",
+            "session_budget_max",
+            "session_product_focus",
+            "session_search_query",
+            "session_recipient_hint",
+            "last_search_products",
+            "last_visible_products",
+            "currency",
+            "hybrid_context",
+            "intent_metadata",
+        )
+        if key in state
+    }
     turn_timeout = chat_turn_timeout_seconds()
 
     if not _skip_early_search_status(state):
@@ -133,73 +257,74 @@ async def iter_chat_sse_events(
 
     done_emitted = False
     try:
-        async with asyncio.timeout(turn_timeout):
-            async for chunk in graph.astream(state, config, stream_mode=["updates", "custom"]):
-                normalized = _normalize_astream_chunk(chunk)
-                if normalized is None:
-                    continue
-                mode, payload = normalized
+        with turn_deadline(turn_timeout):
+            async with asyncio.timeout(turn_timeout):
+                async for chunk in graph.astream(state, config, stream_mode=["updates", "custom"]):
+                    normalized = _normalize_astream_chunk(chunk)
+                    if normalized is None:
+                        continue
+                    mode, payload = normalized
 
-                if mode == "custom":
-                    if isinstance(payload, dict) and payload.get("type") == "status":
-                        status_message = str(payload.get("message") or "").strip()
-                        if status_message:
-                            status_html = _render_streaming_assistant(
-                                status_message,
+                    if mode == "custom":
+                        if isinstance(payload, dict) and payload.get("type") == "status":
+                            status_message = str(payload.get("message") or "").strip()
+                            if status_message:
+                                status_html = _render_streaming_assistant(
+                                    status_message,
+                                    pending_id,
+                                    oob=True,
+                                )
+                                yield format_sse_event(status_html, event="status")
+                        continue
+
+                    if mode != "updates" or not isinstance(payload, dict):
+                        continue
+
+                    for node_name, node_update in payload.items():
+                        if not isinstance(node_update, dict):
+                            continue
+                        partial_state.update(node_update)
+                        trace_node_update(node_name, node_update)
+
+                        if node_name == "analyze_intent" and node_update.get("specificity_band") == "clarify":
+                            clarify_html = _render_streaming_assistant(THINKING, pending_id, oob=True)
+                            yield format_sse_event(clarify_html, event="status")
+                            stream_started = True
+
+                        if node_name != "generate_response":
+                            continue
+                        response_html = node_update.get("response_html")
+                        assistant_message = (node_update.get("assistant_message") or "").strip()
+                        if not response_html:
+                            continue
+
+                        text_chunks = chunk_text(assistant_message)
+                        if not text_chunks:
+                            text_chunks = [assistant_message]
+
+                        accumulated = ""
+                        for piece in text_chunks:
+                            accumulated = f"{accumulated} {piece}".strip() if accumulated else piece
+                            html = _render_streaming_assistant(
+                                accumulated,
                                 pending_id,
-                                oob=True,
+                                oob=stream_started,
                             )
-                            yield format_sse_event(status_html, event="status")
-                    continue
+                            stream_started = True
+                            yield format_sse_event(html)
 
-                if mode != "updates" or not isinstance(payload, dict):
-                    continue
-
-                for node_name, node_update in payload.items():
-                    if not isinstance(node_update, dict):
-                        continue
-                    partial_state.update(node_update)
-                    trace_node_update(node_name, node_update)
-
-                    if node_name == "analyze_intent" and node_update.get("specificity_band") == "clarify":
-                        clarify_html = _render_streaming_assistant(THINKING, pending_id, oob=True)
-                        yield format_sse_event(clarify_html, event="status")
-                        stream_started = True
-
-                    if node_name != "generate_response":
-                        continue
-                    response_html = node_update.get("response_html")
-                    assistant_message = (node_update.get("assistant_message") or "").strip()
-                    if not response_html:
-                        continue
-
-                    text_chunks = chunk_text(assistant_message)
-                    if not text_chunks:
-                        text_chunks = [assistant_message]
-
-                    accumulated = ""
-                    for piece in text_chunks:
-                        accumulated = f"{accumulated} {piece}".strip() if accumulated else piece
-                        html = _render_streaming_assistant(
-                            accumulated,
-                            pending_id,
-                            oob=stream_started,
+                        cleanup = f'<div id="{pending_id}" hx-swap-oob="delete"></div>'
+                        yield format_sse_event(cleanup + response_html)
+                        carousel_html = node_update.get("carousel_html")
+                        if isinstance(carousel_html, str) and carousel_html.strip():
+                            yield format_sse_event(carousel_html, event="carousel")
+                        trace_turn_complete(
+                            thread_id=thread_id,
+                            assistant_message=assistant_message,
+                            response_html_chars=len(response_html or ""),
                         )
-                        stream_started = True
-                        yield format_sse_event(html)
-
-                    cleanup = f'<div id="{pending_id}" hx-swap-oob="delete"></div>'
-                    yield format_sse_event(cleanup + response_html)
-                    carousel_html = node_update.get("carousel_html")
-                    if isinstance(carousel_html, str) and carousel_html.strip():
-                        yield format_sse_event(carousel_html, event="carousel")
-                    trace_turn_complete(
-                        thread_id=thread_id,
-                        assistant_message=assistant_message,
-                        response_html_chars=len(response_html or ""),
-                    )
-                    yield format_sse_event("", event="done")
-                    done_emitted = True
+                        yield format_sse_event("", event="done")
+                        done_emitted = True
     except TimeoutError:
         trace_error("graph.astream exceeded wall-clock timeout", TimeoutError())
         logger.warning(
@@ -207,10 +332,23 @@ async def iter_chat_sse_events(
             turn_timeout,
             thread_id or "(unknown)",
         )
-        timeout_html = _render_streaming_assistant(_TIMEOUT_MESSAGE, pending_id, oob=stream_started)
-        if stream_started:
-            timeout_html = f'<div id="{pending_id}" hx-swap-oob="delete"></div>{timeout_html}'
-        yield format_sse_event(timeout_html)
+        partial_html, carousel_oob = _partial_timeout_payload(
+            partial_state,
+            initial_state=state,
+        )
+        cleanup = (
+            f'<div id="{pending_id}" hx-swap-oob="delete"></div>' if stream_started else ""
+        )
+        if carousel_oob:
+            yield format_sse_event(cleanup + partial_html)
+            yield format_sse_event(carousel_oob, event="carousel")
+        else:
+            timeout_html = _render_streaming_assistant(
+                partial_html,
+                pending_id,
+                oob=stream_started,
+            )
+            yield format_sse_event(cleanup + timeout_html if cleanup else timeout_html)
         yield format_sse_event("", event="done")
         done_emitted = True
     except Exception as exc:

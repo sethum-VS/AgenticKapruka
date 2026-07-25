@@ -382,13 +382,19 @@ async def test_agent_loop_iteration_cap_limits_tool_calls() -> None:
         )
         for index in range(MAX_ITERATIONS + 2)
     ]
+    # Use a non-birthday message so discovery merge does not inject a Birthday
+    # category that triggers an extra empty-search broaden call.
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="show me tea gifts")],
+    }
 
     with patch(
         "graphs.nodes.agent_loop._plan_next_step",
         side_effect=planner_steps,
     ):
         result = await agent_loop(
-            _base_state(),
+            state,
             kapruka_service=mock_service,
             client_ip=_CLIENT_IP,
         )
@@ -974,8 +980,10 @@ async def test_agent_loop_empty_search_runs_one_broaden_retry() -> None:
     assert result["search_broaden_applied"] is True
     assert len(result["tool_trace"]) == 2
     assert result["tool_trace"][0]["args"]["q"] == "birthday cake"
-    assert "max_price" not in result["tool_trace"][1]["args"]
+    # First broaden strips the Birthday category injected by discovery merge;
+    # max_price is dropped on a later ladder step (one broaden per turn).
     assert result["tool_trace"][1]["args"]["q"] == "birthday cake"
+    assert "category" not in result["tool_trace"][1]["args"]
     assert result["last_search_products"] is not None
 
 
@@ -1061,7 +1069,7 @@ async def test_agent_loop_empty_search_broaden_guard_at_most_one_retry() -> None
     assert result["search_broaden_applied"] is True
     assert len(result["tool_trace"]) == 3
     assert result["tool_trace"][1]["args"]["q"] == "birthday cake"
-    assert "max_price" not in result["tool_trace"][1]["args"]
+    assert "category" not in result["tool_trace"][1]["args"]
     assert result["tool_trace"][2]["args"]["q"] == "flowers"
 
 
@@ -1500,7 +1508,66 @@ async def test_agent_loop_discovery_city_gift_searches_before_planner() -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_situational_breakup_flowers_searches_on_turn_one() -> None:
+async def test_agent_loop_topic_pivot_nevermind_cakes_skips_planner() -> None:
+    """Bare category pivot ('Nevermind. Cakes.') searches cake without planner."""
+    mock_service = _mock_kapruka_service()
+    cake = ProductResult(
+        id="cake001",
+        name="Fresh Ribbon Cake",
+        summary="Birthday sponge.",
+        price=Money(amount=4500.0, currency="LKR"),
+        compare_at_price=None,
+        in_stock=True,
+        stock_level="high",
+        image_url=None,
+        category=CategoryRef(id="cat_cakes", name="Cakes", slug="cakes"),
+        rating=None,
+        ships_internationally=False,
+        url="https://www.kapruka.com/cake",
+    )
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[cake],
+        next_cursor=None,
+        applied_filters={"q": "cake"},
+    )
+    state: AgentState = {
+        **_base_state(),
+        "messages": [HumanMessage(content="Nevermind. Cakes.")],
+        "intent": "discovery",
+        "intent_metadata": {"topic_pivot": True},
+        "hybrid_context": {"hints": {"category": "cakes"}},
+        "session_occasion": None,
+        "last_search_products": [
+            {
+                "id": "anniv001",
+                "name": "Anniversary Gift Set",
+                "price": {"amount": 9000.0, "currency": "LKR"},
+            }
+        ],
+    }
+    planner_should_not_run = AgentPlannerStep(
+        action="ask_user",
+        rationale="should not run",
+    )
+
+    with patch(
+        "graphs.nodes.agent_loop._plan_next_step",
+        side_effect=[planner_should_not_run],
+    ) as mock_plan:
+        result = await agent_loop(
+            state,
+            kapruka_service=mock_service,
+            client_ip=_CLIENT_IP,
+        )
+
+    mock_plan.assert_not_called()
+    assert mock_service.search_products.await_count == 1
+    search_call = mock_service.search_products.await_args
+    assert search_call is not None
+    assert search_call.kwargs["q"] == "cake"
+    assert result["agent_loop_exit_reason"] == "finish"
+    assert result["tool_trace"][0]["name"] == SEARCH_PRODUCTS_TOOL
+
     """Breakup + apology flowers invokes kapruka_search_products before the planner."""
     mock_service = _mock_kapruka_service()
     state: AgentState = {

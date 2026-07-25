@@ -239,12 +239,32 @@
     return text || null;
   }
 
+  function scrollLastCarouselAboveComposer() {
+    const messagesRoot = document.getElementById("chat-messages");
+    if (!messagesRoot) {
+      return;
+    }
+    const carousels = messagesRoot.querySelectorAll('[data-testid="product-carousel"]');
+    const last = carousels[carousels.length - 1];
+    if (!last) {
+      return;
+    }
+    const card = last.querySelector('[data-testid="product-card"]');
+    const target = card || last;
+    try {
+      target.scrollIntoView({ block: "end", behavior: "smooth", inline: "nearest" });
+    } catch (_err) {
+      target.scrollIntoView(false);
+    }
+  }
+
   function swapCarouselHtml(html) {
     htmx.swap(document.body, html, { swapStyle: "none" });
     const messagesRoot = document.getElementById("chat-messages");
     if (messagesRoot && containsProductCarousel(html)) {
       pruneStaleCarousels(messagesRoot);
       removePendingAssistantBubbles();
+      scrollLastCarouselAboveComposer();
     }
     document.body.dispatchEvent(
       new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
