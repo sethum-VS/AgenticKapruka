@@ -40,7 +40,7 @@ def create_nvidia_client(
     client = OpenAI(
         base_url=cfg.nvidia_base_url,
         api_key=api_key,
-        timeout=30.0,
+        timeout=float(cfg.nvidia_http_timeout),
     )
     _clients[role] = client
     return client

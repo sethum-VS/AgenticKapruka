@@ -337,18 +337,24 @@
     messages.scrollTop = messages.scrollHeight;
   }
 
+  const STREAM_TROUBLE_MESSAGE =
+    "I'm having trouble right now — please try again in a moment.";
+
   function showStreamFailureMessage() {
-    appendStreamNoticeMessage(
-      "chat-stream-error",
-      "Connection interrupted. Please send your message again.",
-    );
+    appendStreamNoticeMessage("chat-stream-error", STREAM_TROUBLE_MESSAGE);
   }
 
   function showStreamTimeoutMessage() {
-    appendStreamNoticeMessage(
-      "chat-stream-timeout",
-      "This is taking longer than expected. Please try again or start a new message.",
-    );
+    appendStreamNoticeMessage("chat-stream-timeout", STREAM_TROUBLE_MESSAGE);
+  }
+
+  function clearOrphanedPendingBubblesWithNotice() {
+    const pending = document.querySelectorAll('[id^="assistant-stream-"]');
+    if (!pending.length) {
+      return;
+    }
+    removePendingAssistantBubbles();
+    appendStreamNoticeMessage("chat-stream-orphan-cleared", STREAM_TROUBLE_MESSAGE);
   }
 
   function registerAfterRequestBackup() {
@@ -372,6 +378,7 @@
         return true;
       }
       if (reason === "timeout") {
+        removePendingAssistantBubbles();
         showStreamTimeoutMessage();
         chatDebugLog(form, "stream timed out");
         toggleRequestState(form, false);
@@ -498,6 +505,7 @@
         }
       }
 
+      clearOrphanedPendingBubblesWithNotice();
       chatDebugLog(form, "stream complete");
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {

@@ -24,7 +24,7 @@ from lib.genai.errors import is_rate_limited
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_MESSAGE = (
-    "This is taking longer than expected. Please try again with a more specific question."
+    "I'm having trouble right now — please try again in a moment."
 )
 _CART_ERROR_FALLBACK = "I couldn't add that — try naming the product."
 _RATE_LIMIT_MESSAGE = (

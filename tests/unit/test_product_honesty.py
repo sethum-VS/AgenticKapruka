@@ -41,10 +41,16 @@ def test_is_artificial_floral_detects_soap_flower() -> None:
     assert disclaimer is not None
     assert "soap flower bouquet" in disclaimer.lower()
     assert "not fresh-cut" in disclaimer.lower()
+    assert "non-perishable" in disclaimer.lower()
 
 
 def test_is_artificial_floral_detects_paper_flower() -> None:
     product = _product("Paper Flower Arrangement", summary="Craft paper roses")
+    assert is_artificial_floral(product) is True
+
+
+def test_is_artificial_floral_detects_artificial_roses() -> None:
+    product = _product("Anniversary Artificial Roses Gift Set")
     assert is_artificial_floral(product) is True
 
 
@@ -57,6 +63,7 @@ def test_artificial_floral_note_for_picks_on_flowers_request() -> None:
     assert note is not None
     assert "artificial" in note.lower()
     assert "not fresh-cut" in note.lower()
+    assert "non-perishable" in note.lower()
 
 
 def test_artificial_floral_note_for_picks_on_fresh_flowers_request() -> None:
@@ -70,12 +77,23 @@ def test_artificial_floral_note_for_picks_on_fresh_flowers_request() -> None:
     assert "not fresh-cut" in note.lower()
 
 
-def test_artificial_floral_note_skipped_without_flowers_request() -> None:
-    silk = _product("Kit Kat Silk Roses Bouquet")
+def test_artificial_floral_note_for_anniversary_without_flowers_words() -> None:
+    """Anniversary gift sets with artificial roses still get a disclosure."""
+    artificial = _product("Anniversary Artificial Roses Gift Set")
+    note = artificial_floral_note_for_picks(
+        [artificial],
+        user_message="Show me some anniversary gifts.",
+    )
+    assert note is not None
+    assert "non-perishable" in note.lower()
+
+
+def test_artificial_floral_note_skipped_when_picks_are_fresh() -> None:
+    fresh = _product("6 Red Rose Bouquet", summary="fresh cut roses")
     assert (
         artificial_floral_note_for_picks(
-            [silk],
-            user_message="chocolate gift for wife birthday",
+            [fresh],
+            user_message="Show me some anniversary gifts.",
         )
         is None
     )

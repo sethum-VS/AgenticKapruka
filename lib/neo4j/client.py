@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
+from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CONNECTION_TIMEOUT = 30.0
 _DEFAULT_MAX_CONNECTION_LIFETIME = 3600
 _HEALTH_CHECK_CYPHER = "RETURN 1 AS ok"
+_EXECUTE_MAX_ATTEMPTS = 3
+_EXECUTE_RETRY_BASE_DELAY = 0.25
+
+_TRANSIENT_NEO4J_ERRORS = (
+    ConnectionResetError,
+    ConnectionError,
+    OSError,
+    ServiceUnavailable,
+    SessionExpired,
+)
 
 
 class Neo4jClient:
@@ -70,15 +82,64 @@ class Neo4jClient:
             raise RuntimeError(msg)
         return self._driver
 
+    def _is_transient_error(self, exc: BaseException) -> bool:
+        if isinstance(exc, _TRANSIENT_NEO4J_ERRORS):
+            return True
+        if isinstance(exc, Neo4jError):
+            code = getattr(exc, "code", "") or ""
+            return "TransientError" in str(code) or "ServiceUnavailable" in str(exc)
+        return False
+
+    async def _reconnect(self) -> None:
+        """Close the current driver and open a fresh connection."""
+        old_driver = self._driver
+        self._driver = None
+        if old_driver is not None:
+            try:
+                await old_driver.close()
+            except Exception as close_exc:
+                logger.debug("Neo4j driver close during reconnect failed: %s", close_exc)
+        self._driver = AsyncGraphDatabase.driver(
+            self._uri,
+            auth=(self._user, self._password),
+            **self._driver_config,
+        )
+        await self._driver.verify_connectivity()
+        logger.info("Neo4j driver reconnected after transient failure")
+
     async def execute(
         self,
         cypher: str,
         params: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Run Cypher and return each record as a plain dict."""
-        async with self.driver.session() as session:
-            result = await session.run(cypher, params or {})
-            return await result.data()
+        """Run Cypher and return each record as a plain dict.
+
+        Retries transient connection failures (e.g. ConnectionResetError) with
+        a short backoff and driver reconnect.
+        """
+        last_exc: BaseException | None = None
+        for attempt in range(_EXECUTE_MAX_ATTEMPTS):
+            try:
+                async with self.driver.session() as session:
+                    result = await session.run(cypher, params or {})
+                    return await result.data()
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_transient_error(exc) or attempt >= _EXECUTE_MAX_ATTEMPTS - 1:
+                    raise
+                logger.warning(
+                    "Neo4j execute transient failure on attempt %d/%d: %s",
+                    attempt + 1,
+                    _EXECUTE_MAX_ATTEMPTS,
+                    exc,
+                )
+                try:
+                    await self._reconnect()
+                except Exception as reconnect_exc:
+                    logger.warning("Neo4j reconnect failed: %s", reconnect_exc)
+                await asyncio.sleep(_EXECUTE_RETRY_BASE_DELAY * (2**attempt))
+        assert last_exc is not None
+        raise last_exc
 
     async def health_check(self) -> bool:
         """Return True when Neo4j responds to RETURN 1 AS ok."""

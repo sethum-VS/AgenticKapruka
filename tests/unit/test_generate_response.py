@@ -446,6 +446,28 @@ def test_build_products_carousel_html_renders_carousel() -> None:
     assert "Chocolate Birthday Cake" in html
 
 
+def test_build_products_carousel_html_artificial_floral_banner() -> None:
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                _product(
+                    "anniv-art-roses",
+                    "Anniversary Artificial Roses Gift Set",
+                    amount=4500.0,
+                ),
+            ],
+        },
+    }
+    html = build_products_carousel_html(
+        tool_results,
+        user_message="Show me some anniversary gifts.",
+    )
+    assert html is not None
+    assert "non-perishable" in html.lower()
+    assert "artificial" in html.lower()
+    assert 'role="note"' in html
+
+
 def test_build_products_carousel_html_empty_when_no_results() -> None:
     assert build_products_carousel_html({SEARCH_PRODUCTS_TOOL: {"results": []}}) is None
 
@@ -1226,6 +1248,17 @@ def test_build_agent_tool_error_message_city_not_deliverable() -> None:
     assert "cannot deliver to that city" in message.lower()
     assert "Colombo 03" in message
     assert "loc:" not in message.lower()
+
+
+def test_build_agent_tool_error_message_unknown_city_sanitized() -> None:
+    message = build_agent_tool_error_message(
+        tool=CHECK_DELIVERY_TOOL,
+        raw_message="Error (city_not_found): Unknown city 'Colombo'",
+        error_code="city_not_found",
+    )
+    assert "Unknown city" not in message
+    assert "couldn't find that city" in message.lower()
+    assert "Colombo 03" in message
 
 
 def test_build_agent_tool_error_message_get_product_unresolved() -> None:

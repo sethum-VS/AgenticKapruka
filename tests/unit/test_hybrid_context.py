@@ -816,6 +816,29 @@ def test_build_budget_refinement_search_args_birthday_chocolate_bias() -> None:
     assert args["max_price"] == 6000.0
 
 
+def test_scenario1_budget_filter_uses_max_price_6000() -> None:
+    """QA Scenario 1 step 3: budget pivot after chocolate search keeps max_price=6000."""
+    from lib.neo4j.hybrid_context import build_budget_refinement_search_args
+
+    args = build_budget_refinement_search_args(
+        {
+            "session_search_query": "chocolate",
+            "session_product_focus": "chocolate",
+            "session_occasion": "birthday",
+            "session_budget_max": 6000.0,
+            "intent_metadata": {
+                "budget_max": 6000.0,
+                "recipient_hint": "wife",
+            },
+        },
+        "Actually, keep it under 6000 rupees.",
+        currency="LKR",
+    )
+    assert args is not None
+    assert args["max_price"] == 6000.0
+    assert "chocolate" in str(args.get("q") or "").lower()
+
+
 def test_merge_planner_search_args_budget_refinement() -> None:
     from lib.neo4j.hybrid_context import merge_planner_search_args
 

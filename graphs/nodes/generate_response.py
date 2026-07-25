@@ -29,6 +29,11 @@ from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
+from lib.chat.city_resolution import (
+    build_city_choice_chips_html,
+    build_city_not_found_message,
+    is_unknown_city_error,
+)
 from lib.chat.intent_heuristics import build_guest_checkout_reply, is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.off_topic import (
@@ -329,6 +334,11 @@ def build_agent_tool_error_message(
             "We cannot deliver to that city. Please choose a Kapruka delivery area "
             "(for example Colombo 03, Kandy, or Galle)."
         )
+    if tool == CHECK_DELIVERY_TOOL and is_unknown_city_error(
+        error_code=error_code,
+        raw_message=raw_message,
+    ):
+        return build_city_not_found_message()
     if error_code == "product_id_unresolved" and tool == GET_PRODUCT_TOOL:
         return (
             "I couldn't load that product's details — try tapping it in the carousel above, "
@@ -350,14 +360,13 @@ def build_agent_tool_error_message(
         ):
             return delivery_date_clarifying_question()
         if tool == CHECK_DELIVERY_TOOL and "city" in lowered:
-            return (
-                "Please choose a valid Kapruka delivery city "
-                "(for example Colombo 03, Kandy, or Galle)."
-            )
+            return build_city_not_found_message()
         return "Please check your delivery details and try again."
 
     action = _TOOL_ERROR_ACTION_LABELS.get(tool, "complete that request")
     cause = raw_message.strip() or "Kapruka could not process the request."
+    if is_unknown_city_error(error_code=error_code, raw_message=cause):
+        return build_city_not_found_message()
     return f"I could not {action} right now. {cause} Please adjust your request and try again."
 
 
@@ -1420,6 +1429,13 @@ def _should_use_discovery_template_fast_path(
     )
 
 
+def _carousel_artificial_floral_warning(products: list[dict[str, Any]]) -> str | None:
+    """Warn when carousel top picks include silk/artificial florals."""
+    from lib.chat.product_honesty import artificial_floral_note_for_picks
+
+    return artificial_floral_note_for_picks(products)
+
+
 def _carousel_perishability_warning(
     *,
     session_delivery_city: str | None,
@@ -1435,6 +1451,19 @@ def _carousel_perishability_warning(
     return (
         "Fresh cakes, flowers, and gift combos are best ordered closer to the delivery date. "
         "Please share a delivery date so we can confirm availability."
+    )
+
+
+def _carousel_warning_banner(warning: str) -> str:
+    escaped = (
+        warning.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+    return (
+        '<p class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 '
+        f'text-sm text-amber-900" role="note">{escaped}</p>'
     )
 
 
@@ -1494,24 +1523,20 @@ def build_products_carousel_html(
         session_delivery_city=session_delivery_city,
     )
     carousel_html = render_product_carousel(products)
-    warning = _carousel_perishability_warning(
+    banners: list[str] = []
+    artificial_warning = _carousel_artificial_floral_warning(products)
+    if artificial_warning:
+        banners.append(_carousel_warning_banner(artificial_warning))
+    perishable_warning = _carousel_perishability_warning(
         session_delivery_city=session_delivery_city,
         delivery_date=delivery_date,
         user_message=user_message,
         session_product_focus=session_product_focus,
     )
-    if warning:
-        escaped = (
-            warning.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
-        banner = (
-            '<p class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 '
-            f'text-sm text-amber-900" role="note">{escaped}</p>'
-        )
-        return banner + carousel_html
+    if perishable_warning:
+        banners.append(_carousel_warning_banner(perishable_warning))
+    if banners:
+        return "".join(banners) + carousel_html
     return carousel_html
 
 
@@ -1647,6 +1672,7 @@ def render_assistant_html(
     tracking_status_html: str | None = None,
     delivery_status_html: str | None = None,
     rate_limit_banner_html: str | None = None,
+    suggestion_chips_html: str | None = None,
 ) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
@@ -1660,6 +1686,7 @@ def render_assistant_html(
         tracking_status_html=tracking_status_html,
         delivery_status_html=delivery_status_html,
         rate_limit_banner_html=rate_limit_banner_html,
+        suggestion_chips_html=suggestion_chips_html,
     )
 
 
@@ -1867,10 +1894,17 @@ async def generate_response(
             session_product_focus=state.get("session_product_focus"),
             delivery_context_relevant=delivery_context_relevant,
         )
+        candidates = state.get("delivery_city_candidates")
+        chips_html = (
+            build_city_choice_chips_html(candidates)
+            if isinstance(candidates, list)
+            else None
+        )
         return {
             "response_html": render_assistant_html(
                 question,
                 delivery_status_html=delivery_status_html,
+                suggestion_chips_html=chips_html,
             ),
             "assistant_message": question,
         }

@@ -68,7 +68,7 @@ async def test_iter_chat_sse_events_skips_catalog_status_for_tracking_intent() -
     assert len(events) == 3
     assert 'data: <div id="user">track</div>' in events[0]
     assert not any("Searching our catalog" in event for event in events)
-    assert any("longer than expected" in event for event in events)
+    assert any("having trouble right now" in event for event in events)
 
 
 @pytest.mark.asyncio
@@ -215,7 +215,7 @@ async def test_iter_chat_sse_events_skips_catalog_status_for_clarify_band() -> N
 
     assert len(events) == 3
     assert not any("Searching our catalog" in event for event in events)
-    assert any("longer than expected" in event for event in events)
+    assert any("having trouble right now" in event for event in events)
 
 
 @pytest.mark.asyncio
@@ -243,7 +243,7 @@ async def test_iter_chat_sse_events_finally_yields_timeout_fallback_without_done
     ):
         events.append(event)
 
-    assert any("longer than expected" in event for event in events)
+    assert any("having trouble right now" in event for event in events)
     assert events[-1].startswith("event: done\n")
 
 
@@ -315,8 +315,8 @@ async def test_iter_chat_sse_events_yields_timeout_partial_on_wall_clock_exceed(
             collected.append(event)
 
     assert collected
-    assert any("longer than expected" in event for event in collected)
-    assert sum("longer than expected" in event for event in collected) == 1
+    assert any("having trouble right now" in event for event in collected)
+    assert sum("having trouble right now" in event for event in collected) == 1
 
 
 @pytest.mark.asyncio

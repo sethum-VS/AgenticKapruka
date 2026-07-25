@@ -1839,6 +1839,7 @@ async def agent_loop(
     tool_call_count = 0
     agent_clarifying_question: str | None = None
     agent_tool_error: dict[str, str] | None = None
+    delivery_city_candidates_update: list[str] | None = None
     session_awaiting_delivery_date: bool | None = None
     agent_loop_done = False
     force_finish = False
@@ -2334,6 +2335,8 @@ async def agent_loop(
             discovery_search_merged = True
 
         if tool_name == CHECK_DELIVERY_TOOL:
+            from lib.chat.city_resolution import _is_bare_colombo, resolve_delivery_city
+
             user_message = _extract_latest_user_message(state.get("messages") or [])
             product_id = _resolve_delivery_product_id(state)
             if product_id and not enriched_args.get("product_id"):
@@ -2348,27 +2351,45 @@ async def agent_loop(
                 target_city = delivery_meta.get("target_city")
                 if isinstance(target_city, str) and target_city.strip():
                     enriched_args["city"] = target_city.strip()
-            if isinstance(canonical_city, str) and canonical_city.strip():
-                enriched_args["city"] = canonical_city.strip()
-            elif (
-                kapruka_service is not None
-                and isinstance(enriched_args.get("city"), str)
-                and enriched_args["city"].strip()
+            if (
+                isinstance(canonical_city, str)
+                and canonical_city.strip()
+                and not _is_bare_colombo(canonical_city)
             ):
-                from lib.chat.city_resolution import resolve_delivery_city
-
+                enriched_args["city"] = canonical_city.strip()
+            else:
+                city_candidate = ""
+                if isinstance(enriched_args.get("city"), str):
+                    city_candidate = enriched_args["city"].strip()
+                elif isinstance(canonical_city, str):
+                    city_candidate = canonical_city.strip()
+                if not city_candidate:
+                    agent_clarifying_question = "Which city should we deliver to?"
+                    exit_reason = "ask_user"
+                    agent_loop_done = True
+                    break
+                if kapruka_service is None:
+                    agent_clarifying_question = (
+                        "I couldn't verify that delivery city right now. "
+                        "Please try a nearby area (for example Colombo 03, Kandy, or Galle)."
+                    )
+                    exit_reason = "ask_user"
+                    agent_loop_done = True
+                    break
                 resolution = await resolve_delivery_city(
                     kapruka_service,
                     rate_limit_key,
-                    enriched_args["city"].strip(),
+                    city_candidate,
                 )
                 if resolution.status == "resolved" and resolution.canonical:
                     enriched_args["city"] = resolution.canonical
-                elif resolution.status == "ambiguous":
+                else:
                     agent_clarifying_question = (
                         resolution.customer_message
-                        or "Colombo has several delivery zones. Which area should we deliver to?"
+                        or "Which city should we deliver to?"
                     )
+                    if resolution.candidates:
+                        delivery_city_candidates_update = list(resolution.candidates)
                     exit_reason = "ask_user"
                     agent_loop_done = True
                     break
@@ -2669,6 +2690,8 @@ async def agent_loop(
         }
     if agent_clarifying_question is not None:
         updates["agent_clarifying_question"] = agent_clarifying_question
+    if delivery_city_candidates_update is not None:
+        updates["delivery_city_candidates"] = delivery_city_candidates_update
     if agent_tool_error is not None:
         updates["agent_tool_error"] = agent_tool_error
     if refined_intent is not None:

@@ -245,6 +245,17 @@ def _mock_kapruka_service() -> AsyncMock:
     mock_service.get_product.return_value = _SEARCH_OUTPUT
     mock_service.list_categories.return_value = _SEARCH_OUTPUT
     mock_service.check_delivery.return_value = _SEARCH_OUTPUT
+    mock_service.list_delivery_cities.return_value = [
+        "Colombo 01",
+        "Colombo 02",
+        "Colombo 03",
+        "Colombo 04",
+        "Colombo 05",
+        "Colombo 06",
+        "Colombo 07",
+        "Kandy",
+        "Galle",
+    ]
     return mock_service
 
 

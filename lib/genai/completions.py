@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Any, TypeVar
 
-from openai import OpenAI, RateLimitError
+from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
@@ -23,17 +23,16 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
-# ── Retry constants ──────────────────────────────────────────────────────────
-_MAX_RETRIES = 4
-_BACKUP_MAX_RETRIES = 2
-_RETRY_BASE_DELAY = 2.0  # seconds (2s, 4s, 8s, 16s exponential)
-_RETRY_MAX_DELAY = 30.0  # cap any single backoff (incl. Retry-After) at 30s
+# Transient transport errors worth retrying (plus RateLimitError handled separately).
+_TRANSIENT_ERRORS = (APITimeoutError, APIConnectionError)
 
 # ── Markdown fence stripper ──────────────────────────────────────────────────
 _JSON_FENCE_RE = re.compile(
     r"```(?:json)?\s*\n?(.*?)```",
     re.DOTALL,
 )
+
+_concurrency_semaphores: dict[int, asyncio.Semaphore] = {}
 
 
 def strip_markdown_fences(text: str) -> str:
@@ -68,7 +67,19 @@ def set_override_generate_content(func: Any) -> None:
     _override_generate_content = func
 
 
-def _retry_after_delay(exc: RateLimitError) -> float | None:
+def reset_concurrency_limiter() -> None:
+    """Drop cached concurrency semaphores (for tests)."""
+    _concurrency_semaphores.clear()
+
+
+def _get_concurrency_semaphore(max_concurrent: int) -> asyncio.Semaphore:
+    """Return a process-wide semaphore capped at ``max_concurrent`` NIM calls."""
+    if max_concurrent not in _concurrency_semaphores:
+        _concurrency_semaphores[max_concurrent] = asyncio.Semaphore(max_concurrent)
+    return _concurrency_semaphores[max_concurrent]
+
+
+def _retry_after_delay(exc: RateLimitError, max_delay: float) -> float | None:
     """Parse the Retry-After header (seconds) from a NIM 429 response."""
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", None)
@@ -76,8 +87,12 @@ def _retry_after_delay(exc: RateLimitError) -> float | None:
         return None
     raw = headers.get("retry-after")
     if isinstance(raw, str) and raw.strip().isdigit():
-        return min(_RETRY_MAX_DELAY, max(1.0, float(raw.strip())))
+        return min(max_delay, max(1.0, float(raw.strip())))
     return None
+
+
+def _backoff_delay(attempt: int, *, base_delay: float, max_delay: float) -> float:
+    return min(max_delay, base_delay * (2**attempt))
 
 
 async def _complete_with_client(
@@ -91,6 +106,8 @@ async def _complete_with_client(
     max_tokens: int,
     seed: int | None,
     max_retries: int,
+    base_delay: float,
+    max_delay: float,
 ) -> dict[str, Any] | T:
     """Run chat completion against one NIM client with rate limit + retry."""
     limiter = get_rate_limiter(role=role)
@@ -123,7 +140,9 @@ async def _complete_with_client(
                     )
                     if attempt < max_retries - 1:
                         last_exc = ValueError(f"JSON parse failed: {raw_content[:200]}")
-                        delay = _RETRY_BASE_DELAY * (2**attempt)
+                        delay = _backoff_delay(
+                            attempt, base_delay=base_delay, max_delay=max_delay
+                        )
                         await asyncio.sleep(delay)
                         continue
                     raise
@@ -136,8 +155,10 @@ async def _complete_with_client(
         except RateLimitError as exc:
             last_exc = exc
             if attempt < max_retries - 1:
-                backoff = min(_RETRY_MAX_DELAY, _RETRY_BASE_DELAY * (2**attempt))
-                retry_after = _retry_after_delay(exc)
+                backoff = _backoff_delay(
+                    attempt, base_delay=base_delay, max_delay=max_delay
+                )
+                retry_after = _retry_after_delay(exc, max_delay)
                 delay = max(backoff, retry_after) if retry_after is not None else backoff
                 logger.warning(
                     "generate_content: NVIDIA NIM 429 on %s attempt %d; retrying in %.1fs",
@@ -149,6 +170,28 @@ async def _complete_with_client(
             else:
                 logger.error(
                     "generate_content: NVIDIA NIM 429 exhausted %d retries on %s",
+                    max_retries,
+                    role,
+                )
+
+        except _TRANSIENT_ERRORS as exc:
+            last_exc = exc
+            if attempt < max_retries - 1:
+                delay = _backoff_delay(
+                    attempt, base_delay=base_delay, max_delay=max_delay
+                )
+                logger.warning(
+                    "generate_content: NVIDIA NIM %s on %s attempt %d; retrying in %.1fs",
+                    type(exc).__name__,
+                    role,
+                    attempt + 1,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "generate_content: NVIDIA NIM %s exhausted %d retries on %s",
+                    type(exc).__name__,
                     max_retries,
                     role,
                 )
@@ -207,6 +250,11 @@ async def generate_content(
 
     cfg = settings or get_settings()
     resolved_model = model or cfg.nvidia_llm_model
+    base_delay = float(cfg.nvidia_retry_base_delay)
+    max_delay = float(cfg.nvidia_retry_max_delay)
+    primary_retries = int(cfg.nvidia_max_retries)
+    backup_retries = int(cfg.nvidia_backup_max_retries)
+    max_concurrent = int(cfg.nvidia_max_concurrent)
 
     # Inject schema instruction into system prompt if needed
     request_messages = list(messages)
@@ -221,34 +269,40 @@ async def generate_content(
         else:
             request_messages.insert(0, {"role": "system", "content": schema_instruction})
 
-    primary_client = create_nvidia_client(settings=cfg, role="primary")
-    try:
-        return await _complete_with_client(
-            client=primary_client,
-            role="primary",
-            resolved_model=resolved_model,
-            request_messages=request_messages,
-            response_schema=response_schema,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            seed=seed,
-            max_retries=_MAX_RETRIES,
-        )
-    except RateLimitError:
-        if not has_backup_nvidia_client(settings=cfg):
-            raise
-        logger.warning(
-            "NIM primary rate-limited; failing over to backup key",
-        )
-        backup_client = create_nvidia_client(settings=cfg, role="backup")
-        return await _complete_with_client(
-            client=backup_client,
-            role="backup",
-            resolved_model=resolved_model,
-            request_messages=request_messages,
-            response_schema=response_schema,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            seed=seed,
-            max_retries=_BACKUP_MAX_RETRIES,
-        )
+    semaphore = _get_concurrency_semaphore(max_concurrent)
+    async with semaphore:
+        primary_client = create_nvidia_client(settings=cfg, role="primary")
+        try:
+            return await _complete_with_client(
+                client=primary_client,
+                role="primary",
+                resolved_model=resolved_model,
+                request_messages=request_messages,
+                response_schema=response_schema,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                seed=seed,
+                max_retries=primary_retries,
+                base_delay=base_delay,
+                max_delay=max_delay,
+            )
+        except (APITimeoutError, APIConnectionError, RateLimitError):
+            if not has_backup_nvidia_client(settings=cfg):
+                raise
+            logger.warning(
+                "NIM primary exhausted; failing over to backup key",
+            )
+            backup_client = create_nvidia_client(settings=cfg, role="backup")
+            return await _complete_with_client(
+                client=backup_client,
+                role="backup",
+                resolved_model=resolved_model,
+                request_messages=request_messages,
+                response_schema=response_schema,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                seed=seed,
+                max_retries=backup_retries,
+                base_delay=base_delay,
+                max_delay=max_delay,
+            )

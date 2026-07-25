@@ -84,14 +84,20 @@ def test_chat_sse_js_exposes_abort_for_new_session() -> None:
     assert "abortChatStream" in source
 
 
-def test_chat_sse_js_handles_timeout_without_removing_partial_content() -> None:
-    source = CHAT_SSE_JS.read_text()
+def test_chat_sse_js_handles_timeout_by_clearing_pending_bubbles() -> None:
+    """Client timeout clears stuck Searching bubbles and shows a retry notice."""
+    source = CHAT_SSE_JS.read_text(encoding="utf-8")
 
     assert "showStreamTimeoutMessage" in source
     assert "chat-stream-timeout" in source
     assert 'reason === "timeout"' in source
-    assert "removePendingAssistantBubbles();" in source
-    assert 'if (reason === "timeout")' in source
+    assert "STREAM_TROUBLE_MESSAGE" in source
+    assert "having trouble right now" in source
+    assert "clearOrphanedPendingBubblesWithNotice" in source
+    timeout_block_start = source.index('if (reason === "timeout")')
+    timeout_block = source[timeout_block_start : timeout_block_start + 350]
+    assert "removePendingAssistantBubbles();" in timeout_block
+    assert "showStreamTimeoutMessage();" in timeout_block
 
 
 def test_chat_sse_js_removes_pending_bubble_on_stream_error() -> None:

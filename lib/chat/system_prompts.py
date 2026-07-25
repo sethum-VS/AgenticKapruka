@@ -26,8 +26,9 @@ _CONCIERGE_EMPTY_TOOL_RESULTS_RULE = (
 )
 
 _ARTIFICIAL_FLORAL_DISCLOSURE_RULE = (
-    "- When the customer asked for flowers and tool_results include silk, artificial, soap, "
-    "or paper floral products, disclose they are not fresh-cut flowers before recommending.\n"
+    "- When tool_results include silk, artificial, soap, or paper floral products "
+    "(including anniversary gift sets), disclose they are non-perishable / not "
+    "fresh-cut flowers before recommending.\n"
 )
 
 UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION = (
