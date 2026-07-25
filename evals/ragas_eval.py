@@ -55,13 +55,13 @@ from lib.chat.delivery_dates import normalize_delivery_date
 from lib.chat.intent_heuristics import is_budgeted_gift_ideas_message
 from lib.chat.query_preprocessor import QueryPreprocessor
 from lib.chat.request_specificity import is_delivery_only_inquiry
+from lib.genai.completions import set_override_generate_content
 from lib.kapruka.product_id import extract_product_id
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
-from lib.genai.completions import set_override_generate_content
 from lib.redis.cart import add_item
 from lib.redis.client import RedisClient
 from lib.utils.timezone import colombo_today_iso
