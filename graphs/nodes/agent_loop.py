@@ -39,6 +39,7 @@ from lib.chat.product_curation import (
     filter_excluded_category_hints,
     filter_gift_noise_products,
     has_graph_hybrid_context,
+    is_anniversary_occasion_intent,
     is_cake_accessory,
     is_flower_fruit_intent,
     refine_last_search_by_budget,
@@ -80,7 +81,6 @@ from lib.neo4j.hybrid_context import (
     build_discovery_search_args,
     enrich_message_with_session_slots,
     has_strong_hybrid_hints,
-    is_anniversary_occasion_intent,
     is_birthday_cake_intent,
     is_broad_cakes_query,
     is_confident_discovery_turn,
@@ -91,6 +91,11 @@ from lib.utils.timezone import colombo_today_iso
 from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_turn
 
 logger = logging.getLogger(__name__)
+
+
+def _tool_trace_entry(name: str, args: dict[str, Any], result: Any) -> ToolInvocation:
+    return cast(ToolInvocation, {"name": name, "args": args, "result": result})
+
 
 MAX_ITERATIONS = 3
 GRAPH_HINTS_MAX_ITERATIONS = 2
@@ -1614,7 +1619,7 @@ async def _retry_anniversary_search_if_empty(
         if retry_result is None:
             continue
         extra_trace.append(
-            {"name": SEARCH_PRODUCTS_TOOL, "args": retry_args, "result": retry_result},
+            _tool_trace_entry(SEARCH_PRODUCTS_TOOL, retry_args, retry_result),
         )
         extra_calls += 1
         if _search_has_products(retry_result):
@@ -1710,7 +1715,7 @@ async def _maybe_retry_literal_color_flower_search(
     retry_result = _curate_search_trace_result(retry_result, state=state)
     updated_trace = [
         *tool_trace,
-        {"name": SEARCH_PRODUCTS_TOOL, "args": retry_args, "result": retry_result},
+        _tool_trace_entry(SEARCH_PRODUCTS_TOOL, retry_args, retry_result),
     ]
     if _search_has_products(retry_result):
         return retry_result, retry_args, updated_trace, 1
@@ -1821,7 +1826,7 @@ async def _maybe_retry_literal_named_product_search(
     retry_result = _curate_search_trace_result(retry_result, state=state)
     updated_trace = [
         *tool_trace,
-        {"name": SEARCH_PRODUCTS_TOOL, "args": retry_args, "result": retry_result},
+        _tool_trace_entry(SEARCH_PRODUCTS_TOOL, retry_args, retry_result),
     ]
     if _search_has_products(retry_result):
         return retry_result, retry_args, updated_trace, 1
@@ -1862,14 +1867,15 @@ async def _try_confident_discovery_fast_path(
     intent_meta = state.get("intent_metadata")
     if isinstance(intent_meta, dict) and intent_meta.get("topic_pivot"):
         discovery_message = user_message
+    session_budget = state.get("session_budget_max")
     search_args = build_discovery_search_args(
         discovery_message,
         hybrid_context,
         currency=currency,
         intent_metadata=state.get("intent_metadata"),
         session_budget_max=(
-            float(state["session_budget_max"])
-            if isinstance(state.get("session_budget_max"), (int, float))
+            float(session_budget)
+            if isinstance(session_budget, (int, float))
             and not (isinstance(intent_meta, dict) and intent_meta.get("topic_pivot"))
             else None
         ),
@@ -1904,7 +1910,7 @@ async def _try_confident_discovery_fast_path(
     result = _curate_search_trace_result(result, state=state)
     working_trace = [
         *tool_trace,
-        {"name": SEARCH_PRODUCTS_TOOL, "args": enriched_args, "result": result},
+        _tool_trace_entry(SEARCH_PRODUCTS_TOOL, enriched_args, result),
     ]
     (
         result,

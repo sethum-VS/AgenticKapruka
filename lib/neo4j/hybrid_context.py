@@ -1506,22 +1506,22 @@ def build_discovery_search_args(
         literal_q = f"{color} {flower}"
         if re.search(r"\bcombo\b", query, re.I):
             literal_q = f"{literal_q} combo"
-        args = {
+        color_flower_args: dict[str, Any] = {
             "q": literal_q,
             "currency": currency,
             "category": "Flowers",
         }
         budget_cap = extract_budget(query)
         if budget_cap is not None:
-            args["max_price"] = budget_cap.amount
-            args["sort"] = _budget_search_sort(query)
-            args["currency"] = budget_cap.currency
+            color_flower_args["max_price"] = budget_cap.amount
+            color_flower_args["sort"] = _budget_search_sort(query)
+            color_flower_args["currency"] = budget_cap.currency
         else:
             max_price = _extract_max_price(query)
             if max_price is not None:
-                args["max_price"] = max_price
-                args["sort"] = _budget_search_sort(query)
-        return args
+                color_flower_args["max_price"] = max_price
+                color_flower_args["sort"] = _budget_search_sort(query)
+        return color_flower_args
 
     if is_broad_cakes_query(query) and not topic_pivot:
         query = "birthday cake"

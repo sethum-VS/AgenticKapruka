@@ -131,6 +131,7 @@ class KaprukaService:
             return await existing  # type: ignore[no-any-return]
 
         logger = logging.getLogger(__name__)
+        result: T | None = None
         try:
             try:
                 result = await fetch()
@@ -158,13 +159,13 @@ class KaprukaService:
                     raise
                 result = None
                 last_transient = exc
-                for delay in _TRANSIENT_RETRY_DELAYS_SECONDS:
+                for retry_delay in _TRANSIENT_RETRY_DELAYS_SECONDS:
                     logger.info(
                         "Kapruka transient failure on %s; retrying once after %ss",
                         tool_name,
-                        delay,
+                        retry_delay,
                     )
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(retry_delay)
                     try:
                         result = await fetch()
                         break
@@ -175,6 +176,7 @@ class KaprukaService:
                 if result is None:
                     raise last_transient from None
 
+            assert result is not None
             await set_cached(self._redis, tool_name, cache_args, to_cache(result))
             if not waiter.done():
                 waiter.set_result(result)

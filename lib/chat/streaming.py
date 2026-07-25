@@ -7,7 +7,7 @@ import logging
 import re
 import secrets
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
@@ -254,8 +254,9 @@ async def iter_chat_sse_events(
     pending_id = f"assistant-stream-{stream_id or secrets.token_hex(4)}"
     stream_started = False
     # Seed with session fields so timeout partials can budget-filter prior carousels.
+    state_values = cast(dict[str, Any], state)
     partial_state: dict[str, Any] = {
-        key: state[key]
+        key: state_values[key]
         for key in (
             "messages",
             "session_budget_max",
@@ -269,7 +270,7 @@ async def iter_chat_sse_events(
             "hybrid_context",
             "intent_metadata",
         )
-        if key in state
+        if key in state_values
     }
     turn_timeout = chat_turn_timeout_seconds()
 

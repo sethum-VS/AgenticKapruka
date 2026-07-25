@@ -38,6 +38,7 @@ dev = [
     "fakeredis[lua]>=2.26,<3",
     "ruff>=0.8,<1",
     "mypy>=1.14,<2",
+    "google-genai>=2.10.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -108,6 +109,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["openai", "openai.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["google", "google.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

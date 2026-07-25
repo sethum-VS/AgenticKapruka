@@ -2509,13 +2509,13 @@ async def generate_response(
                 state=state,
                 visible_products=visible_products,
             )
-            updates = _assistant_response_fields(
+            fast_path_updates = _assistant_response_fields(
                 reply_text,
                 products_html=None if delivery_only else products_html,
                 delivery_status_html=delivery_status_html,
             )
-            updates["last_visible_products"] = visible_products
-            return updates
+            fast_path_updates["last_visible_products"] = visible_products
+            return fast_path_updates
 
     model = select_model(state)
     _emit_synthesis_status()

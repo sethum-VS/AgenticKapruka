@@ -10,7 +10,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 from pydantic import BaseModel
@@ -133,7 +133,7 @@ def _retry_after_delay(exc: RateLimitError, max_delay: float) -> float | None:
 
 
 def _backoff_delay(attempt: int, *, base_delay: float, max_delay: float) -> float:
-    return min(max_delay, base_delay * (2**attempt))
+    return float(min(max_delay, base_delay * (2**attempt)))
 
 
 async def _complete_with_client(  # noqa: UP047
@@ -164,13 +164,14 @@ async def _complete_with_client(  # noqa: UP047
         await limiter.acquire()
         try:
             completion = await asyncio.to_thread(
-                client.chat.completions.create,
-                model=resolved_model,
-                messages=request_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=1,
-                seed=seed,
+                lambda: client.chat.completions.create(
+                    model=resolved_model,
+                    messages=cast(Any, request_messages),
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=1,
+                    seed=seed,
+                ),
             )
 
             raw_content = completion.choices[0].message.content or ""
@@ -298,14 +299,17 @@ async def generate_content(  # noqa: UP047
     """
     if _override_generate_content is not None:
         # Test hook: bypass the live NIM client entirely.
-        return await _override_generate_content(
-            model=model,
-            messages=messages,
-            response_schema=response_schema,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            settings=settings,
-            seed=seed,
+        return cast(
+            dict[str, Any] | T,
+            await _override_generate_content(
+                model=model,
+                messages=messages,
+                response_schema=response_schema,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                settings=settings,
+                seed=seed,
+            ),
         )
 
     cfg = settings or get_settings()
