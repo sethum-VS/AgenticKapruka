@@ -261,10 +261,27 @@ def test_refine_last_search_by_budget_filters_chocolate_and_drops_over_budget() 
     assert "card" not in {item["id"] for item in refined}
 
 
-def test_refine_last_search_by_budget_returns_none_without_focus_match() -> None:
+def test_refine_last_search_by_budget_falls_back_to_in_budget_without_focus_match() -> None:
+    """When focus matches nothing, still return in-budget items (avoid MCP loop)."""
     products = [
         _product("card", 1200.0, name="Greeting Card"),
         _product("voucher", 5000.0, name="Gift Voucher"),
+        _product("over", 9000.0, name="Luxury Hamper"),
+    ]
+    refined = refine_last_search_by_budget(
+        products,
+        budget_max=6000.0,
+        currency="LKR",
+        session_product_focus="chocolate",
+    )
+    assert refined is not None
+    assert {item["id"] for item in refined} == {"card", "voucher"}
+
+
+def test_refine_last_search_by_budget_returns_none_when_all_over_budget() -> None:
+    products = [
+        _product("choc1", 7500.0, name="Premium Chocolate Hamper"),
+        _product("choc2", 9800.0, name="Luxury Chocolate Box"),
     ]
     assert (
         refine_last_search_by_budget(

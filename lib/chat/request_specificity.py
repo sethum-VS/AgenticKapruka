@@ -18,6 +18,7 @@ from lib.chat.intent_heuristics import (
     Intent,
     classify_routing_guard,
     is_bare_category_pivot,
+    is_budget_refinement_message,
     is_budgeted_gift_ideas_message,
     is_category_browse_message,
     is_guest_checkout_question,
@@ -139,6 +140,8 @@ def should_bypass_specificity_scorer(
     if is_guest_checkout_question(stripped):
         return True
     if is_budgeted_gift_ideas_message(stripped):
+        return True
+    if is_budget_refinement_message(stripped):
         return True
     if classify_routing_guard(stripped) is not None:
         return True

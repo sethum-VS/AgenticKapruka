@@ -960,6 +960,20 @@ def test_merge_planner_search_args_topic_pivot_bare_cakes() -> None:
     assert "category" not in merged
 
 
+def test_merge_planner_search_args_topic_pivot_bare_flowers() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "anniversary flowers", "category": "Anniversary"},
+        user_message="What about just normal fresh flowers?",
+        hybrid_context={"hints": {"occasion": "Anniversary"}},
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+    assert merged["q"] == "fresh flowers"
+    assert merged.get("category") == "Flowers"
+
+
 def test_strip_location_from_search_query_for_galle() -> None:
     from lib.neo4j.hybrid_context import strip_location_from_search_query
 

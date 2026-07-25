@@ -80,6 +80,14 @@ def test_classify_routing_guard_priority_cart_before_checkout() -> None:
     assert classify_routing_guard("view cart") == "checkout"
 
 
+def test_classify_routing_guard_bare_ordinal_with_carousel() -> None:
+    assert classify_routing_guard("number 1") is None
+    assert classify_routing_guard("number 1", has_carousel=True) == "cart"
+    assert classify_routing_guard("the first one", has_carousel=True) == "cart"
+    assert extract_cart_product_phrase("number 1") == "number 1"
+    assert extract_cart_product_phrase("the first one") == "the first one"
+
+
 def test_infer_intent_add_to_cart_is_cart_not_checkout() -> None:
     assert infer_intent_from_message("Add the Blush Roses combo to my cart please") == "cart"
 

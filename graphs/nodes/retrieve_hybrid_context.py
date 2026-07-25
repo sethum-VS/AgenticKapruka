@@ -307,9 +307,9 @@ def _merge_graph_hybrid_context(
 
     for key, value in graph_hints.items():
         if topic_pivot and key in ("occasion", "category"):
-            hints[key] = value
-        else:
-            hints.setdefault(key, value)
+            # Fresh category pivots must not re-inherit stale GraphRAG occasion/category.
+            continue
+        hints.setdefault(key, value)
 
     merged["hints"] = hints
     for key in (

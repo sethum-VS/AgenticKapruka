@@ -178,16 +178,41 @@
     );
   }
 
-  const STATUS_MIN_VISIBLE_MS = 800;
-  const DEFAULT_LOADING_TEXT = "Sending…";
-  let statusShownAt = 0;
-  let statusFlushTimer = null;
+  const STATUS_HEARTBEAT_MS = 9000;
+  const DEFAULT_LOADING_TEXT = "Searching our catalog…";
+  const HEARTBEAT_LOADING_TEXT = "Still searching…";
+  let statusHeartbeatTimer = null;
+  let lastStatusEventAt = 0;
 
   function loadingIndicatorSpan(indicator) {
     return (
       indicator.querySelector('[data-testid="chat-loading-text"]') ||
       indicator.querySelector("span")
     );
+  }
+
+  function clearStatusHeartbeat() {
+    if (statusHeartbeatTimer) {
+      clearTimeout(statusHeartbeatTimer);
+      statusHeartbeatTimer = null;
+    }
+  }
+
+  function scheduleStatusHeartbeat() {
+    clearStatusHeartbeat();
+    statusHeartbeatTimer = setTimeout(() => {
+      statusHeartbeatTimer = null;
+      const form = findChatForm();
+      if (!form || !form.classList.contains("htmx-request")) {
+        return;
+      }
+      if (Date.now() - lastStatusEventAt < STATUS_HEARTBEAT_MS) {
+        scheduleStatusHeartbeat();
+        return;
+      }
+      updateLoadingStatusText(HEARTBEAT_LOADING_TEXT);
+      scheduleStatusHeartbeat();
+    }, STATUS_HEARTBEAT_MS);
   }
 
   function updateLoadingStatusText(text) {
@@ -276,33 +301,12 @@
     if (statusText) {
       updateLoadingStatusText(statusText);
     }
-
-    const now = Date.now();
-    const apply = () => {
-      htmx.swap(document.body, html, { swapStyle: "none" });
-      document.body.dispatchEvent(
-        new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
-      );
-      statusShownAt = Date.now();
-    };
-
-    const elapsed = now - statusShownAt;
-    if (statusShownAt > 0 && elapsed < STATUS_MIN_VISIBLE_MS) {
-      if (statusFlushTimer) {
-        clearTimeout(statusFlushTimer);
-      }
-      statusFlushTimer = setTimeout(() => {
-        statusFlushTimer = null;
-        const form = findChatForm();
-        if (!form || !form.classList.contains("htmx-request")) {
-          return;
-        }
-        apply();
-      }, STATUS_MIN_VISIBLE_MS - elapsed);
-      return;
-    }
-
-    apply();
+    lastStatusEventAt = Date.now();
+    // Apply bubble status immediately so Searching copy is never deferred away.
+    htmx.swap(document.body, html, { swapStyle: "none" });
+    document.body.dispatchEvent(
+      new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
+    );
   }
 
   function toggleRequestState(form, active) {
@@ -313,6 +317,8 @@
       form.classList.add("htmx-request");
       indicator?.classList.add("htmx-request", "chat-loading");
       showLoadingIndicator(DEFAULT_LOADING_TEXT);
+      lastStatusEventAt = Date.now();
+      scheduleStatusHeartbeat();
       if (submitButton) {
         submitButton.disabled = true;
       }
@@ -321,11 +327,8 @@
         messageInput.value = "";
       }
     } else {
-      if (statusFlushTimer) {
-        clearTimeout(statusFlushTimer);
-        statusFlushTimer = null;
-      }
-      statusShownAt = 0;
+      clearStatusHeartbeat();
+      lastStatusEventAt = 0;
       form.classList.remove("htmx-request");
       indicator?.classList.remove("htmx-request", "chat-loading");
       hideLoadingIndicator();

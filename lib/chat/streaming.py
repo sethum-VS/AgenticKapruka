@@ -79,6 +79,8 @@ def _partial_timeout_payload(
     user_message = _extract_latest_user_message(merged.get("messages") or [])
     budget_applied = False
     if isinstance(budget_max, (int, float)) and budget_max > 0 and products:
+        from lib.chat.product_curation import product_price_amount
+
         refined = refine_last_search_by_budget(
             products,
             budget_max=float(budget_max),
@@ -106,6 +108,21 @@ def _partial_timeout_payload(
         if refined:
             products = refined
             budget_applied = True
+        else:
+            # Safety net: simple price filter when focus refine yields nothing.
+            simple = [
+                item
+                for item in products
+                if isinstance(item, dict)
+                and (price := product_price_amount(item)) is not None
+                and price <= float(budget_max)
+            ]
+            if simple:
+                products = simple
+                budget_applied = True
+            elif is_budget_refinement_message(user_message):
+                # Budget turn with only over-budget prior picks — do not resurface them.
+                return _TIMEOUT_MESSAGE, None
 
     if not products:
         return _TIMEOUT_MESSAGE, None

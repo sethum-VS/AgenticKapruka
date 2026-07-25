@@ -215,7 +215,31 @@ def extract_cart_product_phrase(message: str) -> str | None:
     if m:
         phrase = m.group(1).strip(" .,!?:;\"'")
         return phrase or None
+    # Bare ordinal reply after "which one?" disambiguation ("number 1", "the first one")
+    if is_bare_cart_ordinal_reply(text):
+        return text.strip(" .,!?:;\"'") or None
     return None
+
+
+def is_bare_cart_ordinal_reply(message: str) -> bool:
+    """True when the whole message is an ordinal pick (e.g. 'number 1', 'the first one')."""
+    from lib.chat.product_reference import looks_like_ordinal_reference
+
+    stripped = message.strip().strip(".,!?:;\"'")
+    if not stripped:
+        return False
+    return looks_like_ordinal_reference(stripped)
+
+
+def has_carousel_products(state: object) -> bool:
+    """True when session has visible or search products for ordinal cart resolution."""
+    if not isinstance(state, dict):
+        return False
+    for key in ("last_visible_products", "last_search_products"):
+        products = state.get(key) or []
+        if isinstance(products, list) and any(isinstance(item, dict) for item in products):
+            return True
+    return False
 
 
 def is_proceed_checkout_message(message: str) -> bool:
@@ -270,9 +294,15 @@ def is_checkout_trigger(message: str) -> bool:
     return any(token in lowered for token in _CHECKOUT_TRIGGER_TOKENS)
 
 
-def classify_routing_guard(message: str) -> Intent | None:
-    """Shared guard ordering: cart_add → proceed_checkout → tracking → checkout view."""
+def classify_routing_guard(
+    message: str,
+    *,
+    has_carousel: bool = False,
+) -> Intent | None:
+    """Shared guard ordering: cart_add → cart ordinal → proceed_checkout → tracking → checkout."""
     if is_cart_add_trigger(message):
+        return "cart"
+    if has_carousel and is_bare_cart_ordinal_reply(message):
         return "cart"
     if is_proceed_checkout_message(message):
         return "checkout"

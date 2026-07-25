@@ -55,11 +55,24 @@ def test_infer_active_flow(fields: dict[str, object], expected: str) -> None:
 def test_should_invoke_awaiting_delivery_date_without_date() -> None:
     state = _state(
         session_awaiting_delivery_date=True,
-        messages=[HumanMessage(content="show me cakes instead")],
+        messages=[HumanMessage(content="ok sounds good")],
     )
     invoke, reason = should_invoke_master_flow(state)
     assert invoke is True
     assert reason == "awaiting_delivery_date_without_parseable_date"
+
+
+def test_should_not_invoke_bare_category_pivot_with_stale_carousel() -> None:
+    """Fresh flowers / cakes pivots must search — not Flash-clarify over stale carousel."""
+    state = _state(
+        intent_metadata={"topic_pivot": True},
+        last_visible_products=[{"id": "old-cake"}],
+        session_search_query="anniversary cake",
+        messages=[HumanMessage(content="What about just normal fresh flowers?")],
+    )
+    invoke, reason = should_invoke_master_flow(state)
+    assert invoke is False
+    assert reason == "bare_category_pivot_fast_path"
 
 
 def test_should_invoke_awaiting_clarification_unanswered() -> None:

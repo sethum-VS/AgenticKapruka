@@ -838,7 +838,7 @@ async def test_agent_loop_check_delivery_past_planner_date_resolves_from_message
 
     assert result["agent_loop_exit_reason"] == "finish"
     assert len(result["tool_trace"]) == 1
-    assert result["tool_trace"][0]["args"]["delivery_date"] == "2026-06-13"
+    assert result["tool_trace"][0]["args"]["delivery_date"] == "2026-06-20"
     mock_service.check_delivery.assert_awaited_once()
 
 

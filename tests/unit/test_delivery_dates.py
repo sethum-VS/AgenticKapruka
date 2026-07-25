@@ -22,10 +22,24 @@ _FRIDAY = date(2026, 6, 12)
 
 
 def test_parse_relative_next_saturday_from_friday() -> None:
-    """next Saturday on a Friday resolves to the following day."""
+    """next Saturday on a Friday resolves to the Saturday of the following week."""
     assert parse_relative_delivery_date("deliver next Saturday to Colombo", today=_FRIDAY) == date(
-        2026, 6, 13
+        2026, 6, 20
     )
+
+
+def test_parse_relative_next_sunday_from_saturday() -> None:
+    """E2E: Sat 25 Jul 2026 + 'next Sunday' → 2 Aug 2026 (not tomorrow)."""
+    saturday = date(2026, 7, 25)
+    assert parse_relative_delivery_date("Kandy delivery next Sunday", today=saturday) == date(
+        2026, 8, 2
+    )
+
+
+def test_parse_relative_this_sunday_from_saturday() -> None:
+    """this Sunday on a Saturday resolves to tomorrow."""
+    saturday = date(2026, 7, 25)
+    assert parse_relative_delivery_date("this Sunday", today=saturday) == date(2026, 7, 26)
 
 
 def test_parse_relative_this_weekend_from_friday() -> None:
@@ -60,7 +74,7 @@ def test_normalize_delivery_date_from_user_message_when_args_past() -> None:
         "deliver to Colombo next Saturday",
         today=_FRIDAY,
     )
-    assert resolved == "2026-06-13"
+    assert resolved == "2026-06-20"
 
 
 def test_normalize_delivery_date_july_5th_from_message() -> None:
@@ -135,7 +149,7 @@ _THURSDAY = date(2026, 6, 25)
 
 
 def test_is_ambiguous_weekday_phrase_sunday_on_thursday() -> None:
-    """On a Thursday, 'next Sunday' resolves same as 'this Sunday' — ambiguous."""
+    """On a Thursday, Sunday is 3 days out — still flagged for clarification."""
     assert is_ambiguous_weekday_phrase("deliver next Sunday", today=_THURSDAY) is True
 
 
@@ -145,7 +159,7 @@ def test_is_ambiguous_weekday_phrase_bare_sunday_on_thursday() -> None:
 
 
 def test_is_ambiguous_weekday_phrase_this_sunday_on_thursday() -> None:
-    """'this Sunday' on a Thursday where this == next is ambiguous."""
+    """'this Sunday' on a Thursday (3 days out) is ambiguous."""
     assert is_ambiguous_weekday_phrase("this Sunday please", today=_THURSDAY) is True
 
 

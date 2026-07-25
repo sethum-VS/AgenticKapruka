@@ -231,6 +231,25 @@ async def test_resolve_cart_product_deictic_multi_clarifies_without_mcp() -> Non
 
 
 @pytest.mark.asyncio
+async def test_resolve_cart_product_bare_number_one_after_disambiguation() -> None:
+    """Bare 'number 1' after multi-item clarify resolves carousel index 0."""
+    mock_service = AsyncMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="number 1")],
+        "session_id": "sess-cart-bare-number-1",
+        "last_visible_products": [_BLUSH_ROSES, _RED_ROSES],
+        "last_search_products": [_BLUSH_ROSES, _RED_ROSES],
+    }
+
+    result = await resolve_cart_product(state, kapruka_service=mock_service)
+
+    action = result["cart_action_result"]
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00blush001"
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resolve_cart_product_cold_start_searches_mcp() -> None:
     blush = ProductResult(
         id="combo00blush001",

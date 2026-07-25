@@ -2081,6 +2081,227 @@ async def _try_product_detail_fast_path(
     return updates
 
 
+async def _try_budget_refinement_fast_path(
+    state: AgentState,
+    *,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> dict[str, Any] | None:
+    """Filter prior carousel (or MCP search) for budget-only turns — skip planner."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    if not is_budget_refinement_message(user_message):
+        return None
+    if not (
+        state.get("session_search_query")
+        or state.get("session_product_focus")
+        or state.get("last_search_products")
+        or state.get("last_visible_products")
+    ):
+        return None
+
+    budget_refinement_args = build_budget_refinement_search_args(
+        dict(state),
+        user_message,
+        currency=currency,
+    )
+    if budget_refinement_args is None:
+        return None
+
+    base_tool_count = int(state.get("tool_call_count") or 0)
+    working_trace = list(tool_trace)
+    tool_name = SEARCH_PRODUCTS_TOOL
+    prior_products = [
+        item
+        for item in (
+            list(state.get("last_search_products") or [])
+            or list(state.get("last_visible_products") or [])
+        )
+        if isinstance(item, dict)
+    ]
+    budget_max_val = state.get("session_budget_max")
+    session_search_query_update: str | None = None
+
+    if (
+        prior_products
+        and isinstance(budget_max_val, (int, float))
+        and budget_max_val > 0
+    ):
+        refined_in_memory = refine_last_search_by_budget(
+            prior_products,
+            budget_max=float(budget_max_val),
+            currency=currency,
+            session_product_focus=state.get("session_product_focus")
+            if isinstance(state.get("session_product_focus"), str)
+            else None,
+            session_search_query=state.get("session_search_query")
+            if isinstance(state.get("session_search_query"), str)
+            else None,
+            session_recipient_hint=state.get("session_recipient_hint")
+            if isinstance(state.get("session_recipient_hint"), str)
+            else None,
+            user_message=user_message,
+            hybrid_context=state.get("hybrid_context")
+            if isinstance(state.get("hybrid_context"), dict)
+            else None,
+        )
+        if refined_in_memory and len(refined_in_memory) >= BUDGET_REFINEMENT_IN_MEMORY_MIN:
+            logger.debug("agent_loop: budget refinement in-memory fast-path")
+            working_trace.append(
+                {
+                    "name": tool_name,
+                    "args": dict(budget_refinement_args),
+                    "result": {"results": refined_in_memory},
+                },
+            )
+            _emit_provisional_carousel(
+                refined_in_memory,
+                state=state,
+                user_message=user_message,
+            )
+            updates = _fast_path_agent_loop_updates(
+                working_trace,
+                tool_call_count=base_tool_count + 1,
+            )
+            updates["last_search_products"] = refined_in_memory
+            return updates
+
+    enriched_args = _inject_tool_currency(
+        tool_name,
+        dict(budget_refinement_args),
+        state,
+        currency,
+    )
+    enriched_args = merge_planner_search_args(
+        enriched_args,
+        user_message=user_message,
+        hybrid_context=state.get("hybrid_context") or {},
+        currency=currency,
+        intent_metadata=state.get("intent_metadata"),
+        state=dict(state),
+    )
+    if prior_products:
+        _emit_status(
+            "None of the current picks fit that budget — searching the catalog…",
+        )
+    else:
+        _emit_status(_status_message_for_tool(tool_name))
+
+    result = await _invoke_tool_with_rate_limit_retry(
+        tool_name,
+        enriched_args,
+        kapruka_service=kapruka_service,
+        client_ip=rate_limit_key,
+        currency=currency,
+    )
+    result = _curate_search_trace_result(result, state=state)
+    search_q_arg = enriched_args.get("q")
+    intent_meta = state.get("intent_metadata")
+    if isinstance(search_q_arg, str) and search_q_arg.strip():
+        session_search_query_update = _persist_session_search_query(
+            search_q_arg,
+            intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+        )
+    else:
+        search_q = _search_query_from_result(result)
+        if search_q:
+            session_search_query_update = _persist_session_search_query(
+                search_q,
+                intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+            )
+
+    if _search_has_products(result):
+        raw_results = result.get("results")
+        products = [item for item in (raw_results or []) if isinstance(item, dict)]
+        session_focus = state.get("session_product_focus")
+        if (
+            session_focus
+            and products
+            and not carousel_focus_guard(
+                products,
+                session_focus if isinstance(session_focus, str) else None,
+            )
+        ):
+            demoted = demote_off_focus_products(
+                products,
+                session_focus if isinstance(session_focus, str) else None,
+            )
+            result = dict(result)
+            if carousel_focus_guard(
+                demoted,
+                session_focus if isinstance(session_focus, str) else None,
+            ):
+                result["results"] = demoted
+            else:
+                result["results"] = demoted or products
+
+    if isinstance(result, dict) and result.get("error"):
+        if _is_rate_limit_result(result) and prior_products:
+            budget_label = (
+                f"{int(budget_max_val):,}"
+                if isinstance(budget_max_val, (int, float)) and budget_max_val > 0
+                else "that"
+            )
+            working_trace.append(
+                {
+                    "name": tool_name,
+                    "args": enriched_args,
+                    "result": {"results": []},
+                },
+            )
+            updates = _fast_path_agent_loop_updates(
+                working_trace,
+                tool_call_count=base_tool_count + 1,
+                exit_reason="ask_user",
+            )
+            updates["agent_clarifying_question"] = (
+                f"None of the current picks are under Rs. {budget_label}, "
+                "and our catalog is briefly busy. Please try again in a moment, "
+                "or tell me a higher budget."
+            )
+            updates["last_search_products"] = None
+            updates["last_visible_products"] = None
+            return updates
+        working_trace.append(
+            {"name": tool_name, "args": enriched_args, "result": result},
+        )
+        updates = _fast_path_agent_loop_updates(
+            working_trace,
+            tool_call_count=base_tool_count + 1,
+            exit_reason="tool_error",
+        )
+        updates["agent_tool_error"] = _agent_tool_error_from_result(tool_name, result)
+        return updates
+
+    working_trace.append(
+        {"name": tool_name, "args": enriched_args, "result": result},
+    )
+    if _search_has_products(result):
+        mcp_products = [
+            item
+            for item in (result.get("results") or [])
+            if isinstance(item, dict)
+        ]
+        if mcp_products:
+            _emit_provisional_carousel(
+                mcp_products,
+                state=state,
+                user_message=user_message,
+            )
+
+    logger.debug("agent_loop: budget refinement MCP fast-path")
+    updates = _fast_path_agent_loop_updates(
+        working_trace,
+        tool_call_count=base_tool_count + 1,
+        session_search_query_update=session_search_query_update,
+    )
+    last_search_products = _last_search_products_from_trace(working_trace, state=state)
+    if last_search_products:
+        updates["last_search_products"] = last_search_products
+    return updates
+
+
 async def _try_agent_loop_fast_path(
     state: AgentState,
     *,
@@ -2093,6 +2314,16 @@ async def _try_agent_loop_fast_path(
     user_message = _extract_latest_user_message(state.get("messages") or [])
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     base_tool_count = int(state.get("tool_call_count") or 0)
+
+    budget_fast_path = await _try_budget_refinement_fast_path(
+        state,
+        tool_trace=tool_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
+    if budget_fast_path is not None:
+        return budget_fast_path
 
     if state.get("intent") == "cart":
         logger.debug("agent_loop: cart fast-path — skipping planner")

@@ -788,16 +788,10 @@ def refine_last_search_by_budget(
             for product in in_budget
             if product_matches_focus(product, session_product_focus)
         ]
-        if not matching:
-            return None
-        demoted = [
-            product
-            for product in in_budget
-            if not product_matches_focus(product, session_product_focus)
-        ]
-        if demoted and any(_GIFT_DEMOTE_RE.search(_product_text_blob(item)) for item in demoted):
-            return None
-        return matching
+        # Prefer focus-matched items; fall back to any in-budget picks so a
+        # budget-only turn never forces a slow MCP/NIM loop when prices already fit.
+        if matching:
+            return matching
 
     return in_budget
 

@@ -55,7 +55,7 @@
   <div
     class="pointer-events-none absolute bottom-0 left-0 z-[60] w-full border-t border-surface-variant bg-white/95 p-4 backdrop-blur-md"
   >
-    <div class="pointer-events-auto mx-auto max-w-4xl">
+    <div class="mx-auto max-w-4xl">
       <form
         id="chat-form"
         hx-post="/chat/stream"
@@ -63,7 +63,7 @@
         sse-connect="/chat/stream"
         hx-trigger="submit"
         hx-indicator="#chat-loading"
-        class="relative"
+        class="pointer-events-auto relative"
         data-chat-timeout-ms="{{ chat_timeout_ms | default(90000) }}"
         {% if debug_trace %}data-chat-debug="true"{% endif %}
       >
@@ -104,7 +104,7 @@
           role="status"
           aria-live="polite"
           aria-atomic="true"
-          aria-label="Sending message"
+          aria-label="Searching our catalog"
           data-testid="chat-loading"
         >
           <svg
@@ -128,10 +128,10 @@
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
             ></path>
           </svg>
-          <span data-testid="chat-loading-text">Sending…</span>
+          <span data-testid="chat-loading-text">Searching our catalog…</span>
         </div>
       </form>
-      <p class="mt-2 text-center text-[11px] text-outline">
+      <p class="pointer-events-none mt-2 text-center text-[11px] text-outline">
         Kapruka Gift Assistant can make mistakes. Verify important information.
       </p>
     </div>

@@ -43,9 +43,10 @@ def test_chat_sse_js_clears_loading_on_success_and_error() -> None:
     assert "submitButton.disabled = false" in source
     assert "messageInput.readOnly = false" in source
     assert 'indicator?.classList.remove("htmx-request", "chat-loading")' in source
-    assert "clearTimeout(statusFlushTimer)" in source
-    assert "statusFlushTimer = null" in source
-    assert "statusShownAt = 0" in source
+    assert "clearStatusHeartbeat" in source
+    assert "scheduleStatusHeartbeat" in source
+    assert "STATUS_HEARTBEAT_MS" in source
+    assert "HEARTBEAT_LOADING_TEXT" in source
     assert "hideLoadingIndicator" in source
     assert "showLoadingIndicator" in source
     assert "indicator.hidden = true" in source

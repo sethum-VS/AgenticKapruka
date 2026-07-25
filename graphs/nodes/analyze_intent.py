@@ -105,9 +105,14 @@ def _extract_latest_user_message(messages: list[BaseMessage]) -> str:
     return ""
 
 
-def _classify_routing_guard(user_message: str) -> Intent | None:
+def _classify_routing_guard(user_message: str, state: AgentState | None = None) -> Intent | None:
     """Return a guard intent or None when the turn should defer to agent_loop."""
-    return classify_routing_guard(user_message)
+    from lib.chat.intent_heuristics import has_carousel_products
+
+    return classify_routing_guard(
+        user_message,
+        has_carousel=has_carousel_products(state) if state is not None else False,
+    )
 
 
 def _resolve_session_budget(
@@ -763,7 +768,7 @@ async def analyze_intent(
         logger.info("analyze_intent: proceed-to-checkout trigger from cart drawer")
         return _with_budget({"intent": "checkout", "intent_metadata": intent_metadata})
 
-    guard_intent = _classify_routing_guard(user_message)
+    guard_intent = _classify_routing_guard(user_message, state)
     if guard_intent is not None:
         logger.info("analyze_intent: guard routed message as %s", guard_intent)
         return _with_budget(

@@ -1877,6 +1877,18 @@ def merge_planner_search_args(
         merged.pop("category", None)
         return merged
 
+    if topic_pivot and bare_focus == "flowers":
+        lowered = user_message.lower()
+        flower_q = "fresh flowers" if "fresh" in lowered else "flowers"
+        merged["q"] = flower_q
+        merged["category"] = "Flowers"
+        return merged
+
+    if topic_pivot and bare_focus == "chocolate":
+        merged["q"] = "chocolate"
+        merged.pop("category", None)
+        return merged
+
     if is_broad_cakes_query(user_message) and not topic_pivot:
         merged["q"] = "birthday cake"
         merged.setdefault("category", "Birthday")

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.config import Settings, get_settings
 from graphs.state import AgentState, Intent
 from lib.chat.delivery_dates import normalize_delivery_date
-from lib.chat.intent_heuristics import classify_routing_guard
+from lib.chat.intent_heuristics import classify_routing_guard, is_bare_category_pivot
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import FLASH_MODEL
 from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
@@ -160,6 +160,8 @@ def message_addresses_clarification_dimension(
     state: AgentState,
 ) -> bool:
     """True when the message satisfies the awaited specificity dimension."""
+    if is_bare_category_pivot(message) is not None:
+        return True
     specificity = score_request_specificity(
         message,
         session_product_focus=state.get("session_product_focus"),
@@ -236,10 +238,15 @@ def should_invoke_master_flow(
 
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
-    if classify_routing_guard(user_message) is not None:
+    if classify_routing_guard(
+        user_message,
+        has_carousel=_has_stale_discovery_context(state),
+    ) is not None:
         return False, "routing_guard_fast_path"
     if is_off_topic_message(user_message) or is_impossible_catalog_request(user_message):
         return False, "off_topic_fast_path"
+    if is_bare_category_pivot(user_message) is not None:
+        return False, "bare_category_pivot_fast_path"
     intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
     active_flow = infer_active_flow(state)
 
