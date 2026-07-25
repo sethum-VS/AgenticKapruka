@@ -1105,7 +1105,9 @@ def test_build_discovery_search_args_preserves_blush_roses_combo() -> None:
         {},
         currency="LKR",
     )
-    assert "blush" in str(args.get("q") or "").lower()
+    q = str(args.get("q") or "").lower()
+    assert "blush" in q
+    assert "combo" in q
     assert args.get("max_price") == 6000.0
 
 

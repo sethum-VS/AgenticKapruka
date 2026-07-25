@@ -97,7 +97,7 @@ GRAPH_HINTS_MAX_ITERATIONS = 2
 UTILITY_GENERAL_MAX_ITERATIONS = 2
 CONFIDENT_DISCOVERY_MAX_ITERATIONS = 1
 BUDGETED_GIFT_SEARCH_CONCURRENCY = 2
-BUDGET_REFINEMENT_IN_MEMORY_MIN = 3
+BUDGET_REFINEMENT_IN_MEMORY_MIN = 1
 PLANNER_MODEL = FLASH_MODEL
 
 ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
@@ -1042,11 +1042,26 @@ def _format_planner_query_rewrite_hints(
     has_budget = budget_max is not None and budget_max > 0
     bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
     if bare_focus:
+        flower_q = (
+            "fresh flowers"
+            if bare_focus == "flowers" and "fresh" in user_message.lower()
+            else bare_focus
+        )
         hints.append(
             "Topic pivot with bare category: prefer action call_tool with "
-            f'kapruka_search_products using literal q="{bare_focus}" '
-            f'(or q="fresh flowers" when the customer said flowers) — do not inherit '
-            "prior occasion context. Only ask_user if search returns no products."
+            f'kapruka_search_products using literal q="{flower_q}" '
+            "(or q=\"fresh flowers\" when the customer said flowers) — do not inherit "
+            "prior occasion context. Do NOT ask_user for occasion before searching. "
+            "Only ask_user if search returns no products."
+        )
+    elif topic_pivot and re.search(
+        r"\b(?:cakes?|flowers?|roses?|chocolates?|bouquets?)\b",
+        user_message,
+        re.I,
+    ):
+        hints.append(
+            "Topic pivot naming a product category: prefer kapruka_search_products "
+            "immediately — do not ask_user for occasion, recipient, or budget first."
         )
     if session_product_focus == "cake" and _FLORAL_DESIGN.search(user_message):
         hints.append(
@@ -1701,6 +1716,117 @@ async def _maybe_retry_literal_color_flower_search(
     return result, enriched_args, updated_trace, 1
 
 
+def _literal_named_product_query(user_message: str) -> str | None:
+    """Return a literal blush/combo flower query when the customer named one."""
+    stripped = user_message.strip()
+    if not stripped:
+        return None
+    if not re.search(r"\b(?:blush|combo|combopack)\b", stripped, re.I):
+        return None
+    color_flower = re.search(
+        r"\b(blush|pink|red|white|yellow|purple|lavender)\s+"
+        r"(roses?|flowers?|bouquets?)\b",
+        stripped,
+        re.I,
+    )
+    if color_flower:
+        color = color_flower.group(1).lower()
+        flower = color_flower.group(2).lower()
+        if flower.startswith("rose"):
+            flower = "roses"
+        elif flower.startswith("flower"):
+            flower = "flowers"
+        else:
+            flower = "bouquet"
+        literal_q = f"{color} {flower}"
+        if re.search(r"\bcombo\b", stripped, re.I):
+            literal_q = f"{literal_q} combo"
+        return literal_q
+    if re.search(r"\bcombo\b", stripped, re.I) and re.search(r"\broses?\b", stripped, re.I):
+        return "roses combo"
+    return None
+
+
+def _top_results_lack_named_tokens(
+    result: dict[str, Any],
+    *,
+    tokens: tuple[str, ...],
+    limit: int = 5,
+) -> bool:
+    """True when none of the top search hits mention any of the distinctive tokens."""
+    raw = result.get("results")
+    if not isinstance(raw, list) or not raw:
+        return True
+    token_re = re.compile(
+        r"\b(?:" + "|".join(re.escape(token) for token in tokens) + r")\b",
+        re.I,
+    )
+    for item in raw[:limit]:
+        if not isinstance(item, dict):
+            continue
+        blob = f"{item.get('name') or ''} {item.get('summary') or ''}"
+        if token_re.search(blob):
+            return False
+    return True
+
+
+async def _maybe_retry_literal_named_product_search(
+    result: dict[str, Any],
+    enriched_args: dict[str, Any],
+    *,
+    state: AgentState,
+    user_message: str,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[ToolInvocation], int]:
+    """One-shot retry when blush/combo query returns generic rose hits."""
+    literal_q = _literal_named_product_query(user_message)
+    if not literal_q:
+        return result, enriched_args, tool_trace, 0
+    distinctive = tuple(
+        token
+        for token in ("blush", "combo", "combopack")
+        if re.search(rf"\b{token}\b", user_message, re.I)
+    )
+    if not distinctive or not _top_results_lack_named_tokens(result, tokens=distinctive):
+        return result, enriched_args, tool_trace, 0
+    current_q = str(enriched_args.get("q") or "").strip().lower()
+    if current_q == literal_q.lower() and _search_has_products(result):
+        return result, enriched_args, tool_trace, 0
+    retry_args = _inject_tool_currency(
+        SEARCH_PRODUCTS_TOOL,
+        {
+            **enriched_args,
+            "q": literal_q,
+            "category": "Flowers",
+            "sort": "relevance",
+        },
+        state,
+        currency,
+    )
+    if _is_duplicate_invocation(tool_trace, SEARCH_PRODUCTS_TOOL, retry_args):
+        return result, enriched_args, tool_trace, 0
+    _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+    retry_result = await _invoke_tool_with_rate_limit_retry(
+        SEARCH_PRODUCTS_TOOL,
+        retry_args,
+        kapruka_service=kapruka_service,
+        client_ip=rate_limit_key,
+        currency=currency,
+        max_retries=0,
+    )
+    retry_result = _curate_search_trace_result(retry_result, state=state)
+    updated_trace = [
+        *tool_trace,
+        {"name": SEARCH_PRODUCTS_TOOL, "args": retry_args, "result": retry_result},
+    ]
+    if _search_has_products(retry_result):
+        return retry_result, retry_args, updated_trace, 1
+    return result, enriched_args, updated_trace, 1
+
+
 async def _try_confident_discovery_fast_path(
     state: AgentState,
     *,
@@ -1732,6 +1858,9 @@ async def _try_confident_discovery_fast_path(
         return None
 
     discovery_message = enrich_message_with_session_slots(user_message, dict(state))
+    intent_meta = state.get("intent_metadata")
+    if isinstance(intent_meta, dict) and intent_meta.get("topic_pivot"):
+        discovery_message = user_message
     search_args = build_discovery_search_args(
         discovery_message,
         hybrid_context,
@@ -1740,6 +1869,7 @@ async def _try_confident_discovery_fast_path(
         session_budget_max=(
             float(state["session_budget_max"])
             if isinstance(state.get("session_budget_max"), (int, float))
+            and not (isinstance(intent_meta, dict) and intent_meta.get("topic_pivot"))
             else None
         ),
     )
@@ -1790,6 +1920,21 @@ async def _try_confident_discovery_fast_path(
         rate_limit_key=rate_limit_key,
         currency=currency,
     )
+    (
+        result,
+        enriched_args,
+        working_trace,
+        named_extra,
+    ) = await _maybe_retry_literal_named_product_search(
+        result,
+        enriched_args,
+        state=state,
+        user_message=user_message,
+        tool_trace=working_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
     result, enriched_args, tool_trace, retry_calls = await _retry_anniversary_search_if_empty(
         result,
         enriched_args,
@@ -1800,7 +1945,7 @@ async def _try_confident_discovery_fast_path(
         rate_limit_key=rate_limit_key,
         currency=currency,
     )
-    retry_calls += color_extra
+    retry_calls += color_extra + named_extra
     # Broaden once when primary (and anniversary) search returned 0 — strips
     # poisoned category filters like "Chocolate And Fashion".
     if not _search_has_products(result):
@@ -2054,6 +2199,7 @@ async def agent_loop(
     dual_gift_search_applied = False
     budgeted_gift_ideas_search_applied = False
     budget_refinement_search_applied = False
+    clear_carousel_on_budget_miss = False
     situational_flowers_search_applied = False
     discovery_city_gift_search_applied = False
     session_delivery_date_update: str | None = None
@@ -2195,7 +2341,7 @@ async def agent_loop(
             )
         ):
             tool_name = SEARCH_PRODUCTS_TOOL
-            # Zero-MCP path: filter the prior carousel in memory when enough
+            # Zero-MCP path: filter the prior carousel in memory when any
             # in-budget, in-focus items already exist.
             prior_products = [
                 item
@@ -2206,6 +2352,7 @@ async def agent_loop(
                 if isinstance(item, dict)
             ]
             budget_max_val = state.get("session_budget_max")
+            refined_in_memory: list[dict[str, Any]] | None = None
             if (
                 prior_products
                 and isinstance(budget_max_val, (int, float))
@@ -2266,6 +2413,10 @@ async def agent_loop(
             )
             discovery_search_merged = True
             budget_refinement_search_applied = True
+            if prior_products and refined_in_memory is None:
+                _emit_status(
+                    "None of the current picks fit that budget — searching the catalog…"
+                )
             result = await _invoke_tool_with_rate_limit_retry(
                 tool_name,
                 enriched_args,
@@ -2317,6 +2468,29 @@ async def agent_loop(
             )
             tool_call_count += 1
             if isinstance(result, dict) and result.get("error"):
+                # Soft miss when catalog is rate-limited after an all-over-budget carousel:
+                # do not keep stale over-budget cards or surface a hard tool_error banner.
+                if _is_rate_limit_result(result) and prior_products:
+                    budget_label = (
+                        f"{int(budget_max_val):,}"
+                        if isinstance(budget_max_val, (int, float)) and budget_max_val > 0
+                        else "that"
+                    )
+                    agent_clarifying_question = (
+                        f"None of the current picks are under Rs. {budget_label}, "
+                        "and our catalog is briefly busy. Please try again in a moment, "
+                        "or tell me a higher budget."
+                    )
+                    clear_carousel_on_budget_miss = True
+                    # Replace error result with an empty success so stale carousel fallback is skipped.
+                    tool_trace[-1] = {
+                        "name": tool_name,
+                        "args": enriched_args,
+                        "result": {"results": []},
+                    }
+                    exit_reason = "ask_user"
+                    agent_loop_done = True
+                    break
                 agent_tool_error = _agent_tool_error_from_result(tool_name, result)
                 exit_reason = "tool_error"
                 agent_loop_done = True
@@ -2957,7 +3131,10 @@ async def agent_loop(
         updates["session_search_query"] = session_search_query_update
 
     last_search_products = _last_search_products_from_trace(tool_trace, state=state)
-    if last_search_products:
+    if clear_carousel_on_budget_miss:
+        updates["last_search_products"] = None
+        updates["last_visible_products"] = None
+    elif last_search_products:
         prior = state.get("last_search_products") or []
         session_focus = state.get("session_product_focus")
         if (

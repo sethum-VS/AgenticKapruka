@@ -43,6 +43,13 @@ def test_is_bare_category_pivot_nevermind_cakes() -> None:
     assert is_bare_category_pivot("birthday cake for mom") is None
 
 
+def test_is_bare_category_pivot_fresh_flowers_with_modifiers() -> None:
+    assert is_bare_category_pivot("What about just normal fresh flowers?") == "flowers"
+    assert is_bare_category_pivot("Nevermind. Flowers.") == "flowers"
+    assert is_bare_category_pivot("flowers for mom") is None
+    assert is_bare_category_pivot("cakes under 5000") is None
+
+
 def test_has_explicit_budget_constraint_anniversary_under_6000() -> None:
     assert has_explicit_budget_constraint("anniversary gifts under 6000")
 

@@ -831,6 +831,9 @@ _PRODUCT_TOKEN_PRIORITY: tuple[str, ...] = (
     "tea",
     "cake",
     "cakes",
+    "blush",
+    "combo",
+    "combopack",
     "flower",
     "flowers",
     "roses",
@@ -1478,6 +1481,16 @@ def build_discovery_search_args(
         return {"q": flower_q, "currency": currency, "category": "Flowers"}
     if topic_pivot and bare_focus == "chocolate":
         return {"q": "chocolate", "currency": currency}
+    # Topic pivot with category tokens but bare_focus gated out — still search category.
+    if topic_pivot and bare_focus is None:
+        lowered = query.lower()
+        if re.search(r"\b(?:flower|flowers|rose|roses|bouquet)\b", lowered):
+            flower_q = "fresh flowers" if "fresh" in lowered else "flowers"
+            return {"q": flower_q, "currency": currency, "category": "Flowers"}
+        if re.search(r"\b(?:cup)?cakes?\b", lowered):
+            return {"q": "cake", "currency": currency}
+        if re.search(r"\b(?:chocolate|chocolates)\b", lowered):
+            return {"q": "chocolate", "currency": currency}
 
     # Literal color+flower queries (blush roses) — do not expand to generic fresh roses.
     color_flower = re.search(
@@ -1667,7 +1680,11 @@ def build_discovery_search_args(
         isinstance(effective_budget, (int, float))
         and effective_budget > 0
         and re.search(r"\b(?:rose|roses)\b", query, re.I)
-        and not re.search(r"\b(?:blush|combo|pink|white|yellow|lavender)\b", query, re.I)
+        and not re.search(
+            r"\b(?:blush|combo|combopack|pink|white|yellow|lavender|arrangement)\b",
+            query,
+            re.I,
+        )
     ):
         if re.search(r"\bred\b", query, re.I):
             args["q"] = "red roses"
@@ -1738,11 +1755,32 @@ def is_confident_discovery_turn(
     intent_metadata = intent_metadata or {}
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
     from lib.chat.intent_heuristics import is_bare_category_pivot
+    from lib.chat.request_specificity import _PRODUCT_CATEGORY_RE
 
     bare_focus = is_bare_category_pivot(stripped) if topic_pivot else None
+    # Topic pivot naming a product category is always confident — never ask_user for occasion.
+    _named_category = re.compile(
+        r"\b(?:cakes?|cupcakes?|flower|flowers|rose|roses|bouquet|chocolate|chocolates)\b",
+        re.I,
+    )
+    if topic_pivot and bare_focus is None and _named_category.search(stripped):
+        if re.search(r"\b(?:flower|flowers|rose|roses|bouquet)\b", stripped, re.I):
+            bare_focus = "flowers"
+        elif re.search(r"\b(?:cup)?cakes?\b", stripped, re.I):
+            bare_focus = "cake"
+        elif re.search(r"\b(?:chocolate|chocolates)\b", stripped, re.I):
+            bare_focus = "chocolate"
     discovery_message = enrich_message_with_session_slots(stripped, state)
+    # On topic pivots, ignore stale session slots so cake/anniversary context does not
+    # poison a fresh flowers/cakes search.
+    if topic_pivot:
+        discovery_message = stripped
     session_budget = None
-    if state is not None and isinstance(state.get("session_budget_max"), (int, float)):
+    if (
+        not topic_pivot
+        and state is not None
+        and isinstance(state.get("session_budget_max"), (int, float))
+    ):
         session_budget = float(state["session_budget_max"])
     args = build_discovery_search_args(
         discovery_message,
@@ -1757,6 +1795,8 @@ def is_confident_discovery_turn(
     # Bare category pivots ("Nevermind. Cakes.") have deterministic args from
     # build_discovery_search_args — skip the planner instead of blocking.
     if bare_focus is not None:
+        return True
+    if topic_pivot and _named_category.search(stripped):
         return True
     if _is_budgeted_flower_discovery(stripped, args):
         return True

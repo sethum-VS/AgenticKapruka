@@ -54,4 +54,8 @@ status:
 	@test -f .dev/tailwind.pid && echo "Tailwind pid: $$(cat .dev/tailwind.pid)" || echo "Tailwind: not started via make"
 
 logs:
+ifeq ($(OS),Windows_NT)
+	@powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1 logs
+else
 	@tail -n 50 -f .dev/backend.log .dev/tailwind.log
+endif

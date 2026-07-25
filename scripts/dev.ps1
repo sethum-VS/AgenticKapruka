@@ -1,12 +1,12 @@
 # Start/stop local dev: Docker (Redis), FastAPI backend, Tailwind CSS watcher.
 # Windows PowerShell port of scripts/dev.sh
 #
-# Usage: .\scripts\dev.ps1 [start|stop|restart]
+# Usage: .\scripts\dev.ps1 [start|stop|restart|logs]
 
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("start", "stop", "restart")]
+    [ValidateSet("start", "stop", "restart", "logs")]
     [string]$Command = "start"
 )
 
@@ -59,11 +59,13 @@ function Start-CmdLogged {
         [string]$WorkingDirectory
     )
 
-    # Use cmd.exe redirection outside PowerShell parser via a single /c argument in single quotes built carefully.
+    # cmd redirect keeps a single combined log; PYTHONUNBUFFERED ensures prompt flush
+    # so Get-Content -Wait / make logs can tail while the process runs.
     $bat = Join-Path $DevDir ("run-" + [guid]::NewGuid().ToString("N") + ".cmd")
     @(
         "@echo off"
         "cd /d `"$WorkingDirectory`""
+        "set PYTHONUNBUFFERED=1"
         "$CommandLine > `"$LogFile`" 2>&1"
     ) | Set-Content -Path $bat -Encoding ASCII
 
@@ -310,11 +312,24 @@ function Start-Backend {
     if (-not $env:APP_ENV) { $env:APP_ENV = "development" }
     if (-not $env:DEBUG_TRACE) { $env:DEBUG_TRACE = "1" }
     if (-not $env:LOG_LEVEL) { $env:LOG_LEVEL = "INFO" }
+    $env:PYTHONUNBUFFERED = "1"
 
     $uvicornLogLevel = $env:LOG_LEVEL.ToLowerInvariant()
     $cmdLine = "`"$Python`" -m uvicorn app.main:app --reload --host 127.0.0.1 --port $BackendPort --log-level $uvicornLogLevel"
     $started = Start-CmdLogged -CommandLine $cmdLine -LogFile $BackendLog -WorkingDirectory $Root
     Set-Content -Path $BackendPidFile -Value $started.Process.Id -NoNewline
+}
+
+function Invoke-CmdLogs {
+    Write-Log "Tailing $BackendLog and $TailwindLog (Ctrl+C to stop)..."
+    $files = @()
+    if (Test-Path $BackendLog) { $files += $BackendLog } else { Write-Log "Missing: $BackendLog (start via .\scripts\dev.ps1 start)" }
+    if (Test-Path $TailwindLog) { $files += $TailwindLog }
+    if ($files.Count -eq 0) {
+        Write-Log "No log files found under .dev\"
+        exit 1
+    }
+    Get-Content -Path $files -Wait -Tail 50
 }
 
 function Test-HttpReachable {
@@ -420,4 +435,5 @@ switch ($Command) {
         Stop-DevProcesses
         Invoke-CmdStart
     }
+    "logs" { Invoke-CmdLogs }
 }

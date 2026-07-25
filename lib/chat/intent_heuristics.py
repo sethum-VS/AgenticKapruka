@@ -364,7 +364,15 @@ def is_bare_category_pivot(message: str) -> str | None:
         return None
     if re.search(r"\b(?:birthday|anniversary|wedding|valentine)\b", stripped, re.I):
         return None
-    if re.search(r"\b(?:for|under|below|mom|dad|wife|husband)\b", stripped, re.I):
+    # Recipient/budget constraints make this more than a bare category browse.
+    # Allow filler modifiers (just/normal/fresh/some) around the category noun.
+    if re.search(
+        r"\b(?:for|under|below)\b.+\b(?:mom|dad|wife|husband|mother|father|rupees?|rs\.?|lkr)\b"
+        r"|\b(?:mom|dad|wife|husband|mother|father)\b"
+        r"|\b(?:under|below)\s+\d+",
+        stripped,
+        re.I,
+    ):
         return None
     lowered = stripped.lower()
     if re.search(r"\b(?:cup)?cakes?\b", lowered):

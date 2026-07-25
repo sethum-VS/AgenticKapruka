@@ -85,12 +85,19 @@ def _cache_args(model: BaseModel) -> dict[str, Any]:
     return params
 
 
+def _inflight_key(tool_name: str, cache_args: dict[str, Any]) -> str:
+    """Stable key for in-flight dedupe of identical MCP reads."""
+    return f"{tool_name}:{json.dumps(cache_args, sort_keys=True, default=str)}"
+
+
 class KaprukaService:
     """Facade over Kapruka MCP tools with Redis rate limits and read cache."""
 
     def __init__(self, redis_client: RedisClient, mcp_client: MCPHttpClient) -> None:
         self._redis = redis_client
         self._mcp = mcp_client
+        self._inflight: dict[str, asyncio.Future[Any]] = {}
+        self._inflight_lock = asyncio.Lock()
 
     async def _cached_read(
         self,
@@ -109,52 +116,77 @@ class KaprukaService:
         if cached is not None:
             return from_cache(cached)
 
+        key = _inflight_key(tool_name, cache_args)
+        async with self._inflight_lock:
+            existing = self._inflight.get(key)
+            if existing is not None:
+                waiter: asyncio.Future[Any] = existing
+            else:
+                loop = asyncio.get_running_loop()
+                waiter = loop.create_future()
+                self._inflight[key] = waiter
+                existing = None
+
+        if existing is not None:
+            return await existing  # type: ignore[no-any-return]
+
         logger = logging.getLogger(__name__)
         try:
-            result = await fetch()
-        except KaprukaRateLimitError as exc:
-            delay = min(exc.retry_after_seconds, 5)
-            logger.info(
-                "Kapruka rate limit on %s; retrying after %ss",
-                tool_name,
-                delay,
-            )
-            await asyncio.sleep(delay)
             try:
                 result = await fetch()
-            except KaprukaRateLimitError as retry_exc:
-                second_delay = min(retry_exc.retry_after_seconds, 10)
+            except KaprukaRateLimitError as exc:
+                delay = min(exc.retry_after_seconds, 5)
                 logger.info(
-                    "Kapruka rate limit on %s; second retry after %ss",
-                    tool_name,
-                    second_delay,
-                )
-                await asyncio.sleep(second_delay)
-                result = await fetch()
-        except Exception as exc:
-            if not _is_transient_fetch_error(exc):
-                raise
-            result = None
-            last_transient = exc
-            for delay in _TRANSIENT_RETRY_DELAYS_SECONDS:
-                logger.info(
-                    "Kapruka transient failure on %s; retrying once after %ss",
+                    "Kapruka rate limit on %s; retrying after %ss",
                     tool_name,
                     delay,
                 )
                 await asyncio.sleep(delay)
                 try:
                     result = await fetch()
-                    break
-                except Exception as retry_exc:
-                    if not _is_transient_fetch_error(retry_exc):
-                        raise
-                    last_transient = retry_exc
-            if result is None:
-                raise last_transient
+                except KaprukaRateLimitError as retry_exc:
+                    second_delay = min(retry_exc.retry_after_seconds, 10)
+                    logger.info(
+                        "Kapruka rate limit on %s; second retry after %ss",
+                        tool_name,
+                        second_delay,
+                    )
+                    await asyncio.sleep(second_delay)
+                    result = await fetch()
+            except Exception as exc:
+                if not _is_transient_fetch_error(exc):
+                    raise
+                result = None
+                last_transient = exc
+                for delay in _TRANSIENT_RETRY_DELAYS_SECONDS:
+                    logger.info(
+                        "Kapruka transient failure on %s; retrying once after %ss",
+                        tool_name,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    try:
+                        result = await fetch()
+                        break
+                    except Exception as retry_exc:
+                        if not _is_transient_fetch_error(retry_exc):
+                            raise
+                        last_transient = retry_exc
+                if result is None:
+                    raise last_transient
 
-        await set_cached(self._redis, tool_name, cache_args, to_cache(result))
-        return result
+            await set_cached(self._redis, tool_name, cache_args, to_cache(result))
+            if not waiter.done():
+                waiter.set_result(result)
+            return result
+        except Exception as exc:
+            if not waiter.done():
+                waiter.set_exception(exc)
+            raise
+        finally:
+            async with self._inflight_lock:
+                if self._inflight.get(key) is waiter:
+                    self._inflight.pop(key, None)
 
     async def search_products(
         self,

@@ -55,7 +55,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1 start
 - **Docker not running** — start Docker Desktop, then re-run `.\scripts\dev.ps1 start`
 - **Python not found** — create `.venv` or put `python` on PATH
 - **Port in use** — the script frees port 8080; or run `.\scripts\dev.ps1 stop` first
-- **Logs** — `.dev\backend.log` and `.dev\tailwind.log`
+- **Logs** — `.dev\backend.log` and `.dev\tailwind.log` (populated when the backend is started via `.\scripts\dev.ps1 start`). Tail with `.\scripts\dev.ps1 logs` or `make logs`.
 
 ## Bash / Make (macOS, Linux, Git Bash)
 
