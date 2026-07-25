@@ -2479,9 +2479,16 @@ async def generate_response(
                 currency=currency,
             )
             clarifying = state.get("agent_clarifying_question")
+            fast_path_clarifier: str | None = None
+            if (
+                isinstance(clarifying, str)
+                and clarifying.strip()
+                and state.get("agent_loop_exit_reason") == "ask_user"
+            ):
+                fast_path_clarifier = clarifying
             reply_text = _maybe_prepend_clarifier(
                 reply_text,
-                clarifying if isinstance(clarifying, str) else None,
+                fast_path_clarifier,
                 state=state,
                 user_message=user_message,
                 has_carousel=bool(visible_products or products_html),

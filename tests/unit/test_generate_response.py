@@ -1131,6 +1131,7 @@ async def test_generate_response_ignores_stale_clarifying_question_on_finish() -
         "agent_clarifying_question": "The previous search for 'gifts' returned no products.",
         "agent_loop_exit_reason": "finish",
         "agent_loop_done": True,
+        "agent_loop_iterations": 1,
         "tool_trace": tool_trace,
         "session_id": "sess-gen-stale-clarify",
     }
