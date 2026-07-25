@@ -98,8 +98,11 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert 'id="cart-panel"' in html
     assert 'data-testid="header-currency"' in html
     assert 'data-testid="new-chat-button"' in html
-    assert 'hx-post="/chat/new"' in html
-    assert "htmx.ajax('GET','/cart/panel'" in html
+    assert 'data-testid="new-session-modal"' in html
+    assert 'data-testid="new-session-keep"' in html
+    assert 'data-testid="new-session-clear"' in html
+    assert 'data-chat-timeout-ms="' in html
+    assert "/static/js/new-session.js" in html
     assert 'hx-post="/session/currency"' in html
     assert 'hx-swap="none"' in html
     for code in SUPPORTED_CURRENCY_CODES:
@@ -296,6 +299,45 @@ async def test_chat_index_returns_200_html_with_empty_state(chat_index_env: Redi
     assert 'defer src="/static/js/lazy-image.js"' in html
     assert 'data-testid="header-currency"' in html
     assert '<option value="LKR" selected>LKR</option>' in html
+    assert 'data-chat-timeout-ms="' in html
+    assert "/static/js/new-session.js" in html
+
+
+@pytest.mark.asyncio
+async def test_chat_index_refresh_rotates_session_and_clears_cart(
+    chat_index_env: RedisClient,
+) -> None:
+    """GET /chat with an existing cookie starts a fresh thread (no memory bleed)."""
+    old_thread = "thread-refresh-rotate-test"
+    await add_item(
+        chat_index_env,
+        old_thread,
+        product_id="cake00ka001827",
+        name="Happy Birthday Symphony Ribbon Cake",
+        price_amount=6500.0,
+        price_currency="LKR",
+        quantity=1,
+    )
+    application = create_app()
+    application.state.redis = chat_index_env
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/chat",
+            cookies={SESSION_COOKIE_NAME: _sign_thread_id(old_thread)},
+        )
+
+    assert response.status_code == 200
+    assert SESSION_COOKIE_NAME in response.headers.get("set-cookie", "")
+    new_cookie = response.cookies[SESSION_COOKIE_NAME]
+    from lib.chat.session import verify_signed_session_cookie
+
+    new_thread = verify_signed_session_cookie(new_cookie)
+    assert new_thread is not None
+    assert new_thread != old_thread
+    assert await get_cart(chat_index_env, old_thread) == []
+    assert await get_cart(chat_index_env, new_thread) == []
+    assert 'data-item-count="0"' in response.text
 
 
 @pytest.mark.asyncio
@@ -334,3 +376,39 @@ async def test_chat_new_clears_cart_and_oob_empty_panel(chat_index_env: RedisCli
     assert new_thread != old_thread
     assert await get_cart(chat_index_env, old_thread) == []
     assert await get_cart(chat_index_env, new_thread) == []
+
+
+@pytest.mark.asyncio
+async def test_chat_new_keep_cart_migrates_items(chat_index_env: RedisClient) -> None:
+    """POST /chat/new?keep_cart=true preserves cart on the rotated thread."""
+    old_thread = "thread-cart-keep-test"
+    await add_item(
+        chat_index_env,
+        old_thread,
+        product_id="cake00ka001827",
+        name="Happy Birthday Symphony Ribbon Cake",
+        price_amount=6500.0,
+        price_currency="LKR",
+        quantity=1,
+    )
+    application = create_app()
+    application.state.redis = chat_index_env
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/chat/new?keep_cart=true",
+            headers={"HX-Request": "true"},
+            cookies={SESSION_COOKIE_NAME: _sign_thread_id(old_thread)},
+        )
+
+    assert response.status_code == 200
+    assert 'data-item-count="1"' in response.text
+    new_cookie = response.cookies[SESSION_COOKIE_NAME]
+    from lib.chat.session import verify_signed_session_cookie
+
+    new_thread = verify_signed_session_cookie(new_cookie)
+    assert new_thread is not None
+    assert new_thread != old_thread
+    new_cart = await get_cart(chat_index_env, new_thread)
+    assert len(new_cart) == 1
+    assert new_cart[0].product_id == "cake00ka001827"

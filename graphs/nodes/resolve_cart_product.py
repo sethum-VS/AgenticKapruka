@@ -12,8 +12,10 @@ from lib.chat.intent_heuristics import extract_cart_product_phrase
 from lib.chat.product_curation import _sanitize_product_name
 from lib.chat.product_reference import (
     _normalize_ordinal_phrase,
+    _numbered_clarify,
     is_deictic_phrase,
     is_ordinal_phrase,
+    looks_like_ordinal_reference,
     resolve_product_intent_for_cart,
     resolve_product_reference,
 )
@@ -209,6 +211,19 @@ async def resolve_cart_product(
                 "status": "clarify",
                 "product": None,
                 "clarifying_question": ("Search for a gift first, then say 'add that to my cart'."),
+            },
+        }
+
+    # Ordinal-like phrases with a carousel must never cold-search the catalog
+    # (e.g. "number 1" → "Rainbow Number Candle 1").
+    carousel = last_visible or last_search
+    if looks_like_ordinal_reference(phrase) and carousel:
+        return {
+            "cart_action_result": {
+                "status": "clarify",
+                "product": None,
+                "clarifying_question": _numbered_clarify(carousel),
+                "candidates": carousel,
             },
         }
 

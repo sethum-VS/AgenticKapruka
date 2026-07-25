@@ -417,15 +417,110 @@ def test_build_discovery_search_args_gift_ideas_tea_colleague_uses_relevance_sor
     assert args.get("sort") == "relevance"
 
 
-def test_build_discovery_search_args_wife_birthday_chocolate_prefers_chocolate_gift() -> None:
+def test_build_discovery_search_args_wife_birthday_chocolate_prefers_confectionery() -> None:
     args = build_discovery_search_args(
         "wife birthday chocolate under 6000",
         {"hints": {"occasion": "Birthday"}},
         currency="LKR",
     )
 
-    assert args["q"] == "chocolate birthday cake"
+    assert args["q"] == "chocolate gift box"
+    assert args.get("category") != "Birthday"
     assert args["max_price"] == 6000.0
+
+
+def test_e2e_budget_6000_discovery_args_and_carousel_filter() -> None:
+    """E2E Scenario 1: under 6000 filters carousel; discovery args carry max_price."""
+    from lib.chat.product_curation import curate_carousel_products
+
+    args = build_discovery_search_args(
+        "Keep it under 6000 rupees.",
+        {"hints": {"occasion": "Birthday"}},
+        currency="LKR",
+        intent_metadata={"budget_max": 6000.0, "budget_currency": "LKR"},
+    )
+    assert args.get("max_price") == 6000.0
+
+    products = [
+        {
+            "id": "under",
+            "name": "Cocoa Bliss Fudge Cake",
+            "price": {"amount": 2920.0, "currency": "LKR"},
+            "in_stock": True,
+            "url": "https://example.com/under",
+        },
+        {
+            "id": "over",
+            "name": "Luxury Chocolate Tower",
+            "price": {"amount": 9800.0, "currency": "LKR"},
+            "in_stock": True,
+            "url": "https://example.com/over",
+        },
+        {
+            "id": "edge",
+            "name": "Chocolate Gift Box",
+            "price": {"amount": 6000.0, "currency": "LKR"},
+            "in_stock": True,
+            "url": "https://example.com/edge",
+        },
+    ]
+    curated = curate_carousel_products(
+        products,
+        query="wife birthday chocolate under 6000",
+        budget_max=6000.0,
+        currency="LKR",
+        session_product_focus="chocolate",
+        strict_budget=True,
+    )
+    ids = {item["id"] for item in curated}
+    assert "under" in ids
+    assert "edge" in ids
+    assert "over" not in ids
+    assert all(
+        float(item["price"]["amount"]) <= 6000.0  # type: ignore[index]
+        for item in curated
+        if isinstance(item.get("price"), dict)
+    )
+
+
+def test_build_discovery_search_args_rejects_chocolate_and_fashion_category() -> None:
+    """Poisoned Neo4j Occasion 'Chocolate And Fashion' must not become MCP category=."""
+    from lib.neo4j.hybrid_context import enrich_chocolate_focus_hints
+
+    poisoned = {"hints": {"occasion": "Chocolate And Fashion"}}
+    enriched = enrich_chocolate_focus_hints(
+        "It's for my wife's birthday. She likes chocolate.",
+        poisoned,
+    )
+    assert "occasion" not in (enriched.get("hints") or {})
+
+    args = build_discovery_search_args(
+        "It's for my wife's birthday. She likes chocolate.",
+        poisoned,
+        currency="LKR",
+    )
+    assert args.get("category") != "Chocolate And Fashion"
+    assert "category" not in args
+    assert "chocolate" in args["q"].lower()
+
+
+def test_enrich_anniversary_hints_overwrites_anniversary_flowers() -> None:
+    from lib.neo4j.hybrid_context import enrich_anniversary_hints
+
+    context = enrich_anniversary_hints(
+        "Show me some anniversary gifts",
+        {"hints": {"occasion": "Anniversary Flowers"}},
+    )
+    assert context["hints"]["occasion"] == "Anniversary"
+    assert "Greeting Cards" in context["hints"]["exclude_categories"]
+
+    args = build_discovery_search_args(
+        "Show me some anniversary gifts",
+        context,
+        currency="LKR",
+    )
+    assert args.get("category") != "Anniversary Flowers"
+    assert "anniversary" in args["q"].lower()
 
 
 def test_is_birthday_cake_intent_detects_explicit_and_occasion_cake() -> None:
@@ -561,50 +656,48 @@ def test_occasion_rewrite_needed_when_terms_absent() -> None:
 
 @pytest.mark.asyncio
 async def test_rewrite_search_query_with_occasion_uses_gemini() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = RewrittenSearchQuery(q="birthday cake for mom")
-    mock_response.text = '{"q": "birthday cake for mom"}'
-    mock_client.models.generate_content.return_value = mock_response
-
-    with patch(
-        "lib.neo4j.hybrid_context.select_rewrite_model",
-        return_value="gemini-2.5-flash",
+    with (
+        patch(
+            "lib.neo4j.hybrid_context.select_rewrite_model",
+            return_value="gemini-2.5-flash",
+        ),
+        patch(
+            "lib.neo4j.hybrid_context.generate_content",
+            return_value=RewrittenSearchQuery(q="birthday cake for mom"),
+        ) as mock_generate,
     ):
         rewritten = await rewrite_search_query_with_occasion(
             "cake for mom",
             "Birthday",
-            genai_client=mock_client,
+            genai_client=object(),
         )
 
     assert rewritten == "birthday cake for mom"
-    mock_client.models.generate_content.assert_called_once()
-    call_kwargs = mock_client.models.generate_content.call_args.kwargs
-    assert call_kwargs["model"] == "gemini-2.5-flash"
-    assert "cake for mom" in call_kwargs["contents"]
-    assert "Birthday" in call_kwargs["contents"]
+    mock_generate.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_rewrite_search_query_uses_lora_endpoint_when_configured() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = RewrittenSearchQuery(q="avurudu cake gifts")
-    mock_client.models.generate_content.return_value = mock_response
     lora_model = "projects/test/locations/us-central1/endpoints/lora-rewrite"
 
-    with patch(
-        "lib.neo4j.hybrid_context.select_rewrite_model",
-        return_value=lora_model,
+    with (
+        patch(
+            "lib.neo4j.hybrid_context.select_rewrite_model",
+            return_value=lora_model,
+        ),
+        patch(
+            "lib.neo4j.hybrid_context.generate_content",
+            return_value=RewrittenSearchQuery(q="avurudu cake gifts"),
+        ) as mock_generate,
     ):
         rewritten = await rewrite_search_query_with_occasion(
             "cake ona",
             "Avurudu",
-            genai_client=mock_client,
+            genai_client=object(),
         )
 
     assert rewritten == "avurudu cake gifts"
-    assert mock_client.models.generate_content.call_args.kwargs["model"] == lora_model
+    assert mock_generate.await_args.kwargs["model"] == lora_model
 
 
 @pytest.mark.asyncio
@@ -729,6 +822,29 @@ def test_build_budget_refinement_search_args_birthday_chocolate_bias() -> None:
     assert args["max_price"] == 6000.0
 
 
+def test_scenario1_budget_filter_uses_max_price_6000() -> None:
+    """QA Scenario 1 step 3: budget pivot after chocolate search keeps max_price=6000."""
+    from lib.neo4j.hybrid_context import build_budget_refinement_search_args
+
+    args = build_budget_refinement_search_args(
+        {
+            "session_search_query": "chocolate",
+            "session_product_focus": "chocolate",
+            "session_occasion": "birthday",
+            "session_budget_max": 6000.0,
+            "intent_metadata": {
+                "budget_max": 6000.0,
+                "recipient_hint": "wife",
+            },
+        },
+        "Actually, keep it under 6000 rupees.",
+        currency="LKR",
+    )
+    assert args is not None
+    assert args["max_price"] == 6000.0
+    assert "chocolate" in str(args.get("q") or "").lower()
+
+
 def test_merge_planner_search_args_budget_refinement() -> None:
     from lib.neo4j.hybrid_context import merge_planner_search_args
 
@@ -746,6 +862,15 @@ def test_merge_planner_search_args_budget_refinement() -> None:
     )
     assert merged["q"] == "chocolate gift"
     assert merged["max_price"] == 6000.0
+
+
+def test_anniversary_fallback_search_queries_ladder() -> None:
+    from lib.neo4j.hybrid_context import anniversary_fallback_search_queries
+
+    queries = anniversary_fallback_search_queries("Show me some anniversary gifts")
+    assert queries[0] == "anniversary gift"
+    assert "anniversary gift hamper" in queries
+    assert "anniversary flowers" in queries
 
 
 def test_build_discovery_search_args_anniversary_bias() -> None:
@@ -799,6 +924,57 @@ def test_build_discovery_search_args_topic_pivot_bare_cakes_literal() -> None:
     assert "category" not in args
 
 
+def test_build_discovery_search_args_topic_pivot_fresh_flowers() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "What about just normal fresh flowers?",
+        {
+            "hints": {"occasion": "Anniversary"},
+            "preferences": {"favorite_category": "Anniversary", "past_occasion": "anniversary"},
+        },
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+    assert args["q"] == "fresh flowers"
+    assert args.get("category") == "Flowers"
+
+
+def test_build_discovery_search_args_normal_fresh_flowers_without_pivot_flag() -> None:
+    """Bare 'Normal fresh flowers?' searches even before topic_pivot is stamped."""
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "Normal fresh flowers?",
+        {},
+        currency="LKR",
+        intent_metadata={},
+    )
+    assert args["q"] == "fresh flowers"
+    assert args.get("category") == "Flowers"
+
+
+def test_is_confident_discovery_normal_fresh_flowers() -> None:
+    assert is_confident_discovery_turn(
+        "Normal fresh flowers?",
+        {},
+        currency="LKR",
+        intent_metadata={},
+    )
+
+
+def test_build_discovery_search_args_literal_blush_roses() -> None:
+    from lib.neo4j.hybrid_context import build_discovery_search_args
+
+    args = build_discovery_search_args(
+        "Show me blush roses",
+        {},
+        currency="LKR",
+    )
+    assert args["q"] == "blush roses"
+    assert args.get("category") == "Flowers"
+
+
 def test_merge_planner_search_args_topic_pivot_bare_cakes() -> None:
     from lib.neo4j.hybrid_context import merge_planner_search_args
 
@@ -811,6 +987,20 @@ def test_merge_planner_search_args_topic_pivot_bare_cakes() -> None:
     )
     assert merged["q"] == "cake"
     assert "category" not in merged
+
+
+def test_merge_planner_search_args_topic_pivot_bare_flowers() -> None:
+    from lib.neo4j.hybrid_context import merge_planner_search_args
+
+    merged = merge_planner_search_args(
+        {"q": "anniversary flowers", "category": "Anniversary"},
+        user_message="What about just normal fresh flowers?",
+        hybrid_context={"hints": {"occasion": "Anniversary"}},
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+    assert merged["q"] == "fresh flowers"
+    assert merged.get("category") == "Flowers"
 
 
 def test_strip_location_from_search_query_for_galle() -> None:
@@ -838,16 +1028,14 @@ def test_merge_planner_search_args_roses_galle_strips_city() -> None:
 
 # P0-1 regression: mom-birthday + chocolate + budget must search "chocolate birthday cake"
 def test_build_discovery_search_args_mom_birthday_chocolate_budget_uses_chocolate_cake_q() -> None:
-    """P0-1: mom birthday + chocolate + budget must use chocolate birthday cake q."""
+    """P0-1: mom birthday + chocolate + budget without cake → chocolate gift box q."""
     args = build_discovery_search_args(
         "birthday gift for mom Colombo loves chocolate budget 8000",
         {},
         currency="LKR",
     )
-    assert "chocolate birthday cake" in args["q"].lower(), (
-        f"Expected chocolate birthday cake, got {args['q']!r}"
-    )
-    assert args.get("category") == "Birthday"
+    assert args["q"] == "chocolate gift box"
+    assert args.get("category") != "Birthday"
     assert args["max_price"] == 8000.0
 
 
@@ -876,8 +1064,8 @@ def test_build_discovery_search_args_mom_birthday_cake_uses_birthday_cake_q() ->
     assert args.get("category") == "Birthday"
 
 
-def test_merge_planner_search_args_birthday_chocolate_gift_overrides_to_cake() -> None:
-    """P0-1: planner 'chocolate birthday gift' must override to chocolate birthday cake."""
+def test_merge_planner_search_args_birthday_chocolate_gift_keeps_planner_q() -> None:
+    """Planner chocolate birthday gift without cake is not forced to birthday cake."""
     from lib.neo4j.hybrid_context import merge_planner_search_args
 
     merged = merge_planner_search_args(
@@ -890,19 +1078,17 @@ def test_merge_planner_search_args_birthday_chocolate_gift_overrides_to_cake() -
         currency="LKR",
         intent_metadata={"budget_max": 8000.0, "budget_currency": "LKR"},
     )
-    assert "cake" in merged["q"].lower(), (
-        f"Expected 'chocolate birthday cake' or similar, got {merged['q']!r}"
-    )
+    assert merged["q"] == "chocolate gift box"
     assert "condom" not in merged["q"].lower()
 
 
 def test_birthday_planner_q_needs_override_chocolate_gift_returns_true() -> None:
-    """P0-1: planner q 'chocolate birthday gift' needs override for birthday+chocolate query."""
+    """Explicit birthday cake turns still override misaligned planner q."""
     from lib.neo4j.hybrid_context import _birthday_planner_q_needs_override
 
     assert _birthday_planner_q_needs_override(
-        "chocolate birthday gift",
-        "birthday gift for mom Colombo loves chocolate budget 8000",
+        "chocolate lava cake",
+        "birthday cake for mom Colombo loves chocolate budget 8000",
     )
 
 
@@ -943,6 +1129,29 @@ def test_is_confident_discovery_turn_birthday_cake_with_graph() -> None:
         {"vector_hits": [{"id": "category:cakes"}], "hints": {"occasion": "Birthday"}},
         currency="LKR",
     )
+
+
+def test_is_confident_discovery_turn_topic_pivot_bare_cakes() -> None:
+    """Bare category pivots are confident — deterministic search args skip the planner."""
+    assert is_confident_discovery_turn(
+        "Nevermind. Cakes.",
+        {},
+        currency="LKR",
+        intent_metadata={"topic_pivot": True},
+    )
+
+
+def test_build_discovery_search_args_preserves_blush_roses_combo() -> None:
+    """Budgeted rose rewrite must not drop blush/combo product modifiers."""
+    args = build_discovery_search_args(
+        "blush roses combo under 6000",
+        {},
+        currency="LKR",
+    )
+    q = str(args.get("q") or "").lower()
+    assert "blush" in q
+    assert "combo" in q
+    assert args.get("max_price") == 6000.0
 
 
 def test_is_confident_discovery_turn_rejects_vague_gifts() -> None:

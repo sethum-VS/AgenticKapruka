@@ -173,6 +173,83 @@ async def test_resolve_cart_product_ordinal_first_skips_cold_mcp() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_cart_product_number_one_skips_cold_mcp() -> None:
+    """'Add number 1 please' resolves carousel index 0 — never searches 'number 1'."""
+    mock_service = AsyncMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Add number 1 please")],
+        "session_id": "sess-cart-number-1",
+        "last_visible_products": [_RED_ROSES, _BLUSH_ROSES],
+        "last_search_products": [_RED_ROSES, _BLUSH_ROSES],
+    }
+
+    result = await resolve_cart_product(state, kapruka_service=mock_service)
+
+    action = result["cart_action_result"]
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00red001"
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_cart_product_add_two_to_cart_skips_cold_mcp() -> None:
+    mock_service = AsyncMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Add 2 to my cart")],
+        "session_id": "sess-cart-digit-2",
+        "last_visible_products": [_RED_ROSES, _BLUSH_ROSES],
+    }
+
+    result = await resolve_cart_product(state, kapruka_service=mock_service)
+
+    action = result["cart_action_result"]
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00blush001"
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_cart_product_deictic_multi_defaults_to_first() -> None:
+    mock_service = AsyncMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="Add that to my cart")],
+        "session_id": "sess-cart-that-multi",
+        "last_visible_products": [_BLUSH_ROSES, _RED_ROSES],
+        "last_search_products": [_BLUSH_ROSES, _RED_ROSES],
+    }
+
+    result = await resolve_cart_product(
+        state,
+        kapruka_service=mock_service,
+        client_ip="127.0.0.1",
+    )
+
+    action = result["cart_action_result"]
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00blush001"
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_cart_product_bare_number_one_after_disambiguation() -> None:
+    """Bare 'number 1' after multi-item clarify resolves carousel index 0."""
+    mock_service = AsyncMock()
+    state: AgentState = {
+        "messages": [HumanMessage(content="number 1")],
+        "session_id": "sess-cart-bare-number-1",
+        "last_visible_products": [_BLUSH_ROSES, _RED_ROSES],
+        "last_search_products": [_BLUSH_ROSES, _RED_ROSES],
+    }
+
+    result = await resolve_cart_product(state, kapruka_service=mock_service)
+
+    action = result["cart_action_result"]
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00blush001"
+    mock_service.search_products.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_resolve_cart_product_cold_start_searches_mcp() -> None:
     blush = ProductResult(
         id="combo00blush001",
@@ -213,6 +290,49 @@ async def test_resolve_cart_product_cold_start_searches_mcp() -> None:
     assert action["status"] == "resolved"
     assert action["product"]["id"] == "combo00blush001"
     mock_service.search_products.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_cart_product_compound_search_and_add_searches_mcp() -> None:
+    """'Show X and add that' with no prior carousel searches for X, then resolves it."""
+    blush = ProductResult(
+        id="combo00blush001",
+        name="Blush Roses Combo Gift",
+        summary="Roses and chocolates.",
+        price=Money(amount=6500.0, currency="LKR"),
+        compare_at_price=None,
+        in_stock=True,
+        stock_level="high",
+        image_url=None,
+        category=CategoryRef(id="cat_combo", name="Combo", slug="combo"),
+        rating=None,
+        ships_internationally=False,
+        url="https://example.com/blush",
+    )
+    mock_service = AsyncMock()
+    mock_service.search_products.return_value = SearchProductsOutput(
+        results=[blush],
+        next_cursor=None,
+        applied_filters={"q": "Blush Roses", "limit": 10, "in_stock_only": False},
+    )
+
+    state: AgentState = {
+        "messages": [HumanMessage(content="Show Blush Roses and add that to cart")],
+        "session_id": "sess-cart-compound",
+        "currency": "LKR",
+    }
+
+    result = await resolve_cart_product(
+        state,
+        kapruka_service=mock_service,
+        client_ip="127.0.0.1",
+    )
+
+    action = result["cart_action_result"]
+    assert action["status"] == "resolved"
+    assert action["product"]["id"] == "combo00blush001"
+    mock_service.search_products.assert_awaited_once()
+    assert mock_service.search_products.await_args.kwargs["q"] == "Blush Roses"
 
 
 @pytest.mark.asyncio

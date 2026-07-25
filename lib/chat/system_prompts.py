@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from lib.chat.intent_metadata import IntentMetadata, Vernacular
+from lib.utils.text import normalize_catalog_text
 from lib.zep.memory import format_memory_facts_block
 
 _NO_BACKTICK_PRODUCT_NAME_RULE = "- Never wrap product names in backticks — quote them plainly.\n"
@@ -25,8 +26,9 @@ _CONCIERGE_EMPTY_TOOL_RESULTS_RULE = (
 )
 
 _ARTIFICIAL_FLORAL_DISCLOSURE_RULE = (
-    "- When the customer asked for flowers and tool_results include silk, artificial, soap, "
-    "or paper floral products, disclose they are not fresh-cut flowers before recommending.\n"
+    "- When tool_results include silk, artificial, soap, or paper floral products "
+    "(including anniversary gift sets), disclose they are non-perishable / not "
+    "fresh-cut flowers before recommending.\n"
 )
 
 UTILITY_ECOMMERCE_SYSTEM_INSTRUCTION = (
@@ -104,7 +106,7 @@ Rules:
 
 def build_general_welcome_message() -> str:
     """Static concierge welcome for general turns with no catalog tool calls."""
-    return (
+    return normalize_catalog_text(
         "Welcome to Kapruka! I'm your gift concierge for sending cakes, flowers, "
         "and gifts across Sri Lanka.\n\n"
         "I can help you with:\n"
@@ -223,12 +225,12 @@ _BUDGET_CONFIRMATION_RULE = (
 def build_off_topic_redirect_message(topic: str) -> str:
     """Polite redirect when the customer asks about weather, news, or general knowledge."""
     if topic == "weather":
-        return (
+        return normalize_catalog_text(
             "I can't check the weather, but I can help you send a gift anywhere in Sri Lanka — "
             "cakes, flowers, chocolates, and hampers with delivery dates and rates. "
             "What would you like to explore?"
         )
-    return (
+    return normalize_catalog_text(
         f"I can't help with {topic} here, but I'm your Kapruka gift concierge for cakes, "
         "flowers, chocolates, and delivery across Sri Lanka. What gift can I help you find?"
     )
@@ -237,11 +239,11 @@ def build_off_topic_redirect_message(topic: str) -> str:
 def build_impossible_product_redirect(subject: str) -> str:
     """Redirect for live-animal or other impossible catalog requests."""
     if "elephant" in subject.lower():
-        return (
+        return normalize_catalog_text(
             "We can't deliver a live elephant, but stuffed elephant toys and gift hampers "
             "are popular Kapruka picks. Would you like me to search for stuffed elephant toys?"
         )
-    return (
+    return normalize_catalog_text(
         f"We can't deliver {subject}, but Kapruka has thoughtful gift alternatives — "
         "cakes, flowers, chocolates, hampers, and toys. What occasion are you shopping for?"
     )

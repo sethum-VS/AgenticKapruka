@@ -10,7 +10,7 @@ from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
 from langgraph.config import get_stream_writer
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from graphs.model_router import FLASH_MODEL
 from graphs.nodes.analyze_intent import _extract_latest_user_message
@@ -41,6 +41,7 @@ from lib.chat.product_curation import (
     has_graph_hybrid_context,
     is_cake_accessory,
     is_flower_fruit_intent,
+    refine_last_search_by_budget,
 )
 from lib.chat.product_detail import (
     is_delivery_fee_question,
@@ -60,6 +61,7 @@ from lib.chat.status_copy import SEARCHING_CATALOG, long_search_status_message
 from lib.chat.support_faq import is_support_question
 from lib.debug.trace import trace_agent_iteration
 from lib.genai.completions import generate_content
+from lib.genai.errors import is_rate_limited, is_transient_nim_error
 from lib.kapruka.service import KaprukaService
 from lib.kapruka.tool_executor import (
     canonical_tool_args_for_dedup,
@@ -73,9 +75,12 @@ from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.neo4j.hybrid_context import (
+    anniversary_fallback_search_queries,
     build_budget_refinement_search_args,
     build_discovery_search_args,
     enrich_message_with_session_slots,
+    has_strong_hybrid_hints,
+    is_anniversary_occasion_intent,
     is_birthday_cake_intent,
     is_broad_cakes_query,
     is_confident_discovery_turn,
@@ -88,8 +93,11 @@ from lib.zep.memory import format_memory_facts_block, scope_memory_facts_for_tur
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 3
+GRAPH_HINTS_MAX_ITERATIONS = 2
 UTILITY_GENERAL_MAX_ITERATIONS = 2
 CONFIDENT_DISCOVERY_MAX_ITERATIONS = 1
+BUDGETED_GIFT_SEARCH_CONCURRENCY = 2
+BUDGET_REFINEMENT_IN_MEMORY_MIN = 1
 PLANNER_MODEL = FLASH_MODEL
 
 ALLOWED_PLANNER_TOOLS: frozenset[str] = frozenset(
@@ -402,7 +410,7 @@ _APOLOGY_PATTERN = re.compile(r"\b(?:apolog(?:y|ize|ise)|sorry|forgive|make\s+up
 _FLORAL_DESIGN = re.compile(r"\b(?:floral|design|designs)\b", re.I)
 _GIFT_VOUCHER_Q = re.compile(r"\bgift\s+voucher\b", re.I)
 _CATALOG_INTENT = re.compile(
-    r"\b(?:cake|flower|chocolate|gift|hamper|bouquet|roses?|product|search|find|show|"
+    r"\b(?:cakes?|flowers?|chocolates?|gifts?|hampers?|bouquets?|roses?|product|search|find|show|"
     r"deliver|track|VIMP)\b",
     re.I,
 )
@@ -596,18 +604,20 @@ def _should_run_situational_flowers_search(
     *,
     already_ran: bool,
 ) -> bool:
-    """True when a distress turn names flowers and needs a deterministic search."""
+    """True when a distress turn should auto-search apology/sympathy flowers."""
     if already_ran:
         return False
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
-    if not intent_metadata.get("is_situational"):
-        return False
-    return bool(_FLOWERS_REQUEST.search(user_message))
+    # Proactively show apology flowers even when the shopper did not name a product.
+    return bool(intent_metadata.get("is_situational"))
 
 
 def _situational_flowers_search_args(user_message: str) -> dict[str, Any]:
     """Build iteration-0 search args for situational flower/apology turns."""
-    query = "apology flowers" if _APOLOGY_PATTERN.search(user_message) else "roses bouquet"
+    if _APOLOGY_PATTERN.search(user_message) or not _FLOWERS_REQUEST.search(user_message):
+        query = "apology flowers"
+    else:
+        query = "roses bouquet"
     return {"q": query, "category": "Flowers"}
 
 
@@ -658,9 +668,15 @@ async def _invoke_tool_with_rate_limit_retry(
     kapruka_service: KaprukaService,
     client_ip: str,
     currency: str | None,
-    max_retries: int = 2,
+    max_retries: int | None = None,
 ) -> dict[str, Any]:
     """Retry Kapruka MCP reads on rate limit with backoff and status SSE."""
+    from lib.genai.completions import seconds_until_deadline
+
+    if max_retries is None:
+        remaining = seconds_until_deadline()
+        # Under deadline pressure, skip 429 backoff so the turn can still finish.
+        max_retries = 0 if remaining is not None and remaining < 30.0 else 2
     result: dict[str, Any] = {}
     for attempt in range(max_retries + 1):
         _emit_status(_status_message_for_tool(tool_name))
@@ -816,8 +832,22 @@ def _turn_needs_catalog(state: AgentState) -> bool:
     )
 
 
+def _graph_hint_iteration_limit(state: AgentState) -> int | None:
+    """Cap planner iterations when graph hints are strong and retrieval is healthy."""
+    intent_metadata = state.get("intent_metadata") or {}
+    if intent_metadata.get("graph_degraded"):
+        return MAX_ITERATIONS
+    hybrid_context = state.get("hybrid_context") or {}
+    if has_strong_hybrid_hints(hybrid_context):
+        return GRAPH_HINTS_MAX_ITERATIONS
+    return None
+
+
 def _max_iterations_for_state(state: AgentState, refined_intent: Intent | None) -> int:
     """Cap planner iterations for fast utility/general turns that need no catalog."""
+    graph_hint_cap = _graph_hint_iteration_limit(state)
+    if graph_hint_cap is not None:
+        return graph_hint_cap
     if refined_intent == "discovery":
         user_message = _extract_latest_user_message(state.get("messages") or [])
         if is_confident_discovery_turn(
@@ -840,6 +870,9 @@ def _max_iterations_for_state(state: AgentState, refined_intent: Intent | None) 
 
 def _initial_iteration_limit(state: AgentState) -> int:
     """Pre-loop cap when hybrid hints make a single planner pass sufficient."""
+    graph_hint_cap = _graph_hint_iteration_limit(state)
+    if graph_hint_cap is not None:
+        return graph_hint_cap
     user_message = _extract_latest_user_message(state.get("messages") or [])
     if is_confident_discovery_turn(
         user_message,
@@ -1002,12 +1035,28 @@ def _format_planner_query_rewrite_hints(
             "with broad discovery queries rather than graph-based context."
         )
     has_budget = budget_max is not None and budget_max > 0
-    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
+    bare_focus = is_bare_category_pivot(user_message)
     if bare_focus:
+        flower_q = (
+            "fresh flowers"
+            if bare_focus == "flowers" and "fresh" in user_message.lower()
+            else bare_focus
+        )
         hints.append(
-            "Topic pivot with bare category only: prefer action ask_user with a short clarifying "
-            "question (who is it for / occasion) OR kapruka_search_products with literal q "
-            f'(e.g. "{bare_focus}s" → q="{bare_focus}") — do not inherit prior occasion context.'
+            "Topic pivot with bare category: prefer action call_tool with "
+            f'kapruka_search_products using literal q="{flower_q}" '
+            '(or q="fresh flowers" when the customer said flowers) — do not inherit '
+            "prior occasion context. Do NOT ask_user for occasion before searching. "
+            "Only ask_user if search returns no products."
+        )
+    elif topic_pivot and re.search(
+        r"\b(?:cakes?|flowers?|roses?|chocolates?|bouquets?)\b",
+        user_message,
+        re.I,
+    ):
+        hints.append(
+            "Topic pivot naming a product category: prefer kapruka_search_products "
+            "immediately — do not ask_user for occasion, recipient, or budget first."
         )
     if session_product_focus == "cake" and _FLORAL_DESIGN.search(user_message):
         hints.append(
@@ -1062,11 +1111,26 @@ def _format_planner_query_rewrite_hints(
             f'(2) q="gift hamper" max_price={budget_max} — before ask_user.'
         )
     if _FLOWERS_REQUEST.search(user_message):
-        hints.append(
-            "Flowers/roses/bouquet request: prefer kapruka_search_products q emphasizing "
-            "fresh cut roses or bouquets. If results are only silk, artificial, soap, or "
-            "paper florals, try one broader fresh-flowers search before finish."
+        color_match = re.search(
+            r"\b(blush|pink|red|white|yellow|purple|lavender)\b",
+            user_message,
+            re.I,
         )
+        if color_match:
+            color = color_match.group(1).lower()
+            flower = "roses" if re.search(r"\broses?\b", user_message, re.I) else "flowers"
+            hints.append(
+                f"Color+flower request: prefer kapruka_search_products with literal "
+                f'q="{color} {flower}" and category="Flowers" — do not rewrite to generic '
+                "fresh cut roses. If top results lack the color modifier, retry once with "
+                "the same literal q before finish."
+            )
+        else:
+            hints.append(
+                "Flowers/roses/bouquet request: prefer kapruka_search_products q emphasizing "
+                "fresh cut roses or bouquets. If results are only silk, artificial, soap, or "
+                "paper florals, try one broader fresh-flowers search before finish."
+            )
     if is_flower_fruit_intent(user_message):
         puja_avoid = (
             "Flower/fruit request: avoid puja, pooja, watti, and religious offering products; "
@@ -1221,7 +1285,10 @@ async def _plan_next_step(
         step = await generate_content(
             model=PLANNER_MODEL,
             messages=[
-                {"role": "system", "content": _build_planner_system_instruction(state, tool_trace=tool_trace)},
+                {
+                    "role": "system",
+                    "content": _build_planner_system_instruction(state, tool_trace=tool_trace),
+                },
                 {"role": "user", "content": _build_planner_user_prompt(state)},
             ],
             response_schema=AgentPlannerStep,
@@ -1232,8 +1299,58 @@ async def _plan_next_step(
             raise ValueError(msg)
         return step
     except Exception as exc:
+        # Preserve transient NIM errors so the loop can degrade gracefully instead of
+        # hard-failing the turn (wrapping as ValueError would strip the type and
+        # trip the generic "Something went wrong" SSE error path).
+        if is_transient_nim_error(exc):
+            raise
         msg = f"NVIDIA NIM planner call failed: {exc}"
         raise ValueError(msg) from exc
+
+
+def _retry_after_seconds(exc: BaseException) -> int | None:
+    """Best-effort Retry-After (seconds) from a NIM rate-limit response."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get("retry-after")
+    if isinstance(raw, str) and raw.strip().isdigit():
+        return max(1, int(raw.strip()))
+    return None
+
+
+def _planner_transient_error(exc: BaseException) -> dict[str, str]:
+    """Build an agent_tool_error dict so generate_response degrades gracefully.
+
+    A rate-limited or timed-out planner call would otherwise escape agent_loop
+    uncaught and be rendered as the generic "Something went wrong" SSE error.
+    Routing it through the tool_error path lets generate_response show friendly
+    copy, reuse any prior carousel products, and attach the retry banner.
+    """
+    if is_rate_limited(exc):
+        error: dict[str, str] = {
+            "tool": SEARCH_PRODUCTS_TOOL,
+            "error": "rate_limit_exceeded",
+            "message": "NVIDIA NIM is temporarily rate limited.",
+        }
+        retry_after = _retry_after_seconds(exc)
+        if retry_after is not None:
+            error["retry_after_seconds"] = str(retry_after)
+        return error
+    return {
+        "tool": SEARCH_PRODUCTS_TOOL,
+        "error": "timeout",
+        "message": (
+            "That took too long — please try again. "
+            "Your last results are still above if you want to refine or pick another gift."
+        ),
+    }
+
+
+def _planner_rate_limit_error(exc: BaseException) -> dict[str, str]:
+    """Backward-compatible alias for rate-limit planner degradation."""
+    return _planner_transient_error(exc)
 
 
 def _emit_status(message: str) -> None:
@@ -1244,6 +1361,50 @@ def _emit_status(message: str) -> None:
         return
     if writer is not None:
         writer({"type": "status", "message": message})
+
+
+def _emit_provisional_carousel(
+    products: list[dict[str, Any]],
+    *,
+    state: AgentState,
+    user_message: str,
+) -> None:
+    """Stream a provisional product carousel before generate_response finishes."""
+    if not products:
+        return
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        return
+    if writer is None:
+        return
+    try:
+        from graphs.nodes.generate_response import (
+            build_products_carousel_html,
+            render_carousel_oob_html,
+        )
+    except Exception:  # noqa: BLE001 — never fail the turn on provisional UI
+        return
+    budget_max = state.get("session_budget_max")
+    currency = str(state.get("currency") or "LKR")
+    products_html = build_products_carousel_html(
+        {"kapruka_search_products": {"results": products}},
+        budget_max=float(budget_max) if isinstance(budget_max, (int, float)) else None,
+        currency=currency,
+        user_message=user_message,
+        session_product_focus=state.get("session_product_focus")
+        if isinstance(state.get("session_product_focus"), str)
+        else None,
+        last_search_products=products,
+        visible_products=products,
+        allow_stale_fallback=False,
+    )
+    if not products_html:
+        return
+    # Fixed provisional slot so OOB can update; streaming also appends if missing.
+    slot_id = "carousel-slot-provisional"
+    carousel_oob = render_carousel_oob_html(products_html, carousel_slot_id=slot_id)
+    writer({"type": "carousel", "html": carousel_oob, "slot_id": slot_id})
 
 
 def _status_message_for_tool(tool_name: str) -> str:
@@ -1389,6 +1550,284 @@ def _confident_discovery_fast_path_blocked(
     return bool(is_product_detail_turn(user_message))
 
 
+async def _retry_anniversary_search_if_empty(
+    result: dict[str, Any],
+    enriched_args: dict[str, Any],
+    *,
+    state: AgentState,
+    user_message: str,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[ToolInvocation], int]:
+    """Run parallel fallback anniversary searches when the primary query is empty."""
+    hybrid_context = state.get("hybrid_context") or {}
+    if _search_has_products(result) or not is_anniversary_occasion_intent(
+        user_message,
+        hybrid_context,
+    ):
+        return result, enriched_args, tool_trace, 0
+
+    current_q = str(enriched_args.get("q") or "").strip().lower()
+    fallback_queries = [
+        query
+        for query in anniversary_fallback_search_queries(user_message)
+        if query.strip().lower() != current_q
+    ][:BUDGETED_GIFT_SEARCH_CONCURRENCY]
+    if not fallback_queries:
+        return result, enriched_args, tool_trace, 0
+
+    search_sem = asyncio.Semaphore(BUDGETED_GIFT_SEARCH_CONCURRENCY)
+    extra_trace = list(tool_trace)
+    extra_calls = 0
+
+    async def _run_retry(query: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        retry_args = _inject_tool_currency(
+            SEARCH_PRODUCTS_TOOL,
+            {**enriched_args, "q": query},
+            state,
+            currency,
+        )
+        if _is_duplicate_invocation(extra_trace, SEARCH_PRODUCTS_TOOL, retry_args):
+            return retry_args, None
+        async with search_sem:
+            retry_result = await _invoke_tool_with_rate_limit_retry(
+                SEARCH_PRODUCTS_TOOL,
+                retry_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+        retry_result = _curate_search_trace_result(retry_result, state=state)
+        return retry_args, retry_result
+
+    _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+    retry_pairs = await asyncio.gather(
+        *[_run_retry(query) for query in fallback_queries],
+        return_exceptions=True,
+    )
+    for pair in retry_pairs:
+        if isinstance(pair, BaseException):
+            continue
+        retry_args, retry_result = pair
+        if retry_result is None:
+            continue
+        extra_trace.append(
+            {"name": SEARCH_PRODUCTS_TOOL, "args": retry_args, "result": retry_result},
+        )
+        extra_calls += 1
+        if _search_has_products(retry_result):
+            return retry_result, retry_args, extra_trace, extra_calls
+    return result, enriched_args, extra_trace, extra_calls
+
+
+def _literal_color_flower_query(user_message: str) -> str | None:
+    """Return literal 'blush roses'-style q when the customer named color+flower."""
+    match = re.search(
+        r"\b(blush|pink|red|white|yellow|purple|lavender)\s+"
+        r"(roses?|flowers?|bouquets?)\b",
+        user_message,
+        re.I,
+    )
+    if not match:
+        return None
+    color = match.group(1).lower()
+    flower = match.group(2).lower()
+    if flower.startswith("rose"):
+        flower = "roses"
+    elif flower.startswith("flower"):
+        flower = "flowers"
+    else:
+        flower = "bouquet"
+    return f"{color} {flower}"
+
+
+def _top_results_lack_color_modifier(
+    result: dict[str, Any],
+    *,
+    color: str,
+    limit: int = 5,
+) -> bool:
+    """True when none of the top search hits mention the requested color."""
+    raw = result.get("results")
+    if not isinstance(raw, list) or not raw:
+        return True
+    color_re = re.compile(rf"\b{re.escape(color)}\b", re.I)
+    for item in raw[:limit]:
+        if not isinstance(item, dict):
+            continue
+        blob = f"{item.get('name') or ''} {item.get('summary') or ''}"
+        if color_re.search(blob):
+            return False
+    return True
+
+
+async def _maybe_retry_literal_color_flower_search(
+    result: dict[str, Any],
+    enriched_args: dict[str, Any],
+    *,
+    state: AgentState,
+    user_message: str,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[ToolInvocation], int]:
+    """One-shot retry with literal color+flower q when top hits miss the color."""
+    literal_q = _literal_color_flower_query(user_message)
+    if not literal_q:
+        return result, enriched_args, tool_trace, 0
+    color = literal_q.split()[0]
+    if not _top_results_lack_color_modifier(result, color=color):
+        return result, enriched_args, tool_trace, 0
+    current_q = str(enriched_args.get("q") or "").strip().lower()
+    if current_q == literal_q and _search_has_products(result):
+        # Already searched literally — still weak; nothing more to do.
+        return result, enriched_args, tool_trace, 0
+    retry_args = _inject_tool_currency(
+        SEARCH_PRODUCTS_TOOL,
+        {
+            **enriched_args,
+            "q": literal_q,
+            "category": "Flowers",
+            "sort": "relevance",
+        },
+        state,
+        currency,
+    )
+    if _is_duplicate_invocation(tool_trace, SEARCH_PRODUCTS_TOOL, retry_args):
+        return result, enriched_args, tool_trace, 0
+    _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+    retry_result = await _invoke_tool_with_rate_limit_retry(
+        SEARCH_PRODUCTS_TOOL,
+        retry_args,
+        kapruka_service=kapruka_service,
+        client_ip=rate_limit_key,
+        currency=currency,
+        max_retries=0,
+    )
+    retry_result = _curate_search_trace_result(retry_result, state=state)
+    updated_trace = [
+        *tool_trace,
+        {"name": SEARCH_PRODUCTS_TOOL, "args": retry_args, "result": retry_result},
+    ]
+    if _search_has_products(retry_result):
+        return retry_result, retry_args, updated_trace, 1
+    return result, enriched_args, updated_trace, 1
+
+
+def _literal_named_product_query(user_message: str) -> str | None:
+    """Return a literal blush/combo flower query when the customer named one."""
+    stripped = user_message.strip()
+    if not stripped:
+        return None
+    if not re.search(r"\b(?:blush|combo|combopack)\b", stripped, re.I):
+        return None
+    color_flower = re.search(
+        r"\b(blush|pink|red|white|yellow|purple|lavender)\s+"
+        r"(roses?|flowers?|bouquets?)\b",
+        stripped,
+        re.I,
+    )
+    if color_flower:
+        color = color_flower.group(1).lower()
+        flower = color_flower.group(2).lower()
+        if flower.startswith("rose"):
+            flower = "roses"
+        elif flower.startswith("flower"):
+            flower = "flowers"
+        else:
+            flower = "bouquet"
+        literal_q = f"{color} {flower}"
+        if re.search(r"\bcombo\b", stripped, re.I):
+            literal_q = f"{literal_q} combo"
+        return literal_q
+    if re.search(r"\bcombo\b", stripped, re.I) and re.search(r"\broses?\b", stripped, re.I):
+        return "roses combo"
+    return None
+
+
+def _top_results_lack_named_tokens(
+    result: dict[str, Any],
+    *,
+    tokens: tuple[str, ...],
+    limit: int = 5,
+) -> bool:
+    """True when none of the top search hits mention any of the distinctive tokens."""
+    raw = result.get("results")
+    if not isinstance(raw, list) or not raw:
+        return True
+    token_re = re.compile(
+        r"\b(?:" + "|".join(re.escape(token) for token in tokens) + r")\b",
+        re.I,
+    )
+    for item in raw[:limit]:
+        if not isinstance(item, dict):
+            continue
+        blob = f"{item.get('name') or ''} {item.get('summary') or ''}"
+        if token_re.search(blob):
+            return False
+    return True
+
+
+async def _maybe_retry_literal_named_product_search(
+    result: dict[str, Any],
+    enriched_args: dict[str, Any],
+    *,
+    state: AgentState,
+    user_message: str,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[ToolInvocation], int]:
+    """One-shot retry when blush/combo query returns generic rose hits."""
+    literal_q = _literal_named_product_query(user_message)
+    if not literal_q:
+        return result, enriched_args, tool_trace, 0
+    distinctive = tuple(
+        token
+        for token in ("blush", "combo", "combopack")
+        if re.search(rf"\b{token}\b", user_message, re.I)
+    )
+    if not distinctive or not _top_results_lack_named_tokens(result, tokens=distinctive):
+        return result, enriched_args, tool_trace, 0
+    current_q = str(enriched_args.get("q") or "").strip().lower()
+    if current_q == literal_q.lower() and _search_has_products(result):
+        return result, enriched_args, tool_trace, 0
+    retry_args = _inject_tool_currency(
+        SEARCH_PRODUCTS_TOOL,
+        {
+            **enriched_args,
+            "q": literal_q,
+            "category": "Flowers",
+            "sort": "relevance",
+        },
+        state,
+        currency,
+    )
+    if _is_duplicate_invocation(tool_trace, SEARCH_PRODUCTS_TOOL, retry_args):
+        return result, enriched_args, tool_trace, 0
+    _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+    retry_result = await _invoke_tool_with_rate_limit_retry(
+        SEARCH_PRODUCTS_TOOL,
+        retry_args,
+        kapruka_service=kapruka_service,
+        client_ip=rate_limit_key,
+        currency=currency,
+        max_retries=0,
+    )
+    retry_result = _curate_search_trace_result(retry_result, state=state)
+    updated_trace = [
+        *tool_trace,
+        {"name": SEARCH_PRODUCTS_TOOL, "args": retry_args, "result": retry_result},
+    ]
+    if _search_has_products(retry_result):
+        return retry_result, retry_args, updated_trace, 1
+    return result, enriched_args, updated_trace, 1
+
+
 async def _try_confident_discovery_fast_path(
     state: AgentState,
     *,
@@ -1420,11 +1859,20 @@ async def _try_confident_discovery_fast_path(
         return None
 
     discovery_message = enrich_message_with_session_slots(user_message, dict(state))
+    intent_meta = state.get("intent_metadata")
+    if isinstance(intent_meta, dict) and intent_meta.get("topic_pivot"):
+        discovery_message = user_message
     search_args = build_discovery_search_args(
         discovery_message,
         hybrid_context,
         currency=currency,
         intent_metadata=state.get("intent_metadata"),
+        session_budget_max=(
+            float(state["session_budget_max"])
+            if isinstance(state.get("session_budget_max"), (int, float))
+            and not (isinstance(intent_meta, dict) and intent_meta.get("topic_pivot"))
+            else None
+        ),
     )
     enriched_args = merge_planner_search_args(
         search_args,
@@ -1454,10 +1902,101 @@ async def _try_confident_discovery_fast_path(
         currency=currency,
     )
     result = _curate_search_trace_result(result, state=state)
-    tool_trace = [
+    working_trace = [
         *tool_trace,
         {"name": SEARCH_PRODUCTS_TOOL, "args": enriched_args, "result": result},
     ]
+    (
+        result,
+        enriched_args,
+        working_trace,
+        color_extra,
+    ) = await _maybe_retry_literal_color_flower_search(
+        result,
+        enriched_args,
+        state=state,
+        user_message=user_message,
+        tool_trace=working_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
+    (
+        result,
+        enriched_args,
+        working_trace,
+        named_extra,
+    ) = await _maybe_retry_literal_named_product_search(
+        result,
+        enriched_args,
+        state=state,
+        user_message=user_message,
+        tool_trace=working_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
+    result, enriched_args, tool_trace, retry_calls = await _retry_anniversary_search_if_empty(
+        result,
+        enriched_args,
+        state=state,
+        user_message=user_message,
+        tool_trace=working_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
+    retry_calls += color_extra + named_extra
+    # Broaden once when primary (and anniversary) search returned 0 — strips
+    # poisoned category filters like "Chocolate And Fashion".
+    if not _search_has_products(result):
+        intent_meta = state.get("intent_metadata")
+        broadened_args, _broaden_step = apply_first_broaden(
+            enriched_args,
+            preserve_max_price=has_explicit_budget_constraint(
+                user_message,
+                state.get("session_budget_max")
+                if isinstance(state.get("session_budget_max"), (int, float))
+                else None,
+                topic_pivot=bool(
+                    isinstance(intent_meta, dict) and intent_meta.get("topic_pivot"),
+                ),
+            ),
+            intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+        )
+        if broadened_args is not None and not _is_duplicate_invocation(
+            tool_trace,
+            SEARCH_PRODUCTS_TOOL,
+            broadened_args,
+        ):
+            broadened_args = _inject_tool_currency(
+                SEARCH_PRODUCTS_TOOL,
+                broadened_args,
+                state,
+                currency,
+            )
+            _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+            broaden_result = await _invoke_tool_with_rate_limit_retry(
+                SEARCH_PRODUCTS_TOOL,
+                broadened_args,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+            broaden_result = _curate_search_trace_result(broaden_result, state=state)
+            tool_trace = [
+                *tool_trace,
+                {
+                    "name": SEARCH_PRODUCTS_TOOL,
+                    "args": broadened_args,
+                    "result": broaden_result,
+                },
+            ]
+            retry_calls += 1
+            if _search_has_products(broaden_result):
+                result = broaden_result
+                enriched_args = broadened_args
+
     session_search_query_update: str | None = None
     search_q_arg = enriched_args.get("q")
     intent_meta = state.get("intent_metadata")
@@ -1470,7 +2009,7 @@ async def _try_confident_discovery_fast_path(
     base_tool_count = int(state.get("tool_call_count") or 0)
     updates = _fast_path_agent_loop_updates(
         tool_trace,
-        tool_call_count=base_tool_count + 1,
+        tool_call_count=base_tool_count + 1 + retry_calls,
         refined_intent="discovery",
         session_search_query_update=session_search_query_update,
     )
@@ -1543,6 +2082,231 @@ async def _try_product_detail_fast_path(
     return updates
 
 
+async def _try_budget_refinement_fast_path(
+    state: AgentState,
+    *,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> dict[str, Any] | None:
+    """Filter prior carousel (or MCP search) for budget-only turns — skip planner."""
+    user_message = _extract_latest_user_message(state.get("messages") or [])
+    focus = state.get("session_product_focus")
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if not is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return None
+    if not (
+        state.get("session_search_query")
+        or state.get("session_product_focus")
+        or state.get("last_search_products")
+        or state.get("last_visible_products")
+    ):
+        return None
+
+    budget_refinement_args = build_budget_refinement_search_args(
+        dict(state),
+        user_message,
+        currency=currency,
+    )
+    if budget_refinement_args is None:
+        return None
+
+    base_tool_count = int(state.get("tool_call_count") or 0)
+    working_trace = list(tool_trace)
+    tool_name = SEARCH_PRODUCTS_TOOL
+    # Prefer last_visible (what the shopper saw) then last_search.
+    prior_products = [
+        item for item in list(state.get("last_visible_products") or []) if isinstance(item, dict)
+    ]
+    if not prior_products:
+        prior_products = [
+            item for item in list(state.get("last_search_products") or []) if isinstance(item, dict)
+        ]
+    budget_max_val = state.get("session_budget_max")
+    if not isinstance(budget_max_val, (int, float)) or budget_max_val <= 0:
+        from lib.neo4j.hybrid_context import extract_budget
+
+        turn_cap = extract_budget(user_message)
+        if turn_cap is not None and turn_cap.amount > 0:
+            budget_max_val = float(turn_cap.amount)
+        else:
+            turn_budget = state.get("budget_max")
+            if isinstance(turn_budget, (int, float)) and turn_budget > 0:
+                budget_max_val = float(turn_budget)
+    session_search_query_update: str | None = None
+
+    if prior_products and isinstance(budget_max_val, (int, float)) and budget_max_val > 0:
+        refined_in_memory = refine_last_search_by_budget(
+            prior_products,
+            budget_max=float(budget_max_val),
+            currency=currency,
+            session_product_focus=state.get("session_product_focus")
+            if isinstance(state.get("session_product_focus"), str)
+            else None,
+            session_search_query=state.get("session_search_query")
+            if isinstance(state.get("session_search_query"), str)
+            else None,
+            session_recipient_hint=state.get("session_recipient_hint")
+            if isinstance(state.get("session_recipient_hint"), str)
+            else None,
+            user_message=user_message,
+            hybrid_context=state.get("hybrid_context")
+            if isinstance(state.get("hybrid_context"), dict)
+            else None,
+        )
+        if refined_in_memory and len(refined_in_memory) >= BUDGET_REFINEMENT_IN_MEMORY_MIN:
+            logger.debug("agent_loop: budget refinement in-memory fast-path")
+            working_trace.append(
+                {
+                    "name": tool_name,
+                    "args": dict(budget_refinement_args),
+                    "result": {"results": refined_in_memory},
+                },
+            )
+            _emit_provisional_carousel(
+                refined_in_memory,
+                state=state,
+                user_message=user_message,
+            )
+            updates = _fast_path_agent_loop_updates(
+                working_trace,
+                tool_call_count=base_tool_count + 1,
+            )
+            updates["last_search_products"] = refined_in_memory
+            return updates
+
+    enriched_args = _inject_tool_currency(
+        tool_name,
+        dict(budget_refinement_args),
+        state,
+        currency,
+    )
+    enriched_args = merge_planner_search_args(
+        enriched_args,
+        user_message=user_message,
+        hybrid_context=state.get("hybrid_context") or {},
+        currency=currency,
+        intent_metadata=state.get("intent_metadata"),
+        state=dict(state),
+    )
+    if prior_products:
+        _emit_status(
+            "None of the current picks fit that budget — searching the catalog…",
+        )
+    else:
+        _emit_status(_status_message_for_tool(tool_name))
+
+    result = await _invoke_tool_with_rate_limit_retry(
+        tool_name,
+        enriched_args,
+        kapruka_service=kapruka_service,
+        client_ip=rate_limit_key,
+        currency=currency,
+    )
+    result = _curate_search_trace_result(result, state=state)
+    search_q_arg = enriched_args.get("q")
+    intent_meta = state.get("intent_metadata")
+    if isinstance(search_q_arg, str) and search_q_arg.strip():
+        session_search_query_update = _persist_session_search_query(
+            search_q_arg,
+            intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+        )
+    else:
+        search_q = _search_query_from_result(result)
+        if search_q:
+            session_search_query_update = _persist_session_search_query(
+                search_q,
+                intent_metadata=intent_meta if isinstance(intent_meta, dict) else None,
+            )
+
+    if _search_has_products(result):
+        raw_results = result.get("results")
+        products = [item for item in (raw_results or []) if isinstance(item, dict)]
+        session_focus = state.get("session_product_focus")
+        if (
+            session_focus
+            and products
+            and not carousel_focus_guard(
+                products,
+                session_focus if isinstance(session_focus, str) else None,
+            )
+        ):
+            demoted = demote_off_focus_products(
+                products,
+                session_focus if isinstance(session_focus, str) else None,
+            )
+            result = dict(result)
+            if carousel_focus_guard(
+                demoted,
+                session_focus if isinstance(session_focus, str) else None,
+            ):
+                result["results"] = demoted
+            else:
+                result["results"] = demoted or products
+
+    if isinstance(result, dict) and result.get("error"):
+        if _is_rate_limit_result(result) and prior_products:
+            budget_label = (
+                f"{int(budget_max_val):,}"
+                if isinstance(budget_max_val, (int, float)) and budget_max_val > 0
+                else "that"
+            )
+            working_trace.append(
+                {
+                    "name": tool_name,
+                    "args": enriched_args,
+                    "result": {"results": []},
+                },
+            )
+            updates = _fast_path_agent_loop_updates(
+                working_trace,
+                tool_call_count=base_tool_count + 1,
+                exit_reason="ask_user",
+            )
+            updates["agent_clarifying_question"] = (
+                f"None of the current picks are under Rs. {budget_label}, "
+                "and our catalog is briefly busy. Please try again in a moment, "
+                "or tell me a higher budget."
+            )
+            updates["last_search_products"] = None
+            updates["last_visible_products"] = None
+            return updates
+        working_trace.append(
+            {"name": tool_name, "args": enriched_args, "result": result},
+        )
+        updates = _fast_path_agent_loop_updates(
+            working_trace,
+            tool_call_count=base_tool_count + 1,
+            exit_reason="tool_error",
+        )
+        updates["agent_tool_error"] = _agent_tool_error_from_result(tool_name, result)
+        return updates
+
+    working_trace.append(
+        {"name": tool_name, "args": enriched_args, "result": result},
+    )
+    if _search_has_products(result):
+        mcp_products = [item for item in (result.get("results") or []) if isinstance(item, dict)]
+        if mcp_products:
+            _emit_provisional_carousel(
+                mcp_products,
+                state=state,
+                user_message=user_message,
+            )
+
+    logger.debug("agent_loop: budget refinement MCP fast-path")
+    updates = _fast_path_agent_loop_updates(
+        working_trace,
+        tool_call_count=base_tool_count + 1,
+        session_search_query_update=session_search_query_update,
+    )
+    last_search_products = _last_search_products_from_trace(working_trace, state=state)
+    if last_search_products:
+        updates["last_search_products"] = last_search_products
+    return updates
+
+
 async def _try_agent_loop_fast_path(
     state: AgentState,
     *,
@@ -1555,6 +2319,16 @@ async def _try_agent_loop_fast_path(
     user_message = _extract_latest_user_message(state.get("messages") or [])
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     base_tool_count = int(state.get("tool_call_count") or 0)
+
+    budget_fast_path = await _try_budget_refinement_fast_path(
+        state,
+        tool_trace=tool_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
+    if budget_fast_path is not None:
+        return budget_fast_path
 
     if state.get("intent") == "cart":
         logger.debug("agent_loop: cart fast-path — skipping planner")
@@ -1572,9 +2346,13 @@ async def _try_agent_loop_fast_path(
             tool_call_count=base_tool_count,
         )
 
+    delivery_only_session_city = state.get("session_delivery_city_canonical")
     if is_delivery_only_inquiry(
         user_message,
         intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
+        session_delivery_city=(
+            delivery_only_session_city if isinstance(delivery_only_session_city, str) else None
+        ),
     ):
         if _trace_has_check_delivery(tool_trace):
             logger.debug(
@@ -1642,6 +2420,7 @@ async def agent_loop(
     tool_call_count = 0
     agent_clarifying_question: str | None = None
     agent_tool_error: dict[str, str] | None = None
+    delivery_city_candidates_update: list[str] | None = None
     session_awaiting_delivery_date: bool | None = None
     agent_loop_done = False
     force_finish = False
@@ -1654,6 +2433,7 @@ async def agent_loop(
     dual_gift_search_applied = False
     budgeted_gift_ideas_search_applied = False
     budget_refinement_search_applied = False
+    clear_carousel_on_budget_miss = False
     situational_flowers_search_applied = False
     discovery_city_gift_search_applied = False
     session_delivery_date_update: str | None = None
@@ -1707,9 +2487,9 @@ async def agent_loop(
             }
             merged_result: dict[str, Any] = {"results": []}
             physical_queries = _budgeted_gift_physical_queries(user_message)
-            for physical_q in physical_queries:
-                if _search_product_count(merged_result) >= 3:
-                    break
+            _emit_status(_status_message_for_tool(tool_name))
+
+            for physical_q in physical_queries[:BUDGETED_GIFT_SEARCH_CONCURRENCY]:
                 physical_args = _inject_tool_currency(
                     tool_name,
                     {**base_args, "q": physical_q},
@@ -1718,7 +2498,6 @@ async def agent_loop(
                 )
                 if _is_duplicate_invocation(tool_trace, tool_name, physical_args):
                     continue
-                _emit_status(_status_message_for_tool(tool_name))
                 physical_result = await _invoke_tool_with_rate_limit_retry(
                     tool_name,
                     physical_args,
@@ -1732,6 +2511,8 @@ async def agent_loop(
                 )
                 tool_call_count += 1
                 merged_result = _merge_search_results(merged_result, physical_result)
+                if _search_product_count(merged_result) >= 3:
+                    break
 
             if _search_product_count(merged_result) < 3:
                 voucher_args = _inject_tool_currency(
@@ -1794,6 +2575,58 @@ async def agent_loop(
             )
         ):
             tool_name = SEARCH_PRODUCTS_TOOL
+            # Zero-MCP path: filter the prior carousel in memory when any
+            # in-budget, in-focus items already exist.
+            prior_products = [
+                item
+                for item in (
+                    list(state.get("last_search_products") or [])
+                    or list(state.get("last_visible_products") or [])
+                )
+                if isinstance(item, dict)
+            ]
+            budget_max_val = state.get("session_budget_max")
+            refined_in_memory: list[dict[str, Any]] | None = None
+            if prior_products and isinstance(budget_max_val, (int, float)) and budget_max_val > 0:
+                refined_in_memory = refine_last_search_by_budget(
+                    prior_products,
+                    budget_max=float(budget_max_val),
+                    currency=currency,
+                    session_product_focus=state.get("session_product_focus")
+                    if isinstance(state.get("session_product_focus"), str)
+                    else None,
+                    session_search_query=state.get("session_search_query")
+                    if isinstance(state.get("session_search_query"), str)
+                    else None,
+                    session_recipient_hint=state.get("session_recipient_hint")
+                    if isinstance(state.get("session_recipient_hint"), str)
+                    else None,
+                    user_message=user_message,
+                    hybrid_context=state.get("hybrid_context")
+                    if isinstance(state.get("hybrid_context"), dict)
+                    else None,
+                )
+                if refined_in_memory and len(refined_in_memory) >= BUDGET_REFINEMENT_IN_MEMORY_MIN:
+                    budget_refinement_search_applied = True
+                    synthetic_args = dict(budget_refinement_args)
+                    synthetic_result: dict[str, Any] = {"results": refined_in_memory}
+                    tool_trace.append(
+                        {
+                            "name": tool_name,
+                            "args": synthetic_args,
+                            "result": synthetic_result,
+                        },
+                    )
+                    tool_call_count += 1
+                    _emit_provisional_carousel(
+                        refined_in_memory,
+                        state=state,
+                        user_message=user_message,
+                    )
+                    exit_reason = "finish"
+                    agent_loop_done = True
+                    break
+
             enriched_args = _inject_tool_currency(
                 tool_name,
                 dict(budget_refinement_args),
@@ -1810,6 +2643,8 @@ async def agent_loop(
             )
             discovery_search_merged = True
             budget_refinement_search_applied = True
+            if prior_products and refined_in_memory is None:
+                _emit_status("None of the current picks fit that budget — searching the catalog…")
             result = await _invoke_tool_with_rate_limit_retry(
                 tool_name,
                 enriched_args,
@@ -1861,10 +2696,43 @@ async def agent_loop(
             )
             tool_call_count += 1
             if isinstance(result, dict) and result.get("error"):
+                # Soft miss when catalog is rate-limited after an all-over-budget carousel:
+                # do not keep stale over-budget cards or surface a hard tool_error banner.
+                if _is_rate_limit_result(result) and prior_products:
+                    budget_label = (
+                        f"{int(budget_max_val):,}"
+                        if isinstance(budget_max_val, (int, float)) and budget_max_val > 0
+                        else "that"
+                    )
+                    agent_clarifying_question = (
+                        f"None of the current picks are under Rs. {budget_label}, "
+                        "and our catalog is briefly busy. Please try again in a moment, "
+                        "or tell me a higher budget."
+                    )
+                    clear_carousel_on_budget_miss = True
+                    # Empty success so stale carousel fallback is skipped.
+                    tool_trace[-1] = {
+                        "name": tool_name,
+                        "args": enriched_args,
+                        "result": {"results": []},
+                    }
+                    exit_reason = "ask_user"
+                    agent_loop_done = True
+                    break
                 agent_tool_error = _agent_tool_error_from_result(tool_name, result)
                 exit_reason = "tool_error"
                 agent_loop_done = True
                 break
+            if _search_has_products(result):
+                mcp_products = [
+                    item for item in (result.get("results") or []) if isinstance(item, dict)
+                ]
+                if mcp_products:
+                    _emit_provisional_carousel(
+                        mcp_products,
+                        state=state,
+                        user_message=user_message,
+                    )
             if _search_has_products(result) and _should_force_finish_after_search(
                 state,
                 tool_trace,
@@ -1978,10 +2846,24 @@ async def agent_loop(
                 long_search_status_message(iteration=iteration, has_budget=has_budget),
             )
 
-        step = await _plan_next_step(
-            state=state,
-            tool_trace=tool_trace,
-        )
+        try:
+            step = await _plan_next_step(
+                state=state,
+                tool_trace=tool_trace,
+            )
+        except Exception as exc:
+            if not is_transient_nim_error(exc):
+                raise
+            logger.warning(
+                "agent_loop: planner transient NIM error at iteration %s; "
+                "finishing gracefully with fallback",
+                iteration,
+                exc_info=True,
+            )
+            agent_tool_error = _planner_transient_error(exc)
+            exit_reason = "tool_error"
+            agent_loop_done = True
+            break
         planner_iterations = iteration + 1
 
         if iteration == 0 and step.refined_intent in ("discovery", "general"):
@@ -2103,6 +2985,8 @@ async def agent_loop(
             discovery_search_merged = True
 
         if tool_name == CHECK_DELIVERY_TOOL:
+            from lib.chat.city_resolution import _is_bare_colombo, resolve_delivery_city
+
             user_message = _extract_latest_user_message(state.get("messages") or [])
             product_id = _resolve_delivery_product_id(state)
             if product_id and not enriched_args.get("product_id"):
@@ -2117,27 +3001,44 @@ async def agent_loop(
                 target_city = delivery_meta.get("target_city")
                 if isinstance(target_city, str) and target_city.strip():
                     enriched_args["city"] = target_city.strip()
-            if isinstance(canonical_city, str) and canonical_city.strip():
-                enriched_args["city"] = canonical_city.strip()
-            elif (
-                kapruka_service is not None
-                and isinstance(enriched_args.get("city"), str)
-                and enriched_args["city"].strip()
+            if (
+                isinstance(canonical_city, str)
+                and canonical_city.strip()
+                and not _is_bare_colombo(canonical_city)
             ):
-                from lib.chat.city_resolution import resolve_delivery_city
-
+                enriched_args["city"] = canonical_city.strip()
+            else:
+                city_candidate = ""
+                if isinstance(enriched_args.get("city"), str):
+                    city_candidate = enriched_args["city"].strip()
+                elif isinstance(canonical_city, str):
+                    city_candidate = canonical_city.strip()
+                if not city_candidate:
+                    agent_clarifying_question = "Which city should we deliver to?"
+                    exit_reason = "ask_user"
+                    agent_loop_done = True
+                    break
+                if kapruka_service is None:
+                    agent_clarifying_question = (
+                        "I couldn't verify that delivery city right now. "
+                        "Please try a nearby area (for example Colombo 03, Kandy, or Galle)."
+                    )
+                    exit_reason = "ask_user"
+                    agent_loop_done = True
+                    break
                 resolution = await resolve_delivery_city(
                     kapruka_service,
                     rate_limit_key,
-                    enriched_args["city"].strip(),
+                    city_candidate,
                 )
                 if resolution.status == "resolved" and resolution.canonical:
                     enriched_args["city"] = resolution.canonical
-                elif resolution.status == "ambiguous":
+                else:
                     agent_clarifying_question = (
-                        resolution.customer_message
-                        or "Colombo has several delivery zones. Which area should we deliver to?"
+                        resolution.customer_message or "Which city should we deliver to?"
                     )
+                    if resolution.candidates:
+                        delivery_city_candidates_update = list(resolution.candidates)
                     exit_reason = "ask_user"
                     agent_loop_done = True
                     break
@@ -2438,6 +3339,8 @@ async def agent_loop(
         }
     if agent_clarifying_question is not None:
         updates["agent_clarifying_question"] = agent_clarifying_question
+    if delivery_city_candidates_update is not None:
+        updates["delivery_city_candidates"] = delivery_city_candidates_update
     if agent_tool_error is not None:
         updates["agent_tool_error"] = agent_tool_error
     if refined_intent is not None:
@@ -2453,7 +3356,10 @@ async def agent_loop(
         updates["session_search_query"] = session_search_query_update
 
     last_search_products = _last_search_products_from_trace(tool_trace, state=state)
-    if last_search_products:
+    if clear_carousel_on_budget_miss:
+        updates["last_search_products"] = None
+        updates["last_visible_products"] = None
+    elif last_search_products:
         prior = state.get("last_search_products") or []
         session_focus = state.get("session_product_focus")
         if (
@@ -2466,6 +3372,11 @@ async def agent_loop(
             updates["last_search_products"] = prior
         else:
             updates["last_search_products"] = last_search_products
+            _emit_provisional_carousel(
+                last_search_products,
+                state=state,
+                user_message=user_message,
+            )
     elif state.get("last_search_products"):
         updates["last_search_products"] = state["last_search_products"]
 

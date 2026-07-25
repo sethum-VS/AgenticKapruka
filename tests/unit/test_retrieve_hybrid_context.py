@@ -16,7 +16,6 @@ from graphs.nodes.retrieve_hybrid_context import (
 from graphs.state import AgentState, Intent
 from lib.chat.routing import route_after_analyze_intent
 from lib.neo4j.client import Neo4jClient
-from app.config import get_settings
 from lib.neo4j.traverse import TraversalResult
 from lib.neo4j.vector_search import VectorSearchHit
 

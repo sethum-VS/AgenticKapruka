@@ -10,6 +10,7 @@ from lib.chat.product_curation import (
     apply_recipient_curation,
     carousel_focus_guard,
     curate_carousel_products,
+    demote_kids_themed_products,
     demote_non_chocolate_for_chocolate_focus,
     demote_non_floral_for_flower_intent,
     demote_off_focus_products,
@@ -260,10 +261,27 @@ def test_refine_last_search_by_budget_filters_chocolate_and_drops_over_budget() 
     assert "card" not in {item["id"] for item in refined}
 
 
-def test_refine_last_search_by_budget_returns_none_without_focus_match() -> None:
+def test_refine_last_search_by_budget_falls_back_to_in_budget_without_focus_match() -> None:
+    """When focus matches nothing, still return in-budget items (avoid MCP loop)."""
     products = [
         _product("card", 1200.0, name="Greeting Card"),
         _product("voucher", 5000.0, name="Gift Voucher"),
+        _product("over", 9000.0, name="Luxury Hamper"),
+    ]
+    refined = refine_last_search_by_budget(
+        products,
+        budget_max=6000.0,
+        currency="LKR",
+        session_product_focus="chocolate",
+    )
+    assert refined is not None
+    assert {item["id"] for item in refined} == {"card", "voucher"}
+
+
+def test_refine_last_search_by_budget_returns_none_when_all_over_budget() -> None:
+    products = [
+        _product("choc1", 7500.0, name="Premium Chocolate Hamper"),
+        _product("choc2", 9800.0, name="Luxury Chocolate Box"),
     ]
     assert (
         refine_last_search_by_budget(
@@ -330,6 +348,36 @@ def test_sort_and_filter_strict_budget_hides_over_cap() -> None:
     ]
     curated = sort_and_filter_by_budget(products, 5000.0, "LKR", strict_in_budget=True)
     assert [item["id"] for item in curated] == ["in"]
+
+
+def test_demote_kids_themed_products_for_adult_recipient() -> None:
+    products = [
+        _product("adult", 4500.0, name="Chocolate Gift Box"),
+        _product("kids", 4200.0, name="Princess Chocolate Gift for Girls"),
+        _product("hero", 4300.0, name="Superhero Chocolate Bar for Boys"),
+    ]
+    curated = demote_kids_themed_products(
+        products,
+        session_recipient_hint="wife",
+        user_message="gift for wife",
+    )
+    assert curated[0]["id"] == "adult"
+    assert curated[-1]["id"] in {"kids", "hero"}
+
+
+def test_sort_and_filter_relaxes_strict_budget_for_occasion_turns() -> None:
+    products = [
+        _product("near", 5200.0),
+        _product("far", 9000.0),
+    ]
+    curated = sort_and_filter_by_budget(
+        products,
+        5000.0,
+        "LKR",
+        strict_in_budget=True,
+        session_occasion="Anniversary",
+    )
+    assert [item["id"] for item in curated] == ["near", "far"]
 
 
 def test_apply_birthday_cake_curation_boosts_chocolate_with_flavor_hint() -> None:
@@ -482,8 +530,7 @@ def test_apply_recipient_curation_demotes_for_him_on_wife_flow() -> None:
         _product("her", 5200.0, name="Chocolate Truffles Gift Box"),
     ]
     curated = apply_recipient_curation(products, "wife")
-    assert curated[0]["id"] == "her"
-    assert curated[-1]["id"] == "him"
+    assert [item["id"] for item in curated] == ["her"]
 
 
 def test_curate_carousel_products_strict_budget_excludes_noise() -> None:
@@ -527,8 +574,8 @@ def test_apply_recipient_curation_drops_for_him_on_wife_when_enough_remain() -> 
     assert len(curated) >= 3
 
 
-def test_apply_recipient_curation_falls_back_to_demote_when_few_remain() -> None:
-    """Fall back to demote-only when dropping would leave fewer than 3 items."""
+def test_apply_recipient_curation_hard_drops_dad_when_few_remain() -> None:
+    """Wife flow: Dad/for-him titles are hard-dropped even when fewer than 3 remain."""
     products = [
         _product("dad1", 4500.0, name="Gift for Dad Combo"),
         _product("her1", 5200.0, name="Chocolate Gift Box"),
@@ -536,9 +583,38 @@ def test_apply_recipient_curation_falls_back_to_demote_when_few_remain() -> None
     ]
     curated = apply_recipient_curation(products, "wife")
     ids = [item["id"] for item in curated]
-    # 2 preferred items — fallback: demoted item appended at end
-    assert ids[-1] == "dad1", "mismatched item falls to end on demote fallback"
-    assert len(curated) == 3
+    assert "dad1" not in ids
+    assert ids == ["her1", "her2"]
+
+
+def test_demote_wrong_flower_color_blush_demotes_red() -> None:
+    from lib.chat.product_curation import demote_wrong_flower_color
+
+    products = [
+        _product("red", 4500.0, name="6 Red Rose Bouquet"),
+        _product("blush", 5200.0, name="Blush Roses Combo"),
+        _product("pink", 4800.0, name="Pink Rose Arrangement"),
+    ]
+    curated = demote_wrong_flower_color(products, "Blush Roses combo")
+    ids = [item["id"] for item in curated]
+    assert ids[0] in ("blush", "pink")
+    assert ids[-1] == "red"
+
+
+def test_curate_carousel_blush_ranks_above_red() -> None:
+    products = [
+        _product("red", 4500.0, name="6 Red Rose Bouquet"),
+        _product("blush", 5200.0, name="Blush Roses Combo Hamper"),
+        _product("white", 4000.0, name="White Rose Bouquet"),
+    ]
+    curated = curate_carousel_products(
+        products,
+        query="Blush Roses combo",
+        budget_max=None,
+        currency="LKR",
+        session_product_focus="flowers",
+    )
+    assert curated[0]["id"] == "blush"
 
 
 def test_apply_recipient_curation_drops_for_her_on_dad_flow() -> None:

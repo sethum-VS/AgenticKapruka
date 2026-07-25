@@ -67,10 +67,14 @@ _BARE_WEEKDAY = re.compile(
 
 
 def _resolve_weekday(today: date, target_weekday: int, *, is_next: bool) -> date:
-    """Resolve this/next weekday relative to today in Colombo calendar."""
+    """Resolve this/next weekday relative to today in Colombo calendar.
+
+    ``this`` / bare upcoming: soonest occurrence (today if it matches).
+    ``next``: always the occurrence in the following week (skip the imminent one).
+    """
     days_ahead = (target_weekday - today.weekday()) % 7
-    if is_next and days_ahead == 0:
-        days_ahead = 7
+    if is_next:
+        days_ahead = 7 if days_ahead == 0 else days_ahead + 7
     return today + timedelta(days=days_ahead)
 
 
@@ -125,7 +129,7 @@ def parse_relative_delivery_date(text: str, *, today: date | None = None) -> dat
     bare_match = _BARE_WEEKDAY.search(normalized)
     if bare_match:
         weekday = _WEEKDAY_NAMES[bare_match.group(1).lower()]
-        return _resolve_weekday(today, weekday, is_next=True)
+        return _resolve_weekday(today, weekday, is_next=False)
 
     return None
 

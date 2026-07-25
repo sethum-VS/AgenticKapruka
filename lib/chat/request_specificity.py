@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from lib.chat.delivery_dates import is_ambiguous_weekday_phrase
 from lib.chat.intent_heuristics import (
@@ -18,6 +18,7 @@ from lib.chat.intent_heuristics import (
     Intent,
     classify_routing_guard,
     is_bare_category_pivot,
+    is_budget_refinement_message,
     is_budgeted_gift_ideas_message,
     is_category_browse_message,
     is_guest_checkout_question,
@@ -140,6 +141,8 @@ def should_bypass_specificity_scorer(
         return True
     if is_budgeted_gift_ideas_message(stripped):
         return True
+    if is_budget_refinement_message(stripped):
+        return True
     if classify_routing_guard(stripped) is not None:
         return True
     if stripped == PROCEED_CHECKOUT_MESSAGE:
@@ -203,8 +206,9 @@ def _is_minimal_product_only_turn(
     stripped = message.strip().strip("!.?,")
     if not stripped:
         return False
+    # Bare category pivots with a named product type proceed to search (not clarify).
     if is_bare_category_pivot(message) is not None:
-        return True
+        return False
     if _BARE_CATEGORY_REPLY.match(stripped):
         return True
     tokens = re.findall(r"[a-z']+", stripped.lower())
@@ -310,36 +314,62 @@ def _meta_delivery_date(meta: IntentMetadata) -> str | None:
     return None
 
 
+def _known_delivery_city(
+    meta: IntentMetadata,
+    session_delivery_city: str | None,
+) -> str | None:
+    """Resolve a delivery city from the caller's session hint or this turn's metadata."""
+    if isinstance(session_delivery_city, str) and session_delivery_city.strip():
+        return session_delivery_city.strip()
+    target = meta.get("target_city")
+    if isinstance(target, str) and target.strip():
+        return target.strip()
+    return None
+
+
 def is_delivery_only_inquiry(
     message: str,
     *,
     intent_metadata: IntentMetadata | None = None,
+    session_delivery_city: str | None = None,
 ) -> bool:
     """True when the turn is only about delivery area/date/fees, not product discovery."""
+    from lib.chat.delivery_dates import is_delivery_date_only_message
     from lib.chat.query_preprocessor import (
         QueryPreprocessor,
         _has_perishable_gift_intent,
     )
 
     meta: IntentMetadata = intent_metadata or QueryPreprocessor().process(message)
-    if not meta.get("requires_delivery_validation"):
-        return False
     stripped = message.strip()
     if _has_perishable_gift_intent(stripped) or contains_product_id(stripped):
+        return False
+    # A date-only follow-up ("next Sunday") with a session-bound city is still
+    # delivery-only even though the message alone carries no city token — so
+    # requires_delivery_validation is False and _score_delivery_dimension can't
+    # see the city. Treat it as delivery-only using the caller's session city.
+    known_city = _known_delivery_city(meta, session_delivery_city)
+    date_only_followup = bool(known_city) and is_delivery_date_only_message(stripped)
+    if not meta.get("requires_delivery_validation") and not date_only_followup:
         return False
     delivery_score = _score_delivery_dimension(
         stripped,
         intent_metadata=meta,
         session_delivery_date=_meta_delivery_date(meta),
     )
-    if delivery_score < 1.0:
+    if delivery_score < 1.0 and not date_only_followup:
         return False
+    # Ignore sticky session flavor/focus when classifying delivery-only turns —
+    # otherwise a prior chocolate/cake thread bumps product_score to 0.5 via
+    # intent_metadata.session_flavor_hint and the turn wrongly re-enters search.
+    delivery_meta = dict(meta)
+    delivery_meta.pop("session_flavor_hint", None)
     product_score = _score_product_dimension(
         stripped,
         session_product_focus=None,
         session_flavor_hint=None,
         session_recipient_hint=None,
-        intent_metadata=meta,
+        intent_metadata=delivery_meta,  # type: ignore[arg-type]
     )
     occasion_score = _score_occasion_dimension(
         stripped,
@@ -513,6 +543,8 @@ def score_request_specificity(
         and dimension_scores.get("occasion", 0.0) < 0.5
         and dimension_scores.get("budget", 0.0) < 1.0
         and delivery_score < 1.0
+        # Named product categories are enough to browse; occasion is a soft chip later.
+        and not _PRODUCT_CATEGORY_RE.search(stripped)
     ):
         band = "clarify"
     if dimension_scores.get("product", 0.0) >= 1.0 and delivery_score >= 1.0:
@@ -522,6 +554,9 @@ def score_request_specificity(
     if is_category_browse_message(stripped):
         band = "proceed"
     if _is_explicit_product_browse(stripped):
+        band = "proceed"
+    # Named category (flowers/cakes/roses/…) is enough to search without occasion.
+    if _PRODUCT_CATEGORY_RE.search(stripped) and dimension_scores.get("product", 0.0) >= 1.0:
         band = "proceed"
     standalone_tokens = re.findall(r"[a-z']+", stripped.lower())
     if (
@@ -656,7 +691,9 @@ async def refine_specificity_with_llm(
     missing = refinement.missing_dimension or heuristic.missing_dimension
     question = None
     if refinement.band in ("clarify", "ambiguous"):
-        question = _build_clarifying_question(missing, is_situational=bool(meta.get("is_situational")))
+        question = _build_clarifying_question(
+            missing, is_situational=bool(meta.get("is_situational"))
+        )
 
     return SpecificityResult(
         score=refinement.score,

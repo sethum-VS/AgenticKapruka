@@ -5,9 +5,13 @@ from __future__ import annotations
 import pytest
 
 from app.config import Settings
-from graphs.model_router import select_model, select_model_tier
 from graphs.state import AgentState
-from lib.chat.model_router import select_intent_model, select_rewrite_model, select_specialized_model
+from lib.chat.model_router import (
+    select_intent_model,
+    select_rewrite_model,
+    select_specialized_model,
+)
+
 
 def _state(**overrides: object) -> AgentState:
     base: AgentState = {
@@ -16,6 +20,7 @@ def _state(**overrides: object) -> AgentState:
     }
     base.update(overrides)  # type: ignore[typeddict-item]
     return base
+
 
 def _nim_settings(**overrides: object) -> Settings:
     base = {

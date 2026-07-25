@@ -171,14 +171,16 @@ def merge_preferences_into_hybrid_context(
 
     merged["preferences"] = preferences
     hints: dict[str, str] = dict(merged.get("hints") or {})
-    if category := preferences.get("favorite_category"):
-        hints["category"] = category
+    # On topic pivot, do not re-apply sticky Zep category/occasion into search hints.
+    if not topic_pivot:
+        if category := preferences.get("favorite_category"):
+            hints["category"] = category
+        if occasion := preferences.get("past_occasion"):
+            lowered_message = user_message.lower()
+            occasion_in_message = occasion.lower() in lowered_message
+            if occasion_in_message:
+                hints["occasion"] = occasion
     if currency := preferences.get("currency"):
         hints["currency"] = currency
-    if occasion := preferences.get("past_occasion"):
-        lowered_message = user_message.lower()
-        occasion_in_message = occasion.lower() in lowered_message
-        if not topic_pivot and occasion_in_message:
-            hints["occasion"] = occasion
     merged["hints"] = hints
     return merged

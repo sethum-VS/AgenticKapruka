@@ -7,6 +7,7 @@ from evals.intent_heuristics import infer_intent_from_message
 from lib.chat.intent_heuristics import (
     classify_routing_guard,
     extract_cart_product_phrase,
+    extract_search_and_add_phrase,
     is_cart_add_trigger,
     is_checkout_trigger,
     is_order_intent_message,
@@ -14,6 +15,12 @@ from lib.chat.intent_heuristics import (
     is_topic_pivot_message,
     is_tracking_guard,
 )
+
+
+def test_cart_add_trigger_matches_add_and_checkout_combo() -> None:
+    assert is_cart_add_trigger("add chocolate cake and checkout")
+    assert is_cart_add_trigger("add the roses bouquet and proceed")
+    assert classify_routing_guard("add chocolate cake and checkout") == "cart"
 
 
 def test_cart_add_trigger_matches_add_and_put_phrases() -> None:
@@ -32,6 +39,23 @@ def test_extract_cart_product_phrase() -> None:
         "the Blush Roses combo"
     )
     assert extract_cart_product_phrase("put chocolate cake in my cart") == "chocolate cake"
+
+
+def test_cart_add_trigger_matches_compound_search_and_add() -> None:
+    assert is_cart_add_trigger("Show Blush Roses and add that to cart")
+    assert is_cart_add_trigger("Show Blush Roses and add that")
+    assert is_cart_add_trigger("find the chocolate hamper and add it to my cart")
+    assert classify_routing_guard("Show Blush Roses and add that") == "cart"
+
+
+def test_extract_search_and_add_phrase_prefers_named_product() -> None:
+    assert extract_search_and_add_phrase("Show Blush Roses and add that to cart") == "Blush Roses"
+    assert extract_search_and_add_phrase("find the chocolate hamper and add it") == (
+        "the chocolate hamper"
+    )
+    assert extract_search_and_add_phrase("add that to my cart") is None
+    # Compound phrase takes priority over the deictic in the generic extractor.
+    assert extract_cart_product_phrase("Show Blush Roses and add that to cart") == "Blush Roses"
 
 
 def test_checkout_trigger_excludes_add_to_cart_substring() -> None:
@@ -54,6 +78,14 @@ def test_classify_routing_guard_priority_cart_before_checkout() -> None:
     assert classify_routing_guard("Proceed to checkout") == "checkout"
     assert classify_routing_guard("where is order VIMP123") == "tracking"
     assert classify_routing_guard("view cart") == "checkout"
+
+
+def test_classify_routing_guard_bare_ordinal_with_carousel() -> None:
+    assert classify_routing_guard("number 1") is None
+    assert classify_routing_guard("number 1", has_carousel=True) == "cart"
+    assert classify_routing_guard("the first one", has_carousel=True) == "cart"
+    assert extract_cart_product_phrase("number 1") == "number 1"
+    assert extract_cart_product_phrase("the first one") == "the first one"
 
 
 def test_infer_intent_add_to_cart_is_cart_not_checkout() -> None:

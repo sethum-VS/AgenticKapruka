@@ -25,6 +25,7 @@ from lib.redis.cart import (
     update_quantity,
 )
 from lib.redis.client import RedisClient
+from lib.redis.product_snapshot import get_product_snapshot
 from lib.redis.session import get_session_currency
 
 router = APIRouter()
@@ -131,21 +132,46 @@ async def cart_add(
             )
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except KaprukaError as exc:
-        if _is_htmx_request(request):
+        # Prefer a recent search carousel snapshot over failing the add hard.
+        snapshot = await get_product_snapshot(
+            redis_client,
+            product_id,
+            currency=currency,
+        )
+        if snapshot is not None:
+            logger.info(
+                "cart_add: using search snapshot for %s after get_product failure (%s)",
+                product_id,
+                exc.code,
+            )
+            product = snapshot
+        elif _is_htmx_request(request):
             return await _cart_add_error_response(
                 redis_client,
                 thread_id,
                 new_cookie=new_cookie,
                 product_id=product_id,
                 error_code=exc.code,
-                message=human_readable_message(exc),
+                message=("We couldn't reach the catalog just now. Please try again in a moment."),
                 quantity=quantity,
                 icing_text=icing_text,
             )
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        else:
+            raise HTTPException(status_code=502, detail=exc.message) from exc
     except Exception:
         logger.warning("cart_add get_product failed for %s", product_id, exc_info=True)
-        if _is_htmx_request(request):
+        snapshot = await get_product_snapshot(
+            redis_client,
+            product_id,
+            currency=currency,
+        )
+        if snapshot is not None:
+            logger.info(
+                "cart_add: using search snapshot for %s after unexpected get_product error",
+                product_id,
+            )
+            product = snapshot
+        elif _is_htmx_request(request):
             return await _cart_add_error_response(
                 redis_client,
                 thread_id,
@@ -156,7 +182,8 @@ async def cart_add(
                 quantity=quantity,
                 icing_text=icing_text,
             )
-        raise
+        else:
+            raise
 
     if not product.in_stock:
         if _is_htmx_request(request):

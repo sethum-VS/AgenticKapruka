@@ -9,7 +9,28 @@
 (function () {
   const CHAT_FORM_ID = "chat-form";
   const CHAT_STREAM_PATH = "/chat/stream";
-  const CHAT_STREAM_TIMEOUT_MS = 90_000;
+  const CHAT_STREAM_TIMEOUT_BUFFER_MS = 10_000;
+  const CHAT_STREAM_TIMEOUT_DEFAULT_MS = 130_000;
+
+  let chatStreamController = null;
+  let chatStreamAbortReason = null;
+
+  function getChatStreamTimeoutMs(form) {
+    const raw = form?.dataset?.chatTimeoutMs;
+    const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed + CHAT_STREAM_TIMEOUT_BUFFER_MS;
+    }
+    return CHAT_STREAM_TIMEOUT_DEFAULT_MS;
+  }
+
+  function abortChatStream(reason) {
+    chatStreamAbortReason = reason || "new-session";
+    chatStreamController?.abort();
+  }
+
+  window.abortChatStream = abortChatStream;
+  window.abortActiveChatStream = abortChatStream;
 
   function chatDebugEnabled(form) {
     return form?.dataset?.chatDebug === "true";
@@ -157,16 +178,41 @@
     );
   }
 
-  const STATUS_MIN_VISIBLE_MS = 800;
-  const DEFAULT_LOADING_TEXT = "Sending…";
-  let statusShownAt = 0;
-  let statusFlushTimer = null;
+  const STATUS_HEARTBEAT_MS = 9000;
+  const DEFAULT_LOADING_TEXT = "Searching our catalog…";
+  const HEARTBEAT_LOADING_TEXT = "Still searching…";
+  let statusHeartbeatTimer = null;
+  let lastStatusEventAt = 0;
 
   function loadingIndicatorSpan(indicator) {
     return (
       indicator.querySelector('[data-testid="chat-loading-text"]') ||
       indicator.querySelector("span")
     );
+  }
+
+  function clearStatusHeartbeat() {
+    if (statusHeartbeatTimer) {
+      clearTimeout(statusHeartbeatTimer);
+      statusHeartbeatTimer = null;
+    }
+  }
+
+  function scheduleStatusHeartbeat() {
+    clearStatusHeartbeat();
+    statusHeartbeatTimer = setTimeout(() => {
+      statusHeartbeatTimer = null;
+      const form = findChatForm();
+      if (!form || !form.classList.contains("htmx-request")) {
+        return;
+      }
+      if (Date.now() - lastStatusEventAt < STATUS_HEARTBEAT_MS) {
+        scheduleStatusHeartbeat();
+        return;
+      }
+      updateLoadingStatusText(HEARTBEAT_LOADING_TEXT);
+      scheduleStatusHeartbeat();
+    }, STATUS_HEARTBEAT_MS);
   }
 
   function updateLoadingStatusText(text) {
@@ -218,12 +264,32 @@
     return text || null;
   }
 
+  function scrollLastCarouselAboveComposer() {
+    const messagesRoot = document.getElementById("chat-messages");
+    if (!messagesRoot) {
+      return;
+    }
+    const carousels = messagesRoot.querySelectorAll('[data-testid="product-carousel"]');
+    const last = carousels[carousels.length - 1];
+    if (!last) {
+      return;
+    }
+    const card = last.querySelector('[data-testid="product-card"]');
+    const target = card || last;
+    try {
+      target.scrollIntoView({ block: "end", behavior: "smooth", inline: "nearest" });
+    } catch (_err) {
+      target.scrollIntoView(false);
+    }
+  }
+
   function swapCarouselHtml(html) {
     htmx.swap(document.body, html, { swapStyle: "none" });
     const messagesRoot = document.getElementById("chat-messages");
     if (messagesRoot && containsProductCarousel(html)) {
       pruneStaleCarousels(messagesRoot);
       removePendingAssistantBubbles();
+      scrollLastCarouselAboveComposer();
     }
     document.body.dispatchEvent(
       new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
@@ -235,33 +301,12 @@
     if (statusText) {
       updateLoadingStatusText(statusText);
     }
-
-    const now = Date.now();
-    const apply = () => {
-      htmx.swap(document.body, html, { swapStyle: "none" });
-      document.body.dispatchEvent(
-        new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
-      );
-      statusShownAt = Date.now();
-    };
-
-    const elapsed = now - statusShownAt;
-    if (statusShownAt > 0 && elapsed < STATUS_MIN_VISIBLE_MS) {
-      if (statusFlushTimer) {
-        clearTimeout(statusFlushTimer);
-      }
-      statusFlushTimer = setTimeout(() => {
-        statusFlushTimer = null;
-        const form = findChatForm();
-        if (!form || !form.classList.contains("htmx-request")) {
-          return;
-        }
-        apply();
-      }, STATUS_MIN_VISIBLE_MS - elapsed);
-      return;
-    }
-
-    apply();
+    lastStatusEventAt = Date.now();
+    // Apply bubble status immediately so Searching copy is never deferred away.
+    htmx.swap(document.body, html, { swapStyle: "none" });
+    document.body.dispatchEvent(
+      new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }),
+    );
   }
 
   function toggleRequestState(form, active) {
@@ -272,6 +317,8 @@
       form.classList.add("htmx-request");
       indicator?.classList.add("htmx-request", "chat-loading");
       showLoadingIndicator(DEFAULT_LOADING_TEXT);
+      lastStatusEventAt = Date.now();
+      scheduleStatusHeartbeat();
       if (submitButton) {
         submitButton.disabled = true;
       }
@@ -280,11 +327,8 @@
         messageInput.value = "";
       }
     } else {
-      if (statusFlushTimer) {
-        clearTimeout(statusFlushTimer);
-        statusFlushTimer = null;
-      }
-      statusShownAt = 0;
+      clearStatusHeartbeat();
+      lastStatusEventAt = 0;
       form.classList.remove("htmx-request");
       indicator?.classList.remove("htmx-request", "chat-loading");
       hideLoadingIndicator();
@@ -303,18 +347,37 @@
     }
   }
 
-  function showStreamFailureMessage() {
+  function appendStreamNoticeMessage(testId, message) {
     const messages = document.getElementById("chat-messages");
     if (!messages) {
       return;
     }
     const bubble = document.createElement("div");
     bubble.className = "chat-message assistant";
-    bubble.setAttribute("data-testid", "chat-stream-error");
-    bubble.innerHTML =
-      '<p class="text-body-sm text-on-surface-variant">Connection interrupted. Please send your message again.</p>';
+    bubble.setAttribute("data-testid", testId);
+    bubble.innerHTML = `<p class="text-body-sm text-on-surface-variant">${message}</p>`;
     messages.appendChild(bubble);
     messages.scrollTop = messages.scrollHeight;
+  }
+
+  const STREAM_TROUBLE_MESSAGE =
+    "That took too long — please try again. Your last results are still above if you want to refine the budget or pick another gift.";
+
+  function showStreamFailureMessage() {
+    appendStreamNoticeMessage("chat-stream-error", STREAM_TROUBLE_MESSAGE);
+  }
+
+  function showStreamTimeoutMessage() {
+    appendStreamNoticeMessage("chat-stream-timeout", STREAM_TROUBLE_MESSAGE);
+  }
+
+  function clearOrphanedPendingBubblesWithNotice() {
+    const pending = document.querySelectorAll('[id^="assistant-stream-"]');
+    if (!pending.length) {
+      return;
+    }
+    removePendingAssistantBubbles();
+    appendStreamNoticeMessage("chat-stream-orphan-cleared", STREAM_TROUBLE_MESSAGE);
   }
 
   function registerAfterRequestBackup() {
@@ -325,6 +388,50 @@
       }
       toggleRequestState(elt, false);
     });
+  }
+
+  function handleStreamError(form, error) {
+    const reason = chatStreamAbortReason;
+    chatStreamAbortReason = null;
+
+    if (error?.name === "AbortError") {
+      if (reason === "new-session") {
+        chatDebugLog(form, "stream aborted for new session");
+        toggleRequestState(form, false);
+        return true;
+      }
+      if (reason === "timeout") {
+        // Server soft-timeout already replaced the pending bubble and sent done —
+        // avoid a duplicate client-side timeout notice.
+        const pendingLeft = document.querySelectorAll('[id^="assistant-stream-"]').length;
+        const alreadyHasNotice = Boolean(
+          document.querySelector(".chat-stream-timeout, .chat-stream-error"),
+        );
+        removePendingAssistantBubbles();
+        if (pendingLeft > 0 && !alreadyHasNotice) {
+          showStreamTimeoutMessage();
+        }
+        chatDebugLog(form, "stream timed out");
+        toggleRequestState(form, false);
+        document.body.dispatchEvent(
+          new CustomEvent("htmx:afterRequest", {
+            detail: { elt: form, successful: false },
+          }),
+        );
+        return true;
+      }
+    }
+
+    removePendingAssistantBubbles();
+    showStreamFailureMessage();
+    chatDebugLog(form, "stream failed", error);
+    toggleRequestState(form, false);
+    document.body.dispatchEvent(
+      new CustomEvent("htmx:afterRequest", {
+        detail: { elt: form, successful: false },
+      }),
+    );
+    return false;
   }
 
   async function streamChatPost(form, formData) {
@@ -344,10 +451,17 @@
       message: outboundMessage,
     });
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), CHAT_STREAM_TIMEOUT_MS);
+    const controller = new AbortController();
+    chatStreamController = controller;
+    chatStreamAbortReason = null;
+    let streamReceivedDone = false;
+    const timeoutMs = getChatStreamTimeoutMs(form);
+    const timeoutId = setTimeout(() => {
+      chatStreamAbortReason = "timeout";
+      controller.abort();
+    }, timeoutMs);
 
+    try {
       const response = await fetch(connectPath, {
         method: "POST",
         body: formData,
@@ -383,6 +497,7 @@
 
         for (const event of parsed.events) {
           if (event.eventName === "done") {
+            streamReceivedDone = true;
             toggleRequestState(form, false);
             continue;
           }
@@ -407,6 +522,7 @@
         const parsed = parseSseChunk(`${buffer}\n\n`);
         for (const event of parsed.events) {
           if (event.eventName === "done") {
+            streamReceivedDone = true;
             toggleRequestState(form, false);
             continue;
           }
@@ -423,6 +539,7 @@
         }
       }
 
+      clearOrphanedPendingBubblesWithNotice();
       chatDebugLog(form, "stream complete");
       document.body.dispatchEvent(
         new CustomEvent("htmx:afterRequest", {
@@ -431,17 +548,21 @@
       );
       form.reset();
     } catch (error) {
-      removePendingAssistantBubbles();
-      showStreamFailureMessage();
-      chatDebugLog(form, "stream failed", error);
-      toggleRequestState(form, false);
-      document.body.dispatchEvent(
-        new CustomEvent("htmx:afterRequest", {
-          detail: { elt: form, successful: false },
-        }),
-      );
-      throw error;
+      clearTimeout(timeoutId);
+      if (streamReceivedDone && error?.name === "AbortError") {
+        // Server already finished; ignore late client abort.
+        chatStreamAbortReason = null;
+        toggleRequestState(form, false);
+        return;
+      }
+      const handled = handleStreamError(form, error);
+      if (!handled) {
+        throw error;
+      }
     } finally {
+      if (chatStreamController === controller) {
+        chatStreamController = null;
+      }
       toggleRequestState(form, false);
     }
   }

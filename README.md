@@ -8,7 +8,7 @@
 
 An agentic shopping assistant for [Kapruka](https://www.kapruka.com), Sri Lanka's largest e-commerce platform. Customers browse gifts, get personalized recommendations, complete multi-step checkout in natural language, and track deliveries — all through a single chat interface backed by live Kapruka product data.
 
-AgenticKapruka combines conversational AI (Google Gemini on Vertex AI), a knowledge graph of occasions and gift categories (Neo4j GraphRAG), long-term customer memory (Zep), and the Kapruka MCP server for real-time catalog, delivery, and order APIs.
+AgenticKapruka combines conversational AI (NVIDIA NIM), a knowledge graph of occasions and gift categories (Neo4j GraphRAG), long-term customer memory (Zep), and the Kapruka MCP server for real-time catalog, delivery, and order APIs.
 
 ---
 
@@ -69,7 +69,7 @@ graph TD
     end
 
     subgraph External [External Services]
-        VertexAI[Google Vertex AI Gemini]
+        NvidiaNIM[NVIDIA NIM LLM and embeddings]
         KaprukaMCP[Kapruka MCP Server]
         KaprukaAPI[Kapruka.com Catalog and Orders]
     end
@@ -96,8 +96,8 @@ graph TD
     CheckoutGraph --> Redis
     MCPTools --> KaprukaMCP
     KaprukaMCP --> KaprukaAPI
-    IntentNode --> VertexAI
-    Generate --> VertexAI
+    IntentNode --> NvidiaNIM
+    Generate --> NvidiaNIM
     NetworkX --> Neo4j
     Health --> Redis
     Health --> Neo4j
@@ -113,7 +113,7 @@ Each customer message triggers a LangGraph run that classifies intent, retrieves
 
 ### Intent Classification and Routing Guards
 
-Keyword guards and Gemini 2.5 Flash classify every message into one of five intents:
+Keyword guards and an NIM Flash-tier classifier route every message into one of five intents:
 
 - **discovery** — browsing, searching, product questions (default shopping path)
 - **cart** — "add … to cart", carousel ordinal references ("the first one")
@@ -129,7 +129,7 @@ Routing is deterministic after classification: checkout enters the checkout sub-
 
 ### HybridRAG Context Retrieval
 
-For discovery intents, the system embeds the user's query (Vertex AI `gemini-embedding-2`), vector-searches Neo4j gift-category ontology, traverses related occasions and product types, and merges Zep-stored preferences (currency, occasions, past interests). The result guides MCP search parameters — for example, narrowing to "birthday cakes" instead of searching the entire catalog.
+For discovery intents, the system embeds the user's query (NVIDIA `nv-embed-v1`), vector-searches Neo4j gift-category ontology, traverses related occasions and product types, and merges Zep-stored preferences (currency, occasions, past interests). The result guides MCP search parameters — for example, narrowing to "birthday cakes" instead of searching the entire catalog.
 
 ### Bounded Agent Loop and Product Curation
 
@@ -153,9 +153,9 @@ Live Kapruka data flows through a unified service facade with per-IP rate limiti
 
 ### Response Generation and Memory
 
-Gemini synthesizes a conversational reply strictly from tool results (no hallucinated prices or stock). Product results render as HTMX carousels; tracking renders status cards. After each turn, salient facts are written back to Zep for future personalization.
+NIM synthesizes a conversational reply strictly from tool results (no hallucinated prices or stock). Product results render as HTMX carousels; tracking renders status cards. After each turn, salient facts are written back to Zep for future personalization.
 
-Model routing escalates to Gemini 2.5 Pro for checkout review and complex multi-tool turns.
+Model routing uses the configured NIM chat model for discovery, cart, and checkout review turns.
 
 ---
 
@@ -167,7 +167,7 @@ Checkout runs as a separate LangGraph with seven ordered steps. Customers cannot
 cart → delivery_city → delivery_date → recipient → sender → review → finalize
 ```
 
-Redis holds cart items and checkout field state per session. The review step uses Pro-tier Gemini to summarize the order before generating a secure Kapruka payment link.
+Redis holds cart items and checkout field state per session. The review step uses NIM to summarize the order before generating a secure Kapruka payment link.
 
 Details: [docs/howto-complete-checkout.md](docs/howto-complete-checkout.md)
 
@@ -189,7 +189,7 @@ An optional cuGraph GPU path exists for local development only (`Dockerfile.cuda
 | Redis Stack | Latest | Sessions, cart, LangGraph checkpointer (RediSearch required) |
 | Neo4j AuraDB | 5.x | GraphRAG ontology and vector search |
 | Zep Cloud | 2.x | Cross-session conversational memory |
-| Google Cloud | Active project | Vertex AI for Gemini chat and embeddings |
+| NVIDIA NIM | API key | Chat completions (`NVIDIA_LLM_MODEL`) and GraphRAG embeddings (`nv-embed-v1`) |
 | Kapruka MCP | Public endpoint | Default: `https://mcp.kapruka.com/mcp` |
 
 ---
@@ -316,7 +316,7 @@ lib/
 │                           # master_flow, routing, product curation,
 │                           # support FAQ, off-topic guards
 ├── analytics/              # NetworkX Louvain recommendation worker
-└── genai/                  # Vertex AI Gemini client factory
+└── genai/                  # NVIDIA NIM completions + embeddings client
 ```
 
 ---

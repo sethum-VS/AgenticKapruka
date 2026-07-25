@@ -6,14 +6,17 @@ import logging
 import re
 from typing import Any, Literal, cast
 
-
 from langchain_core.messages import BaseMessage, HumanMessage
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from graphs.state import AgentState, Intent
 from lib.chat.delivery_dates import normalize_delivery_date
-from lib.chat.intent_heuristics import classify_routing_guard
+from lib.chat.intent_heuristics import (
+    classify_routing_guard,
+    is_bare_category_pivot,
+    is_budget_refinement_message,
+)
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import FLASH_MODEL
 from lib.chat.off_topic import is_impossible_catalog_request, is_off_topic_message
@@ -86,6 +89,9 @@ Inputs describe:
 Rules:
 - Do not invent product facts or catalog results.
 - Prefer decision=clarify over guessing when the mismatch is ambiguous.
+- Budget-only follow-ups with an existing carousel (e.g. "under 6000", "keep it
+  under 5000 rupees") must use decision=proceed — never clarify, pivot, or
+  context_reset. Downstream filters the carousel in-memory.
 - decision=pivot or redirect with context_reset=true when stale carousel/search context
   should be cleared for a fresh discovery turn.
 - checkout_action=exit only when the user explicitly cancels or changes topic away
@@ -160,6 +166,8 @@ def message_addresses_clarification_dimension(
     state: AgentState,
 ) -> bool:
     """True when the message satisfies the awaited specificity dimension."""
+    if is_bare_category_pivot(message) is not None:
+        return True
     specificity = score_request_specificity(
         message,
         session_product_focus=state.get("session_product_focus"),
@@ -211,10 +219,16 @@ def _long_session_drift_signals(
     user_message: str,
     intent_metadata: IntentMetadata | dict[str, Any],
 ) -> bool:
+    # Budget-only refine is handled by the in-memory filter — never treat as drift.
+    focus = state.get("session_product_focus")
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return False
     return (
         (
             extract_budget(user_message) is not None
             and not intent_metadata.get("discovery_context_reset")
+            and not is_budget_refinement_message(user_message, session_product_focus=focus_str)
         )
         or (_RECIPIENT_RE.search(user_message) is not None and _has_stale_discovery_context(state))
         or (bool(intent_metadata.get("topic_pivot")) and _has_stale_discovery_context(state))
@@ -231,12 +245,27 @@ def should_invoke_master_flow(
     if not cfg.master_flow_enabled:
         return False, "feature_disabled"
 
+    if state.get("specificity_band") == "clarify":
+        return False, "specificity_clarify_fast_path"
+
     messages = state.get("messages") or []
     user_message = _extract_latest_user_message(messages)
-    if classify_routing_guard(user_message) is not None:
+    focus = state.get("session_product_focus")
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return False, "budget_refinement_fast_path"
+    if (
+        classify_routing_guard(
+            user_message,
+            has_carousel=_has_stale_discovery_context(state),
+        )
+        is not None
+    ):
         return False, "routing_guard_fast_path"
     if is_off_topic_message(user_message) or is_impossible_catalog_request(user_message):
         return False, "off_topic_fast_path"
+    if is_bare_category_pivot(user_message) is not None:
+        return False, "bare_category_pivot_fast_path"
     intent_metadata: IntentMetadata | dict[str, Any] = state.get("intent_metadata") or {}
     active_flow = infer_active_flow(state)
 
@@ -263,9 +292,11 @@ def should_invoke_master_flow(
     ):
         return True, "checkout_active_with_discovery_intent"
 
+    session_city = state.get("session_delivery_city_canonical")
     if is_delivery_only_inquiry(
         user_message,
         intent_metadata=cast(IntentMetadata | None, intent_metadata or None),
+        session_delivery_city=session_city if isinstance(session_city, str) else None,
     ):
         if _has_stale_discovery_context(state):
             return True, "delivery_only_with_stale_carousel"

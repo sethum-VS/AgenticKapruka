@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -55,11 +55,24 @@ def test_infer_active_flow(fields: dict[str, object], expected: str) -> None:
 def test_should_invoke_awaiting_delivery_date_without_date() -> None:
     state = _state(
         session_awaiting_delivery_date=True,
-        messages=[HumanMessage(content="show me cakes instead")],
+        messages=[HumanMessage(content="ok sounds good")],
     )
     invoke, reason = should_invoke_master_flow(state)
     assert invoke is True
     assert reason == "awaiting_delivery_date_without_parseable_date"
+
+
+def test_should_not_invoke_bare_category_pivot_with_stale_carousel() -> None:
+    """Fresh flowers / cakes pivots must search — not Flash-clarify over stale carousel."""
+    state = _state(
+        intent_metadata={"topic_pivot": True},
+        last_visible_products=[{"id": "old-cake"}],
+        session_search_query="anniversary cake",
+        messages=[HumanMessage(content="What about just normal fresh flowers?")],
+    )
+    invoke, reason = should_invoke_master_flow(state)
+    assert invoke is False
+    assert reason == "bare_category_pivot_fast_path"
 
 
 def test_should_invoke_awaiting_clarification_unanswered() -> None:
@@ -112,7 +125,8 @@ def test_should_invoke_topic_pivot_stale_carousel() -> None:
 
 def test_should_invoke_long_session_drift() -> None:
     messages = [HumanMessage(content=f"turn {i}") for i in range(8)]
-    messages.append(HumanMessage(content="gift for wife under 5000"))
+    # Recipient switch with stale carousel (no budget refine) still triggers drift.
+    messages.append(HumanMessage(content="actually for my sister"))
     state = _state(
         messages=messages,
         last_visible_products=[{"id": "stale"}],
@@ -120,6 +134,44 @@ def test_should_invoke_long_session_drift() -> None:
     invoke, reason = should_invoke_master_flow(state)
     assert invoke is True
     assert reason == "long_session_drift"
+
+
+def test_should_not_invoke_budget_refinement_long_session() -> None:
+    """Budget-only refine must skip master-flow even after many turns."""
+    messages = [HumanMessage(content=f"turn {i}") for i in range(8)]
+    messages.append(HumanMessage(content="under 6000"))
+    state = _state(
+        messages=messages,
+        last_visible_products=[{"id": "chocolate-1", "price": 5000}],
+        session_product_focus="chocolate",
+        session_budget_max=6000,
+    )
+    invoke, reason = should_invoke_master_flow(state)
+    assert invoke is False
+    assert reason == "budget_refinement_fast_path"
+
+
+def test_should_not_invoke_bare_category_normal_fresh_flowers() -> None:
+    state = _state(
+        messages=[HumanMessage(content="Normal fresh flowers?")],
+        last_visible_products=[{"id": "cake-1"}],
+        session_product_focus="cake",
+    )
+    invoke, reason = should_invoke_master_flow(state)
+    assert invoke is False
+    assert reason == "bare_category_pivot_fast_path"
+
+
+def test_should_not_invoke_when_specificity_band_is_clarify() -> None:
+    state = _state(
+        specificity_band="clarify",
+        agent_clarifying_question="Who is the gift for?",
+        checkout_state="delivery_city",
+        intent="discovery",
+    )
+    invoke, reason = should_invoke_master_flow(state)
+    assert invoke is False
+    assert reason == "specificity_clarify_fast_path"
 
 
 def test_should_not_invoke_when_feature_disabled() -> None:
@@ -223,27 +275,25 @@ async def test_invoke_master_flow_llm_fail_open() -> None:
 
 @pytest.mark.asyncio
 async def test_invoke_master_flow_llm_parses_response() -> None:
-    from google import genai
-
-    mock_client = MagicMock(spec=genai.Client)
-    response = MagicMock()
-    response.parsed = MasterFlowAlignment(
+    alignment = MasterFlowAlignment(
         decision="proceed",
         confidence=0.8,
         active_flow="free_discovery",
     )
-    response.text = ""
-    mock_client.models.generate_content.return_value = response
 
-    with patch("lib.chat.master_flow.generate_content_with_fallback", return_value=response):
+    with patch(
+        "lib.chat.master_flow.generate_content",
+        return_value=alignment,
+    ) as mock_generate:
         result = await invoke_master_flow_llm(
             _state(),
             active_flow="free_discovery",
             trigger_reason="test",
-            genai_client=mock_client,
+            genai_client=object(),
         )
     assert result is not None
     assert result.decision == "proceed"
+    mock_generate.assert_awaited_once()
 
 
 def test_route_after_master_flow_clarify_short_circuit() -> None:

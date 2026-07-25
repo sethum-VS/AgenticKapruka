@@ -12,6 +12,14 @@ from lib.neo4j.hybrid_context import extract_budget, extract_max_price
 
 Intent = Literal["discovery", "checkout", "tracking", "general", "cart"]
 
+_CART_ADD_AND_CHECKOUT_RE = re.compile(
+    r"\badd(?:\s+the)?\s+.+?\s+and\s+(?:checkout|check\s*out|proceed)\b",
+    re.I,
+)
+_CART_ADD_AND_PROCEED_RE = re.compile(
+    r"\badd\s+.+?\s+and\s+proceed\b",
+    re.I,
+)
 _CART_ADD_TO_PATTERN = re.compile(
     r"\badd\s+(.+?)\s+to\s+(?:my\s+)?cart\b",
     re.I,
@@ -23,6 +31,15 @@ _CART_PUT_IN_PATTERN = re.compile(
 # Bare "add [product]" without explicit "to cart" — anchored to avoid false positives
 _CART_ADD_BARE_PATTERN = re.compile(
     r"^(?:please\s+)?add\s+(?:the\s+)?(.+?)(?:\s+(?:please|now|for\s+me))?\s*[.!?]?\s*$",
+    re.I,
+)
+# Compound "show/find <product> and add that/it" — one utterance that both searches
+# and adds. Captures the named product so the deictic ("that"/"it") can be resolved
+# by searching first instead of refusing due to no prior carousel.
+_SEARCH_AND_ADD_PATTERN = re.compile(
+    r"\b(?:show|find|get|search(?:\s+for)?|look\s+for|see|pull\s+up)\s+"
+    r"(?:me\s+)?(?P<product>.+?)\s+and\s+(?:then\s+)?add\s+"
+    r"(?:that|it|this|them|those|one)\b",
     re.I,
 )
 
@@ -156,11 +173,26 @@ def is_cart_add_trigger(message: str) -> bool:
     text = message.strip()
     if not text:
         return False
+    if _CART_ADD_AND_CHECKOUT_RE.search(text) or _CART_ADD_AND_PROCEED_RE.search(text):
+        return True
     return bool(
         _CART_ADD_TO_PATTERN.search(text)
         or _CART_PUT_IN_PATTERN.search(text)
         or _CART_ADD_BARE_PATTERN.match(text)
+        or _SEARCH_AND_ADD_PATTERN.search(text)
     )
+
+
+def extract_search_and_add_phrase(message: str) -> str | None:
+    """Return the named product from a compound 'show <product> and add that' utterance."""
+    text = message.strip()
+    if not text:
+        return None
+    match = _SEARCH_AND_ADD_PATTERN.search(text)
+    if not match:
+        return None
+    phrase = match.group("product").strip(" .,!?:;\"'")
+    return phrase or None
 
 
 def extract_cart_product_phrase(message: str) -> str | None:
@@ -168,6 +200,11 @@ def extract_cart_product_phrase(message: str) -> str | None:
     text = message.strip()
     if not text:
         return None
+    # Compound "show <product> and add that" — prefer the named product over the
+    # deictic so the cart resolver can search for it directly.
+    compound = extract_search_and_add_phrase(text)
+    if compound:
+        return compound
     for pattern in (_CART_ADD_TO_PATTERN, _CART_PUT_IN_PATTERN):
         match = pattern.search(text)
         if match:
@@ -178,7 +215,31 @@ def extract_cart_product_phrase(message: str) -> str | None:
     if m:
         phrase = m.group(1).strip(" .,!?:;\"'")
         return phrase or None
+    # Bare ordinal reply after "which one?" disambiguation ("number 1", "the first one")
+    if is_bare_cart_ordinal_reply(text):
+        return text.strip(" .,!?:;\"'") or None
     return None
+
+
+def is_bare_cart_ordinal_reply(message: str) -> bool:
+    """True when the whole message is an ordinal pick (e.g. 'number 1', 'the first one')."""
+    from lib.chat.product_reference import looks_like_ordinal_reference
+
+    stripped = message.strip().strip(".,!?:;\"'")
+    if not stripped:
+        return False
+    return looks_like_ordinal_reference(stripped)
+
+
+def has_carousel_products(state: object) -> bool:
+    """True when session has visible or search products for ordinal cart resolution."""
+    if not isinstance(state, dict):
+        return False
+    for key in ("last_visible_products", "last_search_products"):
+        products = state.get(key) or []
+        if isinstance(products, list) and any(isinstance(item, dict) for item in products):
+            return True
+    return False
 
 
 def is_proceed_checkout_message(message: str) -> bool:
@@ -233,9 +294,15 @@ def is_checkout_trigger(message: str) -> bool:
     return any(token in lowered for token in _CHECKOUT_TRIGGER_TOKENS)
 
 
-def classify_routing_guard(message: str) -> Intent | None:
-    """Shared guard ordering: cart_add → proceed_checkout → tracking → checkout view."""
+def classify_routing_guard(
+    message: str,
+    *,
+    has_carousel: bool = False,
+) -> Intent | None:
+    """Shared guard ordering: cart_add → cart ordinal → proceed_checkout → tracking → checkout."""
     if is_cart_add_trigger(message):
+        return "cart"
+    if has_carousel and is_bare_cart_ordinal_reply(message):
         return "cart"
     if is_proceed_checkout_message(message):
         return "checkout"
@@ -251,12 +318,28 @@ _PRODUCT_CATEGORY_TOKENS = re.compile(
     r"hamper|voucher|gift|gifts|combo|combopack)\b",
     re.I,
 )
+# Hard product nouns — naming a *new* hard category exits budget-refine mode.
+_HARD_CATEGORY_TOKENS = re.compile(
+    r"\b(?:cake|cupcakes?|flower|flowers|rose|roses|bouquet|chocolate|chocolates|"
+    r"hamper|voucher|combo|combopack)\b",
+    re.I,
+)
+_SOFT_GIFT_CATEGORY_TOKENS = re.compile(r"\b(?:gift|gifts)\b", re.I)
 _TOPIC_PIVOT_PREFIX = re.compile(
     r"^(?:never\s*mind|nevermind|instead|actually|what\s+about)\b",
     re.I,
 )
 _BARE_CATEGORY_REPLY = re.compile(
     r"^(?:cakes?|flowers?|chocolates?|roses?|bouquets?|gifts?)\s*[!.?]*$",
+    re.I,
+)
+# Category-only browse with optional fillers (no nevermind/what-about required).
+_BARE_CATEGORY_UTTERANCE = re.compile(
+    r"^(?:(?:just|normal|fresh|some|only|regular)\s+)*"
+    r"(?:cakes?|cupcakes?|flowers?|roses?|bouquets?|chocolates?|gifts?)"
+    r"(?:\s+(?:just|normal|fresh|some|only|regular))*"
+    r"(?:\s+(?:please|pls))?"
+    r"$",
     re.I,
 )
 
@@ -268,19 +351,38 @@ def has_explicit_budget_constraint(
     topic_pivot: bool = False,
 ) -> bool:
     """True when the turn carries an explicit budget cap (strict carousel filter mode)."""
-    if topic_pivot:
-        return False
     stripped = message.strip()
     if not stripped:
         return False
+    # Budget refine / explicit turn budget always wins over a leaked topic_pivot.
     if extract_budget(stripped) is not None or extract_max_price(stripped) is not None:
         return True
     if is_budget_refinement_message(stripped):
         return True
+    if topic_pivot:
+        return False
     return is_budgeted_gift_ideas_message(stripped)
 
 
-def is_budget_refinement_message(message: str) -> bool:
+def _category_focus_from_tokens(message: str) -> str | None:
+    """Map hard/soft category nouns in a message to a session product focus."""
+    lowered = message.lower()
+    if re.search(r"\b(?:cup)?cakes?\b", lowered):
+        return "cake"
+    if re.search(r"\b(?:flower|flowers|rose|roses|bouquet)s?\b", lowered):
+        return "flowers"
+    if re.search(r"\b(?:chocolate|chocolates)\b", lowered):
+        return "chocolate"
+    if re.search(r"\bgifts?\b", lowered):
+        return "gift"
+    return None
+
+
+def is_budget_refinement_message(
+    message: str,
+    *,
+    session_product_focus: str | None = None,
+) -> bool:
     """True when the turn states a budget without naming a new product category."""
     stripped = message.strip()
     if not stripped or is_off_topic_message(stripped):
@@ -288,13 +390,27 @@ def is_budget_refinement_message(message: str) -> bool:
     has_budget = extract_budget(stripped) is not None or extract_max_price(stripped) is not None
     if not has_budget:
         return False
-    return not _PRODUCT_CATEGORY_TOKENS.search(stripped)
+    if not _PRODUCT_CATEGORY_TOKENS.search(stripped):
+        return True
+    # Soft/generic "gifts" alone keeps the same carousel topic.
+    if _SOFT_GIFT_CATEGORY_TOKENS.search(stripped) and not _HARD_CATEGORY_TOKENS.search(stripped):
+        return True
+    # Same hard category as the active session focus is a budget refine, not a pivot.
+    if session_product_focus:
+        named = _category_focus_from_tokens(stripped)
+        focus = session_product_focus.strip().lower()
+        if named is not None and named == focus:
+            return True
+    return False
 
 
 def is_topic_pivot_message(message: str) -> bool:
     """True when the customer abandons the prior topic for a new product category."""
     stripped = message.strip()
     if not stripped:
+        return False
+    # Budget-only refinements often start with "Actually…" but keep the same topic.
+    if is_budget_refinement_message(stripped):
         return False
     if _TOPIC_PIVOT_PREFIX.search(stripped):
         return True
@@ -317,25 +433,35 @@ def is_category_browse_message(message: str) -> bool:
     return any(token in lowered for token in _CATEGORY_BROWSE_TOKENS)
 
 
+def _is_bare_category_utterance(stripped: str) -> bool:
+    """True for category-only phrases like 'Normal fresh flowers?' (no pivot cue)."""
+    normalized = stripped.strip().strip("!.?")
+    if not normalized:
+        return False
+    return bool(_BARE_CATEGORY_UTTERANCE.match(normalized))
+
+
 def is_bare_category_pivot(message: str) -> str | None:
     """Return the bare category noun when a pivot is category-only (no occasion in turn)."""
     stripped = message.strip().strip("!.?")
-    if not stripped or not is_topic_pivot_message(message):
+    if not stripped:
+        return None
+    # Explicit pivot cues (nevermind/what about) OR bare category-only utterances.
+    if not is_topic_pivot_message(message) and not _is_bare_category_utterance(stripped):
         return None
     if re.search(r"\b(?:birthday|anniversary|wedding|valentine)\b", stripped, re.I):
         return None
-    if re.search(r"\b(?:for|under|below|mom|dad|wife|husband)\b", stripped, re.I):
+    # Recipient/budget constraints make this more than a bare category browse.
+    # Allow filler modifiers (just/normal/fresh/some) around the category noun.
+    if re.search(
+        r"\b(?:for|under|below)\b.+\b(?:mom|dad|wife|husband|mother|father|rupees?|rs\.?|lkr)\b"
+        r"|\b(?:mom|dad|wife|husband|mother|father)\b"
+        r"|\b(?:under|below)\s+\d+",
+        stripped,
+        re.I,
+    ):
         return None
-    lowered = stripped.lower()
-    if re.search(r"\b(?:cup)?cakes?\b", lowered):
-        return "cake"
-    if re.search(r"\b(?:flower|flowers|rose|roses|bouquet)s?\b", lowered):
-        return "flowers"
-    if re.search(r"\b(?:chocolate|chocolates)\b", lowered):
-        return "chocolate"
-    if re.search(r"\bgifts?\b", lowered):
-        return "gift"
-    return None
+    return _category_focus_from_tokens(stripped)
 
 
 def infer_intent_from_message(message: str) -> Intent:

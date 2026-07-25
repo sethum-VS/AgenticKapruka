@@ -2,20 +2,55 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from google import genai
 
 from lib.chat.request_specificity import (
     CLARIFY_THRESHOLD,
     PROCEED_THRESHOLD,
     SpecificityRefinement,
     SpecificityResult,
+    is_delivery_only_inquiry,
     refine_specificity_with_llm,
     score_request_specificity,
     should_bypass_specificity_scorer,
 )
+
+
+def test_is_delivery_only_inquiry_ignores_stale_session_flavor_hint() -> None:
+    """Prior chocolate/cake flavor must not block a pure delivery follow-up."""
+    assert is_delivery_only_inquiry(
+        "can you deliver to Kandy this Sunday?",
+        intent_metadata={
+            "requires_delivery_validation": True,
+            "target_city": "Kandy",
+            "session_flavor_hint": "chocolate",
+        },
+    )
+
+
+def test_is_delivery_only_inquiry_date_only_followup_with_session_city() -> None:
+    """A bare date follow-up counts as delivery-only when a session city is known."""
+    assert is_delivery_only_inquiry(
+        "next Sunday",
+        intent_metadata={},
+        session_delivery_city="Colombo",
+    )
+
+
+def test_is_delivery_only_inquiry_date_only_without_city_is_not_delivery_only() -> None:
+    """Without a known city, a bare date isn't a delivery-only turn."""
+    assert not is_delivery_only_inquiry("next Sunday", intent_metadata={})
+
+
+def test_is_delivery_only_inquiry_product_followup_not_delivery_only() -> None:
+    """A product request with a known session city is discovery, not delivery-only."""
+    assert not is_delivery_only_inquiry(
+        "show me chocolate cakes",
+        intent_metadata={},
+        session_delivery_city="Colombo",
+    )
 
 
 def test_vague_gift_ideas_clarifies_product() -> None:
@@ -74,7 +109,8 @@ def test_gifts_for_mom_proceeds() -> None:
     assert result.band == "proceed"
 
 
-def test_bare_cakes_after_pivot_clarifies_occasion() -> None:
+def test_bare_cakes_after_pivot_searches_without_occasion() -> None:
+    """Named category after a pivot is enough to browse — occasion is optional."""
     result = score_request_specificity(
         "cakes",
         session_product_focus="cake",
@@ -83,11 +119,12 @@ def test_bare_cakes_after_pivot_clarifies_occasion() -> None:
         session_budget_max=None,
         intent_metadata={"topic_pivot": True},
     )
-    assert result.band == "clarify"
-    assert result.missing_dimension == "occasion"
+    assert result.band == "proceed"
+    assert result.clarifying_question is None
 
 
-def test_multiturn_chocolate_after_clarify_still_needs_occasion() -> None:
+def test_multiturn_chocolate_after_clarify_searches_without_occasion() -> None:
+    """Bare chocolate follow-up searches the catalog; occasion is a soft chip later."""
     result = score_request_specificity(
         "chocolate",
         session_product_focus="chocolate",
@@ -96,8 +133,8 @@ def test_multiturn_chocolate_after_clarify_still_needs_occasion() -> None:
         session_budget_max=None,
         intent_metadata={},
     )
-    assert result.band == "clarify"
-    assert result.missing_dimension == "occasion"
+    assert result.band == "proceed"
+    assert result.clarifying_question is None
 
 
 def test_multiturn_chocolate_with_session_occasion_proceeds() -> None:
@@ -210,17 +247,16 @@ async def test_llm_refine_fallback_to_clarify_on_non_client() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_refine_proceed_when_model_scores_high() -> None:
-    mock_client = MagicMock(spec=genai.Client)
-    response = MagicMock()
-    response.parsed = SpecificityRefinement(
-        score=85.0,
-        product_score=1.0,
-        occasion_score=0.5,
-        budget_score=0.0,
-        missing_dimension=None,
-        band="proceed",
+    mock_generate = AsyncMock(
+        return_value=SpecificityRefinement(
+            score=85.0,
+            product_score=1.0,
+            occasion_score=0.5,
+            budget_score=0.0,
+            missing_dimension=None,
+            band="proceed",
+        ),
     )
-    mock_client.models.generate_content.return_value = response
     heuristic = SpecificityResult(
         score=35.0,
         dimension_scores={"product": 0.5, "occasion": 0.0, "budget": 0.5},
@@ -228,13 +264,15 @@ async def test_llm_refine_proceed_when_model_scores_high() -> None:
         band="ambiguous",
         clarifying_question=None,
     )
-    refined = await refine_specificity_with_llm(
-        "something nice for a friend",
-        heuristic,
-        genai_client=mock_client,
-    )
+    with patch("lib.chat.request_specificity.generate_content", mock_generate):
+        refined = await refine_specificity_with_llm(
+            "something nice for a friend",
+            heuristic,
+            genai_client=MagicMock(),
+        )
     assert refined.band == "proceed"
     assert refined.score >= PROCEED_THRESHOLD
+    mock_generate.assert_awaited_once()
 
 
 # P1-5 regression: "I want to buy something nice" must NOT inherit stale session context
@@ -344,3 +382,49 @@ def test_explicit_product_browse_proceeds_without_occasion() -> None:
             intent_metadata={},
         )
         assert result.band == "proceed", message
+
+
+def test_fresh_flowers_pivot_proceeds_without_occasion() -> None:
+    """Named flower category pivots should search, not force a clarifying question."""
+    for message in (
+        "What about just normal fresh flowers?",
+        "Nevermind. Flowers.",
+        "fresh flowers",
+        "Normal fresh flowers?",
+    ):
+        result = score_request_specificity(
+            message,
+            session_product_focus="cake",
+            session_occasion=None,
+            session_recipient_hint=None,
+            session_budget_max=None,
+            intent_metadata={"topic_pivot": True},
+        )
+        assert result.band == "proceed", message
+        assert result.clarifying_question is None
+
+
+def test_normal_fresh_flowers_proceeds_without_topic_pivot_flag() -> None:
+    """Bare 'Normal fresh flowers?' must proceed even before topic_pivot is set."""
+    result = score_request_specificity(
+        "Normal fresh flowers?",
+        session_product_focus="cake",
+        session_occasion="anniversary",
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata={},
+    )
+    assert result.band == "proceed"
+    assert result.clarifying_question is None
+
+
+def test_blush_roses_proceeds_to_search() -> None:
+    result = score_request_specificity(
+        "Show me blush roses",
+        session_product_focus=None,
+        session_occasion=None,
+        session_recipient_hint=None,
+        session_budget_max=None,
+        intent_metadata={},
+    )
+    assert result.band == "proceed"

@@ -33,13 +33,39 @@ _ORDINAL_INDEX: dict[str, int] = {
     "the fifth one": 4,
 }
 
+_WORD_ORDINAL: dict[str, int] = {
+    "one": 0,
+    "first": 0,
+    "two": 1,
+    "second": 1,
+    "three": 2,
+    "third": 2,
+    "four": 3,
+    "fourth": 3,
+    "five": 4,
+    "fifth": 4,
+}
+
 _DEICTIC_RE = re.compile(
     r"^(?:that|this|it|this one|that one)$",
     re.I,
 )
+# number 1 / item 2 / option 3 / #1 / the 1st / bare digit
+_ORDINAL_REF_RE = re.compile(
+    r"^(?:the\s+)?"
+    r"(?:(?:number|item|option|choice)\s+)?"
+    r"(?:#\s*)?"
+    r"(?P<num>\d+|one|two|three|four|five|first|second|third|fourth|fifth)"
+    r"(?:st|nd|rd|th)?"
+    r"(?:\s+one)?$",
+    re.I,
+)
 _ORDINAL_LEADING_RE = re.compile(
-    r"^(?P<ordinal>(?:the\s+)?(?:first|second|third|fourth|fifth)(?:\s+one)?|"
-    r"(?:the\s+)?\d+(?:st|nd|rd|th)(?:\s+one)?)(?:\s+.+)?$",
+    r"^(?P<ordinal>"
+    r"(?:the\s+)?(?:(?:number|item|option|choice)\s+)?(?:#\s*)?"
+    r"(?:\d+(?:st|nd|rd|th)?|one|two|three|four|five|first|second|third|fourth|fifth)"
+    r"(?:\s+one)?"
+    r")(?:\s+.+)?$",
     re.I,
 )
 
@@ -56,6 +82,11 @@ def is_deictic_phrase(phrase: str) -> bool:
     return bool(_DEICTIC_RE.match(phrase.strip()))
 
 
+def looks_like_ordinal_reference(phrase: str) -> bool:
+    """True for cart ordinals including 'number 1', '#2', or bare digits."""
+    return is_ordinal_phrase(_normalize_ordinal_phrase(phrase.strip()))
+
+
 def _normalize_ordinal_phrase(phrase: str) -> str:
     """Strip trailing descriptors from ordinals like 'the first flower bouquet'."""
     stripped = phrase.strip()
@@ -68,13 +99,15 @@ def _normalize_ordinal_phrase(phrase: str) -> str:
 
 
 def is_ordinal_phrase(phrase: str) -> bool:
-    """True for ordinals like first, second, 1st."""
+    """True for ordinals like first, second, 1st, number 1, #2, bare digit."""
     normalized = phrase.strip().lower()
     if not normalized:
         return False
     if normalized in _ORDINAL_INDEX:
         return True
-    return bool(re.match(r"^(?:the\s+)?\d+(?:st|nd|rd|th)(?:\s+one)?$", normalized))
+    if re.match(r"^(?:the\s+)?\d+(?:st|nd|rd|th)(?:\s+one)?$", normalized):
+        return True
+    return bool(_ORDINAL_REF_RE.match(normalized))
 
 
 def _ordinal_index(phrase: str) -> int | None:
@@ -84,7 +117,13 @@ def _ordinal_index(phrase: str) -> int | None:
     match = re.match(r"^(?:the\s+)?(\d+)(?:st|nd|rd|th)(?:\s+one)?$", normalized)
     if match:
         return max(0, int(match.group(1)) - 1)
-    return None
+    ref = _ORDINAL_REF_RE.match(normalized)
+    if not ref:
+        return None
+    token = ref.group("num").lower()
+    if token.isdigit():
+        return max(0, int(token) - 1)
+    return _WORD_ORDINAL.get(token)
 
 
 def _product_name(product: dict[str, Any]) -> str:
@@ -163,6 +202,7 @@ def resolve_product_reference(
                 f"I only see {len(products)} option(s) from your last search. "
                 "Which product should I add?"
             ),
+            "candidates": products,
         }
 
     if not is_deictic_phrase(stripped):
@@ -179,11 +219,10 @@ def resolve_product_reference(
             "status": "resolved",
             "product": products[0],
         }
+    # Multi-item carousel: default to the first visible item (same as "first one").
     return {
-        "status": "clarify",
-        "product": None,
-        "clarifying_question": _numbered_clarify(products),
-        "candidates": products[:5],
+        "status": "resolved",
+        "product": products[0],
     }
 
 

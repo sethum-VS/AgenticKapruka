@@ -36,7 +36,7 @@ def redis_client() -> RedisClient:
 
 def _mock_genai_checkout_client() -> MagicMock:
     mock_client = MagicMock()
-    intent_
+    intent_response = MagicMock()
     intent_response.parsed = IntentClassification(intent="checkout")
     intent_response.text = '{"intent": "checkout"}'
     mock_client.models.generate_content.return_value = intent_response

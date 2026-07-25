@@ -15,8 +15,8 @@ _FLORAL_CONTEXT = re.compile(r"\b(?:flower|rose|roses|bouquet|floral)\b", re.I)
 _FLOWERS_REQUEST = re.compile(r"\b(?:flower|flowers|rose|roses|bouquet|floral)s?\b", re.I)
 
 _ARTIFICIAL_PICKS_DISCLAIMER = (
-    "Please note: some picks below are silk or artificial floral arrangements, "
-    "not fresh-cut flowers."
+    "Please note: some picks below are silk or artificial floral arrangements "
+    "(non-perishable), not fresh-cut flowers."
 )
 
 
@@ -42,7 +42,10 @@ def disclaimer_for_product(product: dict[str, Any]) -> str | None:
     if not is_artificial_floral(product):
         return None
     name = str(product.get("name") or "this item").strip()
-    return f"'{name}' is a silk or artificial floral arrangement, not fresh-cut flowers."
+    return (
+        f"'{name}' is a silk or artificial floral arrangement "
+        "(non-perishable), not fresh-cut flowers."
+    )
 
 
 def is_flowers_request(user_message: str) -> bool:
@@ -55,9 +58,12 @@ def artificial_floral_note_for_picks(
     *,
     user_message: str = "",
 ) -> str | None:
-    """Proactive disclaimer when top picks include artificial florals on a flowers request."""
-    if not is_flowers_request(user_message):
-        return None
+    """Proactive disclaimer when top picks include artificial florals.
+
+    Fires for any turn whose top picks include artificial items (including
+    anniversary gift sets), not only explicit flowers requests.
+    """
+    del user_message  # retained for call-site compatibility
     picks = products[:3]
     if not any(is_artificial_floral(product) for product in picks):
         return None
@@ -73,6 +79,7 @@ def reply_already_discloses_artificial_floral(reply_text: str) -> bool:
             "artificial",
             "not fresh",
             "not fresh-cut",
+            "non-perishable",
             "silk or artificial",
             "silk/artificial",
         )

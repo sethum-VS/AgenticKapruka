@@ -26,9 +26,6 @@
     <button
       type="button"
       class="btn-cta flex w-full items-center justify-center gap-2 py-3"
-      hx-post="/chat/new"
-      hx-swap="none"
-      hx-on::after-request="if(event.detail.successful){htmx.ajax('GET','/cart/panel',{target:'#cart-panel',swap:'outerHTML'})}"
       data-testid="new-chat-button"
     >
       <span class="material-symbols-outlined material-symbols-filled text-[20px]" aria-hidden="true">add</span>
@@ -90,3 +87,61 @@
   data-testid="sidebar-backdrop"
   @click="sidebarOpen = false"
 ></div>
+
+<div
+  id="new-session-modal"
+  class="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center p-4"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="new-session-modal-title"
+  aria-describedby="new-session-modal-description"
+  data-testid="new-session-modal"
+  hidden
+  aria-hidden="true"
+>
+  <div
+    class="absolute inset-0 bg-on-surface/50"
+    data-new-session-backdrop
+    aria-hidden="true"
+  ></div>
+  <div class="relative w-full max-w-md rounded-xl border border-outline-variant bg-white p-6 shadow-xl">
+    <h2
+      id="new-session-modal-title"
+      class="text-headline-sm font-headline-sm font-bold text-primary"
+    >
+      Start new chat — keep cart items?
+    </h2>
+    <p
+      id="new-session-modal-description"
+      class="mt-2 text-body-md text-on-surface-variant"
+    >
+      Your conversation will reset. Choose whether to keep items already in your cart.
+    </p>
+    <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+      <button
+        type="button"
+        class="rounded-lg border border-outline-variant px-4 py-2.5 text-label-md font-label-md text-on-surface transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        data-new-session-cancel
+        data-testid="new-session-cancel"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        class="rounded-lg border border-outline-variant px-4 py-2.5 text-label-md font-label-md text-on-surface transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        data-new-session-clear
+        data-testid="new-session-clear"
+      >
+        Clear
+      </button>
+      <button
+        type="button"
+        class="btn-cta px-4 py-2.5"
+        data-new-session-keep
+        data-testid="new-session-keep"
+      >
+        Keep
+      </button>
+    </div>
+  </div>
+</div>

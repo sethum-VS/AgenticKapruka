@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.runnables import RunnableConfig
+from starlette.applications import Starlette
 from starlette.requests import Request
 
-from lib.chat.deps import client_ip_from_request, resolve_turn_state
+from lib.chat.deps import build_shopping_graph_deps, client_ip_from_request, resolve_turn_state
 
 
 def _make_request(
@@ -16,6 +17,7 @@ def _make_request(
     headers: list[tuple[bytes, bytes]] | None = None,
     client_host: str = "198.51.100.10",
 ) -> Request:
+    app = Starlette()
     scope: dict[str, object] = {
         "type": "http",
         "method": "POST",
@@ -24,6 +26,7 @@ def _make_request(
         "query_string": b"",
         "client": (client_host, 50000),
         "server": ("testserver", 80),
+        "app": app,
     }
     return Request(scope)
 
@@ -124,3 +127,24 @@ async def test_resolve_turn_state_refreshes_currency_on_follow_up() -> None:
     )
 
     assert state["currency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_build_shopping_graph_deps_wires_neo4j_from_app_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    neo4j_client = MagicMock()
+    kapruka_service = MagicMock()
+    request = _make_request()
+    request.app.state.neo4j = neo4j_client
+    redis_client = MagicMock()
+
+    async def fake_ensure_kapruka_service(req: Request, redis: MagicMock) -> MagicMock:
+        return kapruka_service
+
+    monkeypatch.setattr("lib.chat.deps.ensure_kapruka_service", fake_ensure_kapruka_service)
+
+    deps = await build_shopping_graph_deps(request, redis_client)
+
+    assert deps.neo4j_client is neo4j_client
+    assert deps.kapruka_service is kapruka_service

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -10,7 +9,6 @@ import secrets
 from collections.abc import Mapping
 from datetime import date
 from typing import Any, cast
-
 
 from langchain_core.messages import HumanMessage
 from langgraph.config import get_stream_writer
@@ -28,6 +26,11 @@ from graphs.checkout_constants import CHECKOUT_TOOL_KEY
 from graphs.model_router import select_model
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
+from lib.chat.city_resolution import (
+    build_city_choice_chips_html,
+    build_city_not_found_message,
+    is_unknown_city_error,
+)
 from lib.chat.delivery_dates import delivery_date_clarifying_question, normalize_delivery_date
 from lib.chat.intent_heuristics import build_guest_checkout_reply, is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
@@ -87,8 +90,8 @@ from lib.checkout.tracking import (
     tracking_error_from_tool_results,
     tracking_output_from_tool_results,
 )
-from lib.genai.errors import is_rate_limited
 from lib.genai.completions import generate_content
+from lib.genai.errors import is_transient_nim_error
 from lib.kapruka.tools.delivery import CHECK_DELIVERY_TOOL, LIST_CITIES_TOOL
 from lib.kapruka.tools.get_product import TOOL_NAME as GET_PRODUCT_TOOL
 from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
@@ -228,12 +231,18 @@ def _turn_search_has_products(tool_trace: list[ToolInvocation] | None) -> bool:
 
 
 def _session_budget_applies(state: AgentState, user_message: str) -> bool:
+    # Budget refine / explicit turn budget always applies — even if topic_pivot leaked.
+    focus = state.get("session_product_focus")
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if extract_budget(user_message) is not None:
+        return True
+    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return True
     pivot_meta = state.get("intent_metadata") or {}
     if isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"):
         return False
-    if extract_budget(user_message) is not None:
-        return True
-    if is_budget_refinement_message(user_message):
+    session_budget = state.get("session_budget_max")
+    if isinstance(session_budget, (int, float)) and session_budget > 0:
         return True
     messages = state.get("messages") or []
     user_turns = [message for message in messages if isinstance(message, HumanMessage)]
@@ -242,6 +251,38 @@ def _session_budget_applies(state: AgentState, user_message: str) -> bool:
         if isinstance(prior, str) and extract_budget(prior) is not None:
             return True
     return False
+
+
+def _carousel_strict_budget(
+    user_message: str,
+    budget_max: float | None,
+    *,
+    state: AgentState | None = None,
+) -> bool:
+    if budget_max is None or budget_max <= 0:
+        return False
+    from lib.chat.intent_heuristics import (
+        has_explicit_budget_constraint,
+        is_budget_refinement_message,
+    )
+
+    # Budget-refine turns always use strict filtering even if topic_pivot leaked.
+    focus = state.get("session_product_focus") if state else None
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return True
+    if extract_budget(user_message) is not None:
+        return True
+    pivot_meta = state.get("intent_metadata") if state else None
+    topic_pivot = bool(
+        isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"),
+    )
+    session_budget = state.get("session_budget_max") if state else None
+    return has_explicit_budget_constraint(
+        user_message,
+        session_budget if isinstance(session_budget, (int, float)) else None,
+        topic_pivot=topic_pivot,
+    )
 
 
 def _suppress_delivery_tool_results(
@@ -318,6 +359,11 @@ def build_agent_tool_error_message(
         return delivery_date_clarifying_question()
     if error_code in ("429", "rate_limit_exceeded"):
         return "I'm checking our catalog — one moment."
+    if error_code == "timeout":
+        return (
+            "That took too long — please try again. "
+            "Your last results are still above if you want to refine or pick another gift."
+        )
     if error_code == "date_not_deliverable":
         return (
             "That delivery date is not available. "
@@ -329,6 +375,11 @@ def build_agent_tool_error_message(
             "We cannot deliver to that city. Please choose a Kapruka delivery area "
             "(for example Colombo 03, Kandy, or Galle)."
         )
+    if tool == CHECK_DELIVERY_TOOL and is_unknown_city_error(
+        error_code=error_code,
+        raw_message=raw_message,
+    ):
+        return build_city_not_found_message()
     if error_code == "product_id_unresolved" and tool == GET_PRODUCT_TOOL:
         return (
             "I couldn't load that product's details — try tapping it in the carousel above, "
@@ -350,14 +401,13 @@ def build_agent_tool_error_message(
         ):
             return delivery_date_clarifying_question()
         if tool == CHECK_DELIVERY_TOOL and "city" in lowered:
-            return (
-                "Please choose a valid Kapruka delivery city "
-                "(for example Colombo 03, Kandy, or Galle)."
-            )
+            return build_city_not_found_message()
         return "Please check your delivery details and try again."
 
     action = _TOOL_ERROR_ACTION_LABELS.get(tool, "complete that request")
     cause = raw_message.strip() or "Kapruka could not process the request."
+    if is_unknown_city_error(error_code=error_code, raw_message=cause):
+        return build_city_not_found_message()
     return f"I could not {action} right now. {cause} Please adjust your request and try again."
 
 
@@ -385,6 +435,20 @@ def _user_named_city_and_date(user_message: str) -> bool:
     if not city:
         return False
     return normalize_delivery_date({}, user_message) is not None
+
+
+def _sanitize_unknown_city_leak(reply_text: str) -> str:
+    """Strip raw MCP 'Unknown city' phrasing that should never reach the customer."""
+    if not reply_text or "unknown city" not in reply_text.lower():
+        return reply_text
+    cleaned = re.sub(
+        r"(?i)\s*(?:error\s*\([^)]*\)\s*:?\s*)?unknown city\s+'[^']*'\.?",
+        "",
+        reply_text,
+    )
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip() or build_city_not_found_message()
 
 
 def delivery_claim_guard(
@@ -603,6 +667,28 @@ def _apply_perishable_delivery_honesty(
     updated_reply = reply_text
     delivery_html: str | None = None
 
+    # Synthesize far-ahead perishability copy before rendering the delivery partial
+    # so the warning is included in delivery_status_html.
+    warning = delivery_output.perishable_warning
+    if (not isinstance(warning, str) or not warning.strip()) and _turn_implies_perishable_gift(
+        user_message,
+        session_product_focus=session_product_focus,
+    ):
+        checked_date = delivery_output.checked_date
+        if (
+            checked_date
+            and not _is_city_only_check_delivery(invocation)
+            and _delivery_date_more_than_one_day_out(checked_date)
+        ):
+            warning = (
+                "Fresh cakes, flowers, and gift combos are best within a day or two of "
+                "delivery. Your date is more than a day out — consider ordering closer to "
+                "the event."
+            )
+            delivery_output = delivery_output.model_copy(
+                update={"perishable_warning": warning},
+            )
+
     if delivery_output.available:
         city = _canonical_city_from_check_delivery_invocation(invocation)
         if city and not _reply_has_verified_delivery_fee(
@@ -627,22 +713,6 @@ def _apply_perishable_delivery_honesty(
         if not _is_city_only_check_delivery(invocation):
             delivery_html = render_delivery_date_status(result=delivery_output)
 
-    warning = delivery_output.perishable_warning
-    if (not isinstance(warning, str) or not warning.strip()) and _turn_implies_perishable_gift(
-        user_message,
-        session_product_focus=session_product_focus,
-    ):
-        checked_date = delivery_output.checked_date
-        if (
-            checked_date
-            and not _is_city_only_check_delivery(invocation)
-            and _delivery_date_more_than_one_day_out(checked_date)
-        ):
-            warning = (
-                "Fresh cakes, flowers, and gift combos are best within a day or two of "
-                "delivery. Your date is more than a day out — consider ordering closer to "
-                "the event."
-            )
     if isinstance(warning, str) and warning.strip():
         warning = warning.strip()
         dated_delivery = not _is_city_only_check_delivery(invocation)
@@ -1039,28 +1109,6 @@ async def _generate_reply(
     return ""
 
 
-def _carousel_strict_budget(
-    user_message: str,
-    budget_max: float | None,
-    *,
-    state: AgentState | None = None,
-) -> bool:
-    if budget_max is None or budget_max <= 0:
-        return False
-    from lib.chat.intent_heuristics import has_explicit_budget_constraint
-
-    pivot_meta = state.get("intent_metadata") if state else None
-    topic_pivot = bool(
-        isinstance(pivot_meta, dict) and pivot_meta.get("topic_pivot"),
-    )
-    session_budget = state.get("session_budget_max") if state else None
-    return has_explicit_budget_constraint(
-        user_message,
-        session_budget if isinstance(session_budget, (int, float)) else None,
-        topic_pivot=topic_pivot,
-    )
-
-
 def _prepend_situational_empathy(
     reply_text: str,
     intent_metadata: IntentMetadata | None,
@@ -1071,6 +1119,47 @@ def _prepend_situational_empathy(
     if any(phrase in head for phrase in ("sorry", "hear that", "heartbroken", "going through")):
         return reply_text
     return f"I'm sorry to hear you're going through this. {reply_text.strip()}"
+
+
+_APOLOGY_SUGGESTION_CHIPS: tuple[tuple[str, str], ...] = (
+    ("Apology roses bouquet", "Apology roses bouquet"),
+    ("Sorry flowers hamper", "Sorry flowers hamper"),
+    ("Chocolate apology gift", "Chocolate apology gift"),
+)
+
+
+def build_apology_suggestion_chips_html() -> str:
+    """Tappable chips after empathy-only breakup turns (before auto-search)."""
+    import html as html_lib
+
+    buttons: list[str] = []
+    for label, suggestion in _APOLOGY_SUGGESTION_CHIPS:
+        safe_label = html_lib.escape(label)
+        safe_suggestion = html_lib.escape(suggestion)
+        buttons.append(
+            '<button type="button" '
+            f'class="chip-suggestion" '
+            f'data-chat-suggestion="{safe_suggestion}" '
+            f'data-testid="apology-suggestion-chip">{safe_label}</button>'
+        )
+    return (
+        '<div class="mt-3 flex flex-wrap gap-2" role="group" '
+        'aria-label="Apology gift suggestions">'
+        f"{''.join(buttons)}</div>"
+    )
+
+
+def _should_offer_apology_chips(state: AgentState, user_message: str) -> bool:
+    """True for situational distress turns — chips refine apology flower picks."""
+    intent_metadata = state.get("intent_metadata") or {}
+    if not isinstance(intent_metadata, dict) or not intent_metadata.get("is_situational"):
+        return False
+    # When the shopper already named flowers, chips are redundant.
+    return not re.search(
+        r"\b(?:flower|flowers|rose|roses|bouquet|bouquets|floral)\b",
+        user_message,
+        re.I,
+    )
 
 
 def _prepend_budget_confirmation(
@@ -1409,6 +1498,16 @@ def _should_use_discovery_template_fast_path(
     intent_metadata = state.get("intent_metadata")
     if isinstance(intent_metadata, dict) and intent_metadata.get("is_situational"):
         return False
+    # Budget-only follow-ups already have curated products from agent_loop —
+    # skip a second NIM call that commonly times out.
+    if is_budget_refinement_message(user_message):
+        return True
+    # Topic pivots with a bare category ("Nevermind. Cakes.") also skip synthesis.
+    if isinstance(intent_metadata, dict) and intent_metadata.get("topic_pivot"):
+        from lib.chat.intent_heuristics import is_bare_category_pivot
+
+        if is_bare_category_pivot(user_message) is not None:
+            return True
     hybrid_context = state.get("hybrid_context") or {}
     currency = state.get("currency") or "LKR"
     return is_confident_discovery_turn(
@@ -1417,6 +1516,44 @@ def _should_use_discovery_template_fast_path(
         currency=currency,
         intent_metadata=intent_metadata if isinstance(intent_metadata, dict) else None,
         state=dict(state),
+    )
+
+
+def _carousel_artificial_floral_warning(products: list[dict[str, Any]]) -> str | None:
+    """Warn when carousel top picks include silk/artificial florals."""
+    from lib.chat.product_honesty import artificial_floral_note_for_picks
+
+    return artificial_floral_note_for_picks(products)
+
+
+def _carousel_perishability_warning(
+    *,
+    session_delivery_city: str | None,
+    delivery_date: str | None,
+    user_message: str,
+    session_product_focus: str | None,
+) -> str | None:
+    """Warn when a perishable carousel is shown with city but no delivery date."""
+    if not session_delivery_city or delivery_date:
+        return None
+    if not _turn_implies_perishable_gift(user_message, session_product_focus=session_product_focus):
+        return None
+    return (
+        "Fresh cakes, flowers, and gift combos are best ordered closer to the delivery date. "
+        "Please share a delivery date so we can confirm availability."
+    )
+
+
+def _carousel_warning_banner(warning: str) -> str:
+    escaped = (
+        warning.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+    return (
+        '<p class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 '
+        f'text-sm text-amber-900" role="note">{escaped}</p>'
     )
 
 
@@ -1432,6 +1569,7 @@ def build_products_carousel_html(
     session_occasion: str | None = None,
     session_recipient_hint: str | None = None,
     session_delivery_city: str | None = None,
+    delivery_date: str | None = None,
     last_search_products: list[dict[str, Any]] | None = None,
     last_visible_products: list[dict[str, Any]] | None = None,
     visible_products: list[dict[str, Any]] | None = None,
@@ -1474,7 +1612,22 @@ def build_products_carousel_html(
         session_recipient_hint=session_recipient_hint,
         session_delivery_city=session_delivery_city,
     )
-    return render_product_carousel(products)
+    carousel_html = render_product_carousel(products)
+    banners: list[str] = []
+    artificial_warning = _carousel_artificial_floral_warning(products)
+    if artificial_warning:
+        banners.append(_carousel_warning_banner(artificial_warning))
+    perishable_warning = _carousel_perishability_warning(
+        session_delivery_city=session_delivery_city,
+        delivery_date=delivery_date,
+        user_message=user_message,
+        session_product_focus=session_product_focus,
+    )
+    if perishable_warning:
+        banners.append(_carousel_warning_banner(perishable_warning))
+    if banners:
+        return "".join(banners) + carousel_html
+    return carousel_html
 
 
 def _delivery_fee_reply_from_state(
@@ -1512,6 +1665,28 @@ def _delivery_fee_reply_from_state(
     except Exception:
         logger.debug("generate_response: delivery fee reply failed", exc_info=True)
         return None
+
+
+def _dated_delivery_reply_from_state(state: AgentState) -> str | None:
+    """Verified dated-delivery confirmation from tool_trace, independent of fee wording."""
+    invocation = _last_check_delivery_invocation(state.get("tool_trace"))
+    if invocation is None or _is_city_only_check_delivery(invocation):
+        return None
+    delivery = invocation.get("result")
+    if not isinstance(delivery, dict) or not delivery.get("available"):
+        return None
+    city = _canonical_city_from_check_delivery_invocation(invocation)
+    checked_date = delivery.get("checked_date")
+    rate = delivery.get("rate")
+    currency = delivery.get("currency") or "LKR"
+    if not city or not isinstance(checked_date, str) or not isinstance(rate, (int, float)):
+        return None
+    return _build_verified_dated_delivery_reply(
+        city=city,
+        checked_date=checked_date,
+        rate=float(rate),
+        currency=str(currency),
+    )
 
 
 def _build_checkout_assistant_message(tool_results: dict[str, Any] | None) -> str | None:
@@ -1587,6 +1762,7 @@ def render_assistant_html(
     tracking_status_html: str | None = None,
     delivery_status_html: str | None = None,
     rate_limit_banner_html: str | None = None,
+    suggestion_chips_html: str | None = None,
 ) -> str:
     """Render templates/chat/message_assistant.html for HTMX swap."""
     templates = get_templates()
@@ -1600,6 +1776,7 @@ def render_assistant_html(
         tracking_status_html=tracking_status_html,
         delivery_status_html=delivery_status_html,
         rate_limit_banner_html=rate_limit_banner_html,
+        suggestion_chips_html=suggestion_chips_html,
     )
 
 
@@ -1688,14 +1865,16 @@ async def generate_response(
     tool_results = _resolve_effective_tool_results(state)
 
     if not user_message.strip():
-        welcome = build_general_welcome_message()
+        welcome = normalize_catalog_text(build_general_welcome_message())
         return {
             "response_html": render_assistant_html(welcome),
             "assistant_message": welcome,
         }
 
     if is_impossible_catalog_request(user_message):
-        reply = build_impossible_product_redirect(impossible_request_subject(user_message))
+        reply = normalize_catalog_text(
+            build_impossible_product_redirect(impossible_request_subject(user_message)),
+        )
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
@@ -1705,9 +1884,13 @@ async def generate_response(
     if off_topic_meta.get("is_off_topic"):
         redirect_kind = off_topic_meta.get("redirect_kind")
         if redirect_kind == "impossible_product":
-            reply = build_impossible_product_redirect(impossible_request_subject(user_message))
+            reply = normalize_catalog_text(
+                build_impossible_product_redirect(impossible_request_subject(user_message)),
+            )
         else:
-            reply = build_off_topic_redirect_message(off_topic_topic(user_message))
+            reply = normalize_catalog_text(
+                build_off_topic_redirect_message(off_topic_topic(user_message)),
+            )
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
@@ -1715,8 +1898,10 @@ async def generate_response(
 
     intent_metadata = state.get("intent_metadata") or {}
     if isinstance(intent_metadata, dict) and intent_metadata.get("guest_checkout_info"):
-        reply = build_guest_checkout_reply(
-            cart_has_items=bool(intent_metadata.get("guest_checkout_cart_has_items")),
+        reply = normalize_catalog_text(
+            build_guest_checkout_reply(
+                cart_has_items=bool(intent_metadata.get("guest_checkout_cart_has_items")),
+            ),
         )
         return {
             "response_html": render_assistant_html(reply),
@@ -1728,19 +1913,19 @@ async def generate_response(
 
     intent_metadata = state.get("intent_metadata") or {}
     if isinstance(intent_metadata, dict) and intent_metadata.get("support_topic"):
-        reply = build_support_faq_reply(user_message)
+        reply = normalize_catalog_text(build_support_faq_reply(user_message))
         fee_reply = _delivery_fee_reply_from_state(state, user_message)
         if fee_reply:
-            reply = f"{reply}\n\n{fee_reply}"
+            reply = normalize_catalog_text(f"{reply}\n\n{fee_reply}")
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
         }
     if is_support_question(user_message):
-        reply = build_support_faq_reply(user_message)
+        reply = normalize_catalog_text(build_support_faq_reply(user_message))
         fee_reply = _delivery_fee_reply_from_state(state, user_message)
         if fee_reply:
-            reply = f"{reply}\n\n{fee_reply}"
+            reply = normalize_catalog_text(f"{reply}\n\n{fee_reply}")
         return {
             "response_html": render_assistant_html(reply),
             "assistant_message": reply,
@@ -1748,12 +1933,12 @@ async def generate_response(
 
     if _is_general_welcome_path(state):
         if is_farewell_message(user_message):
-            farewell = build_farewell_message()
+            farewell = normalize_catalog_text(build_farewell_message())
             return {
                 "response_html": render_assistant_html(farewell),
                 "assistant_message": farewell,
             }
-        welcome = build_general_welcome_message()
+        welcome = normalize_catalog_text(build_general_welcome_message())
         return {
             "response_html": render_assistant_html(welcome),
             "assistant_message": welcome,
@@ -1761,7 +1946,7 @@ async def generate_response(
 
     clarifying_question = state.get("master_clarifying_question")
     if isinstance(clarifying_question, str) and clarifying_question.strip():
-        question = clarifying_question.strip()
+        question = normalize_catalog_text(clarifying_question.strip())
         return {
             "response_html": render_assistant_html(question),
             "assistant_message": question,
@@ -1785,7 +1970,7 @@ async def generate_response(
             or (exit_reason is None and not _turn_has_fresh_search(state.get("tool_trace")))
         )
     ):
-        pending_clarifier = clarifying_question.strip()
+        pending_clarifier = normalize_catalog_text(clarifying_question.strip())
 
     has_carousel_products = _turn_search_has_products(state.get("tool_trace"))
     if pending_clarifier and not has_carousel_products:
@@ -1799,10 +1984,17 @@ async def generate_response(
             session_product_focus=state.get("session_product_focus"),
             delivery_context_relevant=delivery_context_relevant,
         )
+        candidates = state.get("delivery_city_candidates")
+        chips_html = (
+            build_city_choice_chips_html(candidates) if isinstance(candidates, list) else None
+        )
+        if chips_html is None and _should_offer_apology_chips(state, user_message):
+            chips_html = build_apology_suggestion_chips_html()
         return {
             "response_html": render_assistant_html(
                 question,
                 delivery_status_html=delivery_status_html,
+                suggestion_chips_html=chips_html,
             ),
             "assistant_message": question,
         }
@@ -1880,6 +2072,7 @@ async def generate_response(
             session_occasion=state.get("session_occasion"),
             session_recipient_hint=state.get("session_recipient_hint"),
             session_delivery_city=state.get("session_delivery_city_canonical"),
+            delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
             last_search_products=last_search or None,
             allow_stale_fallback=allow_stale,
         )
@@ -1960,7 +2153,6 @@ async def generate_response(
                 review_html if isinstance(review_html, str) and review_html.strip() else None
             )
 
-            client = genai_client
             model = select_model(state)
             user_prompt = _build_checkout_review_prompt(user_message, checkout)
             zep_memory_facts = state.get("zep_memory_facts")
@@ -2024,6 +2216,7 @@ async def generate_response(
                     session_occasion=state.get("session_occasion"),
                     session_recipient_hint=state.get("session_recipient_hint"),
                     session_delivery_city=state.get("session_delivery_city_canonical"),
+                    delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
                     last_search_products=list(state.get("last_search_products") or []) or None,
                     allow_stale_fallback=allow_stale,
                 )
@@ -2073,12 +2266,21 @@ async def generate_response(
     last_visible_products = list(state.get("last_visible_products") or [])
     pivot_meta = state.get("intent_metadata")
     topic_pivot = bool(pivot_meta.get("topic_pivot")) if isinstance(pivot_meta, dict) else False
+    session_delivery_city = state.get("session_delivery_city_canonical")
     delivery_only = is_delivery_only_inquiry(
         user_message,
         intent_metadata=pivot_meta,
+        session_delivery_city=(
+            session_delivery_city if isinstance(session_delivery_city, str) else None
+        ),
     )
     if delivery_only or is_delivery_fee_question(user_message):
         fee_reply = _delivery_fee_reply_from_state(state, user_message)
+        if not fee_reply and delivery_only:
+            # Date-only follow-ups ("next Sunday") aren't fee questions, but a dated
+            # check_delivery result should still confirm the date without re-dumping
+            # the prior carousel.
+            fee_reply = _dated_delivery_reply_from_state(state)
         if fee_reply:
             tool_trace = state.get("tool_trace")
             invocation = _last_check_delivery_invocation(tool_trace)
@@ -2154,6 +2356,7 @@ async def generate_response(
                 session_occasion=state.get("session_occasion"),
                 session_recipient_hint=state.get("session_recipient_hint"),
                 session_delivery_city=state.get("session_delivery_city_canonical"),
+                delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
                 last_search_products=state.get("last_search_products"),
             )
             response_fields = _assistant_response_fields(
@@ -2229,6 +2432,8 @@ async def generate_response(
         graph_context_available=graph_context_available,
         hybrid_context=hybrid_context,
         session_product_focus=session_product_focus,
+        session_delivery_city=state.get("session_delivery_city_canonical"),
+        delivery_date=state.get("session_delivery_date") or state.get("delivery_date"),
         last_search_products=last_search_products or None,
         last_visible_products=last_visible_products or None,
         visible_products=visible_products,
@@ -2266,6 +2471,7 @@ async def generate_response(
                 len(visible_products),
             )
             reply_text = normalize_catalog_text(reply_text)
+            reply_text = _sanitize_unknown_city_leak(reply_text)
             reply_text = _prepend_budget_confirmation(
                 reply_text,
                 intent_metadata,
@@ -2311,7 +2517,6 @@ async def generate_response(
             updates["last_visible_products"] = visible_products
             return updates
 
-    client = genai_client
     model = select_model(state)
     _emit_synthesis_status()
     user_prompt = _build_user_prompt(
@@ -2366,12 +2571,12 @@ async def generate_response(
             else None,
         )
     except Exception as exc:
-        if not is_resource_exhausted(exc):
+        if not is_transient_nim_error(exc):
             raise
         reply_text = _build_discovery_template_reply(visible_products, user_message=user_message)
         logger.warning(
-            "generate_response: Gemini rate limited; template fallback (%d products)",
-            len(visible_products),
+            "generate_response: NVIDIA NIM transient error; template fallback (%d products)",
+            len(visible_products or []),
             exc_info=True,
         )
 
@@ -2380,9 +2585,20 @@ async def generate_response(
             visible_products,
             user_message=user_message,
         )
+        # Situational distress with no products yet: still emit empathy + chips path.
+        if not template and (
+            (isinstance(pivot_meta, dict) and pivot_meta.get("is_situational"))
+            or state.get("session_situational")
+        ):
+            template = (
+                "I'm sorry to hear you're going through this. "
+                "I can help with apology flowers, a sorry card, or a small chocolate gift — "
+                "what would feel right?"
+            )
         reply_text = template or "I could not generate a response. Please try again."
 
     reply_text = normalize_catalog_text(reply_text)
+    reply_text = _sanitize_unknown_city_leak(reply_text)
     # Prepend Sunday-ambiguity clarification before other post-processing
     if isinstance(pivot_meta, dict) and pivot_meta.get("delivery_date_ambiguous"):
         clarification = pivot_meta.get("delivery_date_clarification") or ""
@@ -2483,6 +2699,11 @@ async def generate_response(
         reply_text,
         products_html=products_html,
         delivery_status_html=delivery_status_html,
+        suggestion_chips_html=(
+            build_apology_suggestion_chips_html()
+            if _should_offer_apology_chips(state, user_message)
+            else None
+        ),
     )
     if visible_products:
         updates["last_visible_products"] = visible_products

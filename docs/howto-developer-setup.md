@@ -122,9 +122,20 @@ pytest tests/unit -q -m "not browser"
 ## Optional: Tailwind CSS rebuild
 
 ```bash
+# Unix
 ./scripts/install-tailwind.sh
-npx tailwindcss -i static/css/input.css -o static/css/output.css --watch
+make css
+# or: bin/tailwindcss -i static/css/input.css -o static/css/app.css --watch
+
+# Windows PowerShell
+.\scripts\install-tailwind.ps1
+.\scripts\dev.ps1 start   # builds app.css then watches
+# or: .\bin\tailwindcss.exe -i static\css\input.css -o static\css\app.css --watch
 ```
+
+The UI links ``static/css/app.css`` (gitignored). Raw ``uvicorn`` without a CSS build
+will serve an unstyled page — use ``scripts/dev.ps1 start`` / ``scripts/dev.sh start``
+or run the Tailwind build above first.
 
 ## Optional: GPU analytics dev image
 

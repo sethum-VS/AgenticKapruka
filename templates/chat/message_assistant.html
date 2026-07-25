@@ -83,6 +83,16 @@
         {{ delivery_status_html | safe }}
       </div>
       {% endif %}
+      {% if suggestion_chips_html %}
+      <div
+        class="assistant-suggestion-chips mt-2"
+        data-slot="suggestion-chips"
+        role="region"
+        aria-label="Suggested replies"
+      >
+        {{ suggestion_chips_html | safe }}
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>

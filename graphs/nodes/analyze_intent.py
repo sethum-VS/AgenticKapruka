@@ -18,6 +18,7 @@ from lib.chat.delivery_dates import (
 from lib.chat.intent_heuristics import (
     PROCEED_CHECKOUT_MESSAGE,
     classify_routing_guard,
+    is_budget_refinement_message,
     is_budgeted_gift_ideas_message,
     is_cart_add_trigger,
     is_guest_checkout_question,
@@ -64,6 +65,10 @@ _FLORAL_DESIGN = re.compile(r"\b(?:floral|design|designs)\b", re.I)
 _GIFT_FOCUS = re.compile(r"\b(?:gift|voucher|hamper)s?\b", re.I)
 _TEA_FOCUS = re.compile(r"\b(?:tea|teas)\b", re.I)
 _CHOCOLATE_FOCUS = re.compile(r"\b(?:chocolate|chocolates|cocoa|choco)\b", re.I)
+_FLOWER_COLOR_FOCUS = re.compile(
+    r"\b(blush|pink|red|white|yellow|purple|lavender)\b",
+    re.I,
+)
 _COMBO_FOCUS = re.compile(r"\b(?:combo|combopack)\b", re.I)
 _OCCASION_FOCUS = re.compile(
     r"\b(?:birthday|anniversary|wedding|valentine|graduation|new baby|baby shower)\b",
@@ -101,9 +106,14 @@ def _extract_latest_user_message(messages: list[BaseMessage]) -> str:
     return ""
 
 
-def _classify_routing_guard(user_message: str) -> Intent | None:
+def _classify_routing_guard(user_message: str, state: AgentState | None = None) -> Intent | None:
     """Return a guard intent or None when the turn should defer to agent_loop."""
-    return classify_routing_guard(user_message)
+    from lib.chat.intent_heuristics import has_carousel_products
+
+    return classify_routing_guard(
+        user_message,
+        has_carousel=has_carousel_products(state) if state is not None else False,
+    )
 
 
 def _resolve_session_budget(
@@ -156,9 +166,13 @@ def _derive_product_focus(user_message: str) -> str | None:
 
 
 def _derive_flavor_hint(user_message: str) -> str | None:
-    """Capture flavor modifiers (e.g. chocolate) even when cake wins product focus."""
-    if _CHOCOLATE_FOCUS.search(user_message.strip()):
+    """Capture flavor/color modifiers even when another product focus wins."""
+    stripped = user_message.strip()
+    if _CHOCOLATE_FOCUS.search(stripped):
         return "chocolate"
+    color = _FLOWER_COLOR_FOCUS.search(stripped)
+    if color and _FLOWERS_FOCUS.search(stripped):
+        return color.group(1).lower()
     return None
 
 
@@ -191,7 +205,7 @@ def _resolve_session_occasion(state: AgentState, user_message: str) -> str | Non
     derived = _derive_session_occasion(user_message)
     if derived is not None:
         return derived
-    if is_topic_pivot_message(user_message):
+    if is_topic_pivot_message(user_message) or _is_category_switch_pivot(state, user_message):
         return None
     prior = state.get("session_occasion")
     if isinstance(prior, str) and prior.strip():
@@ -292,8 +306,18 @@ def _resolve_delivery_dates(
 def _resolve_session_situational(
     state: AgentState,
     intent_metadata: IntentMetadata,
+    *,
+    user_message: str = "",
 ) -> bool:
-    """Keep concierge tone after an opening distress/situational turn."""
+    """Keep concierge tone after an opening distress/situational turn.
+
+    Topic pivots and budget-gift discovery resets drop sticky situational tone so
+    empathy from a prior breakup turn does not bleed into a fresh gift search.
+    """
+    if user_message.strip() and classify_query_mode(user_message) == "situational":
+        return True
+    if intent_metadata.get("topic_pivot") or intent_metadata.get("discovery_context_reset"):
+        return False
     if intent_metadata.get("is_situational"):
         return True
     if state.get("session_situational"):
@@ -332,8 +356,11 @@ def _with_session_fields(
         payload["session_recipient_hint"] = session_recipient_hint
     if session_flavor_hint is not None:
         payload["session_flavor_hint"] = session_flavor_hint
-    if session_situational:
+    if session_situational is True:
         payload["session_situational"] = True
+    elif session_situational is False:
+        # Explicit clear (topic pivot / budget-gift discovery reset).
+        payload["session_situational"] = False
     if delivery_date is not None:
         payload["delivery_date"] = delivery_date
     if session_delivery_date is not None:
@@ -341,14 +368,45 @@ def _with_session_fields(
     return payload
 
 
+def _is_category_switch_pivot(state: AgentState, user_message: str) -> bool:
+    """True when the turn switches to a different product category than the session.
+
+    Complements is_topic_pivot_message (which needs an explicit "nevermind"/"instead"/
+    "what about" cue) so bare category switches like "fresh flowers" after an
+    anniversary-gift turn still clear stale budget/occasion context. This only widens
+    context clearing; it does NOT change the clarify-vs-search decision, since the
+    specificity scorer ignores topic_pivot and reads the pre-clear session state.
+    """
+    derived_focus = _derive_product_focus(user_message)
+    if derived_focus is None or derived_focus == "gift":
+        return False
+    prior_focus = state.get("session_product_focus")
+    if isinstance(prior_focus, str) and prior_focus.strip():
+        prior_norm = prior_focus.strip().lower()
+        if derived_focus == prior_norm:
+            return False
+        # Cake <-> chocolate is a same-family refinement, not a pivot.
+        return not ({derived_focus, prior_norm} <= {"cake", "chocolate"})
+    # No prior focus: treat as a pivot when a sticky occasion is being abandoned
+    # (bare category turn that names no occasion of its own).
+    prior_occasion = state.get("session_occasion")
+    return (
+        isinstance(prior_occasion, str)
+        and bool(prior_occasion.strip())
+        and _derive_session_occasion(user_message) is None
+    )
+
+
 def _clear_budget_on_pivot(
     user_message: str,
     session_budget_max: float | None,
     session_budget_currency: CurrencyCode | None,
     intent_metadata: IntentMetadata,
+    *,
+    is_pivot: bool,
 ) -> tuple[float | None, CurrencyCode | None, IntentMetadata]:
     """Drop sticky budget when the customer pivots to a new product topic."""
-    if not is_topic_pivot_message(user_message):
+    if not is_pivot:
         return session_budget_max, session_budget_currency, intent_metadata
     if extract_budget(user_message) is not None:
         return session_budget_max, session_budget_currency, intent_metadata
@@ -361,9 +419,11 @@ def _clear_context_on_pivot(
     user_message: str,
     state: AgentState,
     intent_metadata: IntentMetadata,
+    *,
+    is_pivot: bool,
 ) -> tuple[IntentMetadata, dict[str, Any] | None, bool, dict[str, Any]]:
     """Drop sticky occasion/search seeds when the customer pivots without a new occasion."""
-    if not is_topic_pivot_message(user_message):
+    if not is_pivot:
         return intent_metadata, None, False, {}
 
     cleared_meta = cast(IntentMetadata, {**intent_metadata, "topic_pivot": True})
@@ -485,17 +545,36 @@ async def analyze_intent(
         user_message,
         intent_metadata,
     )
+    focus_for_refine = state.get("session_product_focus")
+    focus_for_refine_str = focus_for_refine.strip() if isinstance(focus_for_refine, str) else None
+    budget_refine = is_budget_refinement_message(
+        user_message,
+        session_product_focus=focus_for_refine_str,
+    )
+    explicit_pivot = is_topic_pivot_message(user_message) and not budget_refine
+    # Broader signal: bare category switches (e.g. "fresh flowers" after an
+    # anniversary-gift turn) clear stale occasion/search seeds too. Budget clearing
+    # stays gated on explicit pivots so implicit category changes keep the existing
+    # "still keeping under <budget>?" confirmation flow instead of silently dropping it.
+    # Budget-only refine must never clear the carousel or set topic_pivot.
+    context_pivot = (
+        False
+        if budget_refine
+        else (explicit_pivot or _is_category_switch_pivot(state, user_message))
+    )
     session_budget_max, session_budget_currency, intent_metadata = _clear_budget_on_pivot(
         user_message,
         session_budget_max,
         session_budget_currency,
         intent_metadata,
+        is_pivot=explicit_pivot,
     )
     intent_metadata, hybrid_context_update, topic_pivot, pivot_session_clear = (
         _clear_context_on_pivot(
             user_message,
             state,
             intent_metadata,
+            is_pivot=context_pivot,
         )
     )
     budget_gift_meta, budget_hybrid_update, budget_gift_pivot, budget_session_clear = (
@@ -556,12 +635,30 @@ async def analyze_intent(
             {**intent_metadata, "session_flavor_hint": session_flavor_hint},
         )
 
-    session_situational = _resolve_session_situational(state, intent_metadata)
+    session_situational = _resolve_session_situational(
+        state,
+        intent_metadata,
+        user_message=user_message,
+    )
     if session_situational:
         intent_metadata = cast(
             IntentMetadata,
             {**intent_metadata, "is_situational": True},
         )
+    elif topic_pivot or budget_gift_pivot:
+        # Explicitly clear sticky situational empathy on pivots / fresh gift discovery.
+        cleared = dict(intent_metadata)
+        cleared.pop("is_situational", None)
+        intent_metadata = cast(IntentMetadata, cleared)
+
+    # Only persist True (sticky empathy) or False (explicit pivot clear); omit otherwise.
+    session_situational_update: bool | None
+    if topic_pivot or budget_gift_pivot:
+        session_situational_update = False
+    elif session_situational:
+        session_situational_update = True
+    else:
+        session_situational_update = None
 
     def _with_budget(payload: dict[str, Any]) -> dict[str, Any]:
         result = _with_session_fields(
@@ -572,7 +669,7 @@ async def analyze_intent(
             session_occasion=session_occasion,
             session_recipient_hint=session_recipient_hint,
             session_flavor_hint=session_flavor_hint,
-            session_situational=session_situational,
+            session_situational=session_situational_update,
             delivery_date=delivery_date,
             session_delivery_date=session_delivery_date,
         )
@@ -580,6 +677,7 @@ async def analyze_intent(
             result["session_search_query"] = None
             result["session_occasion"] = None
             result["session_recipient_hint"] = None
+            result["session_situational"] = False
             if session_budget_max is None:
                 result["session_budget_max"] = None
                 result["session_budget_currency"] = None
@@ -587,6 +685,7 @@ async def analyze_intent(
             if hybrid_context_update is not None:
                 result["hybrid_context"] = hybrid_context_update
         elif budget_gift_pivot:
+            result["session_situational"] = False
             result.update(pivot_session_clear)
             if hybrid_context_update is not None:
                 result["hybrid_context"] = hybrid_context_update
@@ -677,7 +776,7 @@ async def analyze_intent(
         logger.info("analyze_intent: proceed-to-checkout trigger from cart drawer")
         return _with_budget({"intent": "checkout", "intent_metadata": intent_metadata})
 
-    guard_intent = _classify_routing_guard(user_message)
+    guard_intent = _classify_routing_guard(user_message, state)
     if guard_intent is not None:
         logger.info("analyze_intent: guard routed message as %s", guard_intent)
         return _with_budget(
@@ -699,9 +798,9 @@ async def analyze_intent(
     if not should_bypass_specificity_scorer(user_message, guard_intent=None):
         specificity = score_request_specificity(
             user_message,
-            session_product_focus=state.get("session_product_focus"),
-            session_occasion=state.get("session_occasion"),
-            session_recipient_hint=state.get("session_recipient_hint"),
+            session_product_focus=session_product_focus,
+            session_occasion=session_occasion,
+            session_recipient_hint=session_recipient_hint,
             session_budget_max=session_budget_max,
             session_flavor_hint=session_flavor_hint,
             intent_metadata=intent_metadata,
@@ -711,9 +810,9 @@ async def analyze_intent(
                 user_message,
                 specificity,
                 genai_client=genai_client,
-                session_product_focus=state.get("session_product_focus"),
-                session_occasion=state.get("session_occasion"),
-                session_recipient_hint=state.get("session_recipient_hint"),
+                session_product_focus=session_product_focus,
+                session_occasion=session_occasion,
+                session_recipient_hint=session_recipient_hint,
                 session_budget_max=session_budget_max,
                 intent_metadata=intent_metadata,
             )

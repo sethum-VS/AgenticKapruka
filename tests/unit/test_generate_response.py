@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from typing import cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-from google.genai import errors as genai_errors
 from langchain_core.messages import HumanMessage
+from openai import RateLimitError
 
 from graphs.checkout_constants import CHECKOUT_TOOL_KEY
-from graphs.model_router import PRO_MODEL
+from graphs.model_router import FLASH_MODEL, PRO_MODEL
 from graphs.nodes.generate_response import (
     AssistantReply,
     _apply_perishable_delivery_honesty,
@@ -58,6 +59,38 @@ def _combined_response_html(result: dict[str, object]) -> str:
     if isinstance(carousel, str):
         parts.append(carousel)
     return "".join(parts)
+
+
+# ── NIM completion mocking helpers ───────────────────────────────────────────
+# generate_response synthesizes replies via ``lib.genai.completions.generate_content``
+# (imported into the module under test). Patch that call site with an AsyncMock so
+# unit tests never touch the live NVIDIA NIM endpoint.
+_GENERATE_CONTENT_TARGET = "graphs.nodes.generate_response.generate_content"
+
+
+def _reply_mock(message: str) -> AsyncMock:
+    """AsyncMock standing in for the NIM structured completion call."""
+    return AsyncMock(return_value=AssistantReply(message=message))
+
+
+def _rate_limit_error() -> RateLimitError:
+    """Build a real openai.RateLimitError so is_rate_limited() recognizes it."""
+    request = httpx.Request(
+        "POST",
+        "https://integrate.api.nvidia.com/v1/chat/completions",
+    )
+    response = httpx.Response(429, request=request)
+    return RateLimitError("Rate limit exceeded", response=response, body=None)
+
+
+def _reply_system_content(mock_generate: AsyncMock) -> str:
+    """System-role prompt passed to the patched generate_content call."""
+    return str(mock_generate.call_args.kwargs["messages"][0]["content"])
+
+
+def _reply_user_content(mock_generate: AsyncMock) -> str:
+    """User-role prompt passed to the patched generate_content call."""
+    return str(mock_generate.call_args.kwargs["messages"][1]["content"])
 
 
 _SEARCH_TOOL_RESULTS = {
@@ -112,17 +145,11 @@ _SEARCH_TOOL_RESULTS = {
 
 @pytest.mark.asyncio
 async def test_generate_response_html_contains_product_names_from_tool_results() -> None:
-    """Mocked Gemini reply mentions MCP product names; partial HTML includes them."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message=(
-            "I found two birthday cakes: Chocolate Birthday Cake (LKR 4,500) "
-            "and Vanilla Celebration Cake (LKR 3,800)."
-        ),
+    """Mocked NIM reply mentions MCP product names; partial HTML includes them."""
+    mock_generate = _reply_mock(
+        "I found two birthday cakes: Chocolate Birthday Cake (LKR 4,500) "
+        "and Vanilla Celebration Cake (LKR 3,800).",
     )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
 
     state: AgentState = {
         "messages": [HumanMessage(content="birthday cake for mom")],
@@ -130,7 +157,8 @@ async def test_generate_response_html_contains_product_names_from_tool_results()
         "session_id": "sess-gen-001",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "response_html" in result
     html = _combined_response_html(result)
@@ -141,25 +169,18 @@ async def test_generate_response_html_contains_product_names_from_tool_results()
     assert 'data-testid="product-carousel"' in html
     assert 'data-product-id="cake00ka002034"' in html
 
-    mock_client.models.generate_content.assert_called_once()
-    call_kwargs = mock_client.models.generate_content.call_args.kwargs
-    assert call_kwargs["model"] == "gemini-2.5-flash"
-    assert "tool_results" in call_kwargs["contents"]
-    assert "Chocolate Birthday Cake" in call_kwargs["contents"]
-    config = call_kwargs["config"]
-    assert config.response_mime_type == "application/json"
-    assert config.response_schema is AssistantReply
+    mock_generate.assert_awaited_once()
+    call_kwargs = mock_generate.call_args.kwargs
+    assert call_kwargs["model"] == FLASH_MODEL
+    user_content = _reply_user_content(mock_generate)
+    assert "tool_results" in user_content
+    assert "Chocolate Birthday Cake" in user_content
+    assert call_kwargs["response_schema"] is AssistantReply
 
 
 @pytest.mark.asyncio
 async def test_generate_response_decodes_html_entities_in_reply() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Try the Cadbury 135g &#8211; 30 Minis hamper for mom.",
-    )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Try the Cadbury 135g &#8211; 30 Minis hamper for mom.")
 
     state: AgentState = {
         "messages": [HumanMessage(content="chocolates for mom")],
@@ -167,20 +188,16 @@ async def test_generate_response_decodes_html_entities_in_reply() -> None:
         "session_id": "sess-gen-decode-001",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "Cadbury 135g – 30 Minis" in result["assistant_message"]
     assert "&#8211;" not in result["response_html"]
 
 
 @pytest.mark.asyncio
-async def test_generate_response_template_fallback_on_gemini_429() -> None:
-    mock_client = MagicMock()
-    mock_client.models.generate_content.side_effect = genai_errors.ClientError(
-        429,
-        {"error": {"status": "RESOURCE_EXHAUSTED"}},
-        None,
-    )
+async def test_generate_response_template_fallback_on_nim_429() -> None:
+    mock_generate = AsyncMock(side_effect=_rate_limit_error())
 
     state: AgentState = {
         "messages": [HumanMessage(content="birthday cake for mom")],
@@ -189,7 +206,8 @@ async def test_generate_response_template_fallback_on_gemini_429() -> None:
         "intent": "discovery",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "thoughtful Kapruka picks" in result["assistant_message"]
     assert "Chocolate Birthday Cake" in result["assistant_message"]
@@ -341,12 +359,9 @@ def test_select_response_system_instruction_general_omits_empty_tool_results_rul
 
 
 @pytest.mark.asyncio
-async def test_generate_response_parses_json_text_when_parsed_missing() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = None
-    mock_response.text = '{"message": "Chocolate Birthday Cake is in stock at LKR 4,500."}'
-    mock_client.models.generate_content.return_value = mock_response
+async def test_generate_response_renders_validated_schema_reply() -> None:
+    """NIM returns a validated AssistantReply; its message renders into the HTML."""
+    mock_generate = _reply_mock("Chocolate Birthday Cake is in stock at LKR 4,500.")
 
     state: AgentState = {
         "messages": [HumanMessage(content="tell me about cakes")],
@@ -354,7 +369,8 @@ async def test_generate_response_parses_json_text_when_parsed_missing() -> None:
         "session_id": "sess-gen-003",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "Chocolate Birthday Cake" in result["response_html"]
     assert "LKR 4,500" in result["response_html"]
@@ -428,6 +444,28 @@ def test_build_products_carousel_html_renders_carousel() -> None:
     assert html is not None
     assert 'data-testid="product-carousel"' in html
     assert "Chocolate Birthday Cake" in html
+
+
+def test_build_products_carousel_html_artificial_floral_banner() -> None:
+    tool_results = {
+        SEARCH_PRODUCTS_TOOL: {
+            "results": [
+                _product(
+                    "anniv-art-roses",
+                    "Anniversary Artificial Roses Gift Set",
+                    amount=4500.0,
+                ),
+            ],
+        },
+    }
+    html = build_products_carousel_html(
+        tool_results,
+        user_message="Show me some anniversary gifts.",
+    )
+    assert html is not None
+    assert "non-perishable" in html.lower()
+    assert "artificial" in html.lower()
+    assert 'role="note"' in html
 
 
 def test_build_products_carousel_html_empty_when_no_results() -> None:
@@ -507,24 +545,26 @@ def test_build_products_carousel_html_visible_products_uses_mcp_summary() -> Non
 
 
 def test_turn_implies_perishable_gift_chocolate_focus() -> None:
-    from graphs.nodes.generate_response import _generate_reply_sync, _turn_implies_perishable_gift
+    from graphs.nodes.generate_response import _turn_implies_perishable_gift
 
     assert _turn_implies_perishable_gift("thanks", session_product_focus="chocolate")
 
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(message="I'm here for you.")
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
 
-    _generate_reply_sync(
-        mock_client,
-        model="gemini-test",
-        user_prompt="Customer message:\nbreakup\n\ntool_results:\n{}",
-        delivery_context_relevant=False,
-    )
-    config = mock_client.models.generate_content.call_args.kwargs["config"]
-    assert "Do not mention delivery city" in config.system_instruction
+@pytest.mark.asyncio
+async def test_generate_reply_builds_delivery_suppression_instruction() -> None:
+    """_generate_reply passes a system prompt suppressing stale delivery context to NIM."""
+    from graphs.nodes.generate_response import _generate_reply
+
+    mock_generate = _reply_mock("I'm here for you.")
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        await _generate_reply(
+            model=FLASH_MODEL,
+            user_prompt="Customer message:\nbreakup\n\ntool_results:\n{}",
+            delivery_context_relevant=False,
+        )
+
+    system_content = _reply_system_content(mock_generate)
+    assert "Do not mention delivery city" in system_content
 
 
 def test_extract_search_products_filters_puja_for_flowers_when_graph_down() -> None:
@@ -579,11 +619,7 @@ def test_build_user_prompt_includes_formatted_budget_cap() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_response_carousel_respects_session_budget_max() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(message="Here are gifts within your budget.")
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Here are gifts within your budget.")
 
     tool_results = {
         SEARCH_PRODUCTS_TOOL: {
@@ -604,26 +640,22 @@ async def test_generate_response_carousel_respects_session_budget_max() -> None:
         "currency": "LKR",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
     html = _combined_response_html(result)
     first_idx = html.index('data-testid="product-price"')
     first_price_fragment = html[first_idx : first_idx + 120]
     assert "3,500" in first_price_fragment or "3500" in first_price_fragment
     assert 'data-product-id="over"' not in html
 
-    call_kwargs = mock_client.models.generate_content.call_args.kwargs
-    assert "Customer budget cap: Rs. 8,000." in call_kwargs["contents"]
+    assert "Customer budget cap: Rs. 8,000." in _reply_user_content(mock_generate)
 
 
 @pytest.mark.asyncio
 async def test_generate_response_checkout_review_uses_pro_model_and_embeds_summary() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Your order looks ready. Please confirm the delivery details below.",
+    mock_generate = _reply_mock(
+        "Your order looks ready. Please confirm the delivery details below.",
     )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
 
     state: AgentState = {
         "messages": [HumanMessage(content="confirm my order")],
@@ -653,17 +685,18 @@ async def test_generate_response_checkout_review_uses_pro_model_and_embeds_summa
         "session_id": "sess-gen-review-001",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert result["model_tier"] == "pro"
     assert 'data-slot="checkout-review"' in result["response_html"]
     assert 'data-testid="checkout-review"' in result["response_html"]
     assert "confirm" in result["assistant_message"].lower()
 
-    mock_client.models.generate_content.assert_called_once()
-    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    mock_generate.assert_awaited_once()
+    call_kwargs = mock_generate.call_args.kwargs
     assert call_kwargs["model"] == PRO_MODEL
-    assert "checkout_summary" in call_kwargs["contents"]
+    assert "checkout_summary" in _reply_user_content(mock_generate)
 
 
 def test_select_response_system_instruction_utility_mode() -> None:
@@ -701,11 +734,7 @@ def test_select_response_system_instruction_defaults_to_utility() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_response_utility_metadata_uses_ecommerce_prompt() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(message="Chocolate Birthday Cake — LKR 4,500.")
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Chocolate Birthday Cake — LKR 4,500.")
 
     state: AgentState = {
         "messages": [HumanMessage(content="show birthday cakes under 5000")],
@@ -720,23 +749,19 @@ async def test_generate_response_utility_metadata_uses_ecommerce_prompt() -> Non
         "session_id": "sess-gen-utility",
     }
 
-    await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        await generate_response(state)
 
-    config = mock_client.models.generate_content.call_args.kwargs["config"]
-    instruction = config.system_instruction.lower()
+    instruction = _reply_system_content(mock_generate).lower()
     assert "curate" in instruction or "top 2" in instruction
     assert "no filler empathy" not in instruction
 
 
 @pytest.mark.asyncio
 async def test_generate_response_situational_metadata_uses_concierge_prompt() -> None:
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Aiyo machan, here are gentle condolence flowers for her.",
+    mock_generate = _reply_mock(
+        "Aiyo machan, here are gentle condolence flowers for her.",
     )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
 
     state: AgentState = {
         "messages": [HumanMessage(content="mage girlfriend broke up, flowers ona")],
@@ -752,11 +777,12 @@ async def test_generate_response_situational_metadata_uses_concierge_prompt() ->
         "session_id": "sess-gen-concierge",
     }
 
-    await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        await generate_response(state)
 
-    config = mock_client.models.generate_content.call_args.kwargs["config"]
-    assert "concierge" in config.system_instruction.lower()
-    assert "Tanglish" in config.system_instruction
+    system_content = _reply_system_content(mock_generate)
+    assert "concierge" in system_content.lower()
+    assert "Tanglish" in system_content
 
 
 @pytest.mark.asyncio
@@ -861,13 +887,9 @@ def test_build_discovery_template_reply_prepends_artificial_floral_note() -> Non
 @pytest.mark.asyncio
 async def test_generate_response_study_turn_4_silk_roses_disclaimer() -> None:
     """Study turn 4: Kit Kat Silk Roses recommendation includes proactive artificial note."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Here are a few picks for your wife's birthday: Kit Kat Silk Roses Bouquet.",
+    mock_generate = _reply_mock(
+        "Here are a few picks for your wife's birthday: Kit Kat Silk Roses Bouquet.",
     )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
 
     tool_trace: list[ToolInvocation] = [
         {
@@ -891,7 +913,8 @@ async def test_generate_response_study_turn_4_silk_roses_disclaimer() -> None:
         "session_id": "sess-study-turn-4-silk",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     lower = result["assistant_message"].lower()
     assert "kit kat silk roses bouquet" in lower
@@ -915,13 +938,9 @@ def test_cap_search_products_for_llm_context_limits_to_five() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_response_caps_products_in_gemini_context() -> None:
-    """Gemini prompt receives at most five search products; carousel keeps full list."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(message="Here are curated cakes from Kapruka.")
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+async def test_generate_response_caps_products_in_llm_context() -> None:
+    """NIM prompt receives at most five search products; carousel keeps full list."""
+    mock_generate = _reply_mock("Here are curated cakes from Kapruka.")
 
     many_products = [_product(f"cake{i:03d}", f"Cake {i}", amount=1000.0 + i) for i in range(8)]
     tool_results = {SEARCH_PRODUCTS_TOOL: {"results": many_products}}
@@ -932,10 +951,10 @@ async def test_generate_response_caps_products_in_gemini_context() -> None:
         "session_id": "sess-gen-cap-llm",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
-    call_kwargs = mock_client.models.generate_content.call_args.kwargs
-    context = call_kwargs["contents"]
+    context = _reply_user_content(mock_generate)
     assert "Cake 5" not in context
     assert "Cake 4" in context
     assert 'data-product-id="cake007"' in _combined_response_html(result)
@@ -1017,13 +1036,7 @@ def test_merge_tool_trace_unions_search_product_ids() -> None:
 @pytest.mark.asyncio
 async def test_generate_response_merged_trace_carousel_union() -> None:
     """Multi-step agent loop trace renders carousel from unioned search products."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Here are cakes from both searches.",
-    )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Here are cakes from both searches.")
 
     tool_trace: list[ToolInvocation] = [
         {
@@ -1049,27 +1062,22 @@ async def test_generate_response_merged_trace_carousel_union() -> None:
         "session_id": "sess-gen-trace-union",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     html = _combined_response_html(result)
     assert 'data-testid="product-carousel"' in html
     assert 'data-product-id="cake00ka002034"' in html
     assert 'data-product-id="cake00ka002099"' in html
-    call_kwargs = mock_client.models.generate_content.call_args.kwargs
-    assert "Chocolate Birthday Cake" in call_kwargs["contents"]
-    assert "Vanilla Celebration Cake" in call_kwargs["contents"]
+    user_content = _reply_user_content(mock_generate)
+    assert "Chocolate Birthday Cake" in user_content
+    assert "Vanilla Celebration Cake" in user_content
 
 
 @pytest.mark.asyncio
 async def test_generate_response_clarifying_question_with_carousel() -> None:
     """ask_user with fresh search renders clarifier alongside carousel (clarify+search)."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Here are flower options while we confirm delivery."
-    )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Here are flower options while we confirm delivery.")
 
     state: AgentState = {
         "messages": [HumanMessage(content="send flowers to my aunt")],
@@ -1086,22 +1094,19 @@ async def test_generate_response_clarifying_question_with_carousel() -> None:
         "session_id": "sess-gen-clarify",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "Which city should we deliver to?" in result["assistant_message"]
     assert "Which city should we deliver to?" in result["response_html"]
     assert 'data-testid="product-carousel"' in _combined_response_html(result)
-    mock_client.models.generate_content.assert_called_once()
+    mock_generate.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_generate_response_ignores_stale_clarifying_question_on_finish() -> None:
     """Stale ask_user clarifying text must not mask fresh search products on finish."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(message="Here are some cakes from Kapruka.")
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Here are some cakes from Kapruka.")
 
     tool_trace: list[ToolInvocation] = [
         {
@@ -1130,14 +1135,15 @@ async def test_generate_response_ignores_stale_clarifying_question_on_finish() -
         "session_id": "sess-gen-stale-clarify",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     html = _combined_response_html(result)
     assert "The previous search for 'gifts'" not in result["assistant_message"]
     assert 'data-testid="product-carousel"' in html
     assert 'data-product-id="cake00ka002034"' in html
     assert 'data-product-id="cake00ka002099"' in html
-    mock_client.models.generate_content.assert_called_once()
+    mock_generate.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1233,6 +1239,16 @@ def test_build_agent_tool_error_message_rate_limit() -> None:
     assert "checking our catalog" in message.lower()
 
 
+def test_build_agent_tool_error_message_timeout() -> None:
+    message = build_agent_tool_error_message(
+        tool=SEARCH_PRODUCTS_TOOL,
+        raw_message="NVIDIA NIM timed out; using catalog results already gathered.",
+        error_code="timeout",
+    )
+    assert "NVIDIA" not in message
+    assert "too long" in message.lower()
+
+
 def test_build_agent_tool_error_message_city_not_deliverable() -> None:
     message = build_agent_tool_error_message(
         tool=CHECK_DELIVERY_TOOL,
@@ -1242,6 +1258,17 @@ def test_build_agent_tool_error_message_city_not_deliverable() -> None:
     assert "cannot deliver to that city" in message.lower()
     assert "Colombo 03" in message
     assert "loc:" not in message.lower()
+
+
+def test_build_agent_tool_error_message_unknown_city_sanitized() -> None:
+    message = build_agent_tool_error_message(
+        tool=CHECK_DELIVERY_TOOL,
+        raw_message="Error (city_not_found): Unknown city 'Colombo'",
+        error_code="city_not_found",
+    )
+    assert "Unknown city" not in message
+    assert "couldn't find that city" in message.lower()
+    assert "Colombo 03" in message
 
 
 def test_build_agent_tool_error_message_get_product_unresolved() -> None:
@@ -1405,13 +1432,7 @@ async def test_generate_response_combined_weight_and_sweetness() -> None:
 @pytest.mark.asyncio
 async def test_generate_response_llm_path_appends_sweetness_note() -> None:
     """Sweetness preference on the LLM synthesis path gets catalog honesty."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Here are some elegant birthday cakes for your mom.",
-    )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Here are some elegant birthday cakes for your mom.")
     state: AgentState = {
         "messages": [
             HumanMessage(
@@ -1432,10 +1453,11 @@ async def test_generate_response_llm_path_appends_sweetness_note() -> None:
         "session_id": "sess-gen-sweetness-llm",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "sweetness" in result["assistant_message"].lower()
-    mock_client.models.generate_content.assert_called_once()
+    mock_generate.assert_awaited_once()
 
 
 def test_build_agent_tool_error_message_validation_error_hides_pydantic_loc() -> None:
@@ -1658,13 +1680,9 @@ def test_carousel_strict_budget_false_on_topic_pivot() -> None:
 @pytest.mark.asyncio
 async def test_generate_response_roses_under_budget_guard_rewrites_llm_negation() -> None:
     """Eval B-03: carousel and reply agree when LLM falsely claims no in-budget roses."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="I couldn't find any fresh roses under Rs. 5,000 on Kapruka right now.",
+    mock_generate = _reply_mock(
+        "I couldn't find any fresh roses under Rs. 5,000 on Kapruka right now.",
     )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
 
     tool_results = {
         SEARCH_PRODUCTS_TOOL: {
@@ -1683,7 +1701,8 @@ async def test_generate_response_roses_under_budget_guard_rewrites_llm_negation(
         "intent": "discovery",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "couldn't find" not in result["assistant_message"].lower()
     assert "no fresh" not in result["assistant_message"].lower()
@@ -1811,13 +1830,7 @@ def test_apply_perishable_delivery_honesty_appends_verified_fee_from_tool_trace(
 @pytest.mark.asyncio
 async def test_generate_response_surfaces_delivery_fee_when_mcp_returns_rate() -> None:
     """Discovery reply quotes verified fee when check_delivery succeeds without LLM fee copy."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Here are some lovely rose bouquets for Galle.",
-    )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Here are some lovely rose bouquets for Galle.")
 
     tool_trace: list[ToolInvocation] = [
         {
@@ -1850,7 +1863,8 @@ async def test_generate_response_surfaces_delivery_fee_when_mcp_returns_rate() -
         "session_id": "sess-delivery-fee",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert (
         "Yes, we can deliver to Galle on Wednesday, 17 June 2026. Delivery fee is Rs. 450."
@@ -1863,16 +1877,10 @@ async def test_generate_response_surfaces_delivery_fee_when_mcp_returns_rate() -
 @pytest.mark.asyncio
 async def test_generate_response_perishable_warning_surfaces_in_chat() -> None:
     """Study turn 3 follow-up: grounded fee copy plus perishable_warning partial."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message=(
-            "Delivery to Colombo is available on 2026-06-22. "
-            "The flat delivery rate is Rs. 350 per order."
-        ),
+    mock_generate = _reply_mock(
+        "Delivery to Colombo is available on 2026-06-22. "
+        "The flat delivery rate is Rs. 350 per order.",
     )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
 
     perishable_warning = (
         "Fresh flowers are best within 1–2 days of delivery. "
@@ -1913,7 +1921,8 @@ async def test_generate_response_perishable_warning_surfaces_in_chat() -> None:
         "session_id": "sess-perishable-delivery",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "Rs. 350" in result["assistant_message"]
     assert perishable_warning not in result["assistant_message"]
@@ -1927,13 +1936,9 @@ async def test_generate_response_perishable_warning_surfaces_in_chat() -> None:
 @pytest.mark.asyncio
 async def test_generate_response_guard_blocks_llm_hallucinated_delivery_fee() -> None:
     """LLM delivery fee without check_delivery this turn is replaced with clarifying copy."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Yes, we deliver to Kandy for a flat rate of Rs. 500 per order.",
+    mock_generate = _reply_mock(
+        "Yes, we deliver to Kandy for a flat rate of Rs. 500 per order.",
     )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
 
     state: AgentState = {
         "messages": [HumanMessage(content="birthday cake for mom in Kandy")],
@@ -1950,7 +1955,8 @@ async def test_generate_response_guard_blocks_llm_hallucinated_delivery_fee() ->
         "session_id": "sess-guard-delivery-fee",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "Rs. 500" not in result["assistant_message"]
     assert "Kandy" in result["assistant_message"]
@@ -2000,11 +2006,7 @@ def test_prepend_situational_empathy_skips_when_reply_already_has_sorry() -> Non
 @pytest.mark.asyncio
 async def test_generate_response_budget_turn_prefers_refined_chocolate_carousel() -> None:
     """Budget-only turn uses last_search chocolate picks, not greeting-card MCP drift."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(message="Here are chocolate gifts within your budget.")
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Here are chocolate gifts within your budget.")
 
     chocolate_product = {
         "id": "choc001",
@@ -2037,7 +2039,8 @@ async def test_generate_response_budget_turn_prefers_refined_chocolate_carousel(
         "currency": "LKR",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert "Heart Chocolate Box" in _combined_response_html(result)
     assert result.get("response_html") is not None
@@ -2161,16 +2164,45 @@ def test_apply_perishable_delivery_honesty_warning_only_in_partial_when_dated() 
     assert delivery_html.count(warning) == 1
 
 
+def test_apply_perishable_delivery_honesty_synthesizes_far_ahead_warning() -> None:
+    """Perishable gift + delivery ≥7 days out gets a freshness warning when MCP omits one."""
+    from datetime import timedelta
+
+    from lib.chat.delivery_dates import colombo_today
+
+    far_date = (colombo_today() + timedelta(days=10)).isoformat()
+    tool_trace: list[ToolInvocation] = [
+        {
+            "name": CHECK_DELIVERY_TOOL,
+            "args": {"city": "Kandy", "delivery_date": far_date},
+            "result": {
+                "city": "Kandy",
+                "now": f"{colombo_today().isoformat()}T10:00:00+05:30",
+                "checked_date": far_date,
+                "available": True,
+                "rate": 1075.0,
+                "currency": "LKR",
+                "reason": None,
+                "next_available_date": None,
+                "perishable_warning": None,
+            },
+        },
+    ]
+    reply, delivery_html = _apply_perishable_delivery_honesty(
+        "Delivery to Kandy is available.",
+        tool_trace,
+        user_message="Deliver these cakes to Kandy",
+        session_product_focus="cake",
+    )
+    assert delivery_html is not None
+    assert "more than a day out" in delivery_html.lower() or "more than a day out" in reply.lower()
+    assert "closer to the event" in (delivery_html or reply).lower()
+
+
 @pytest.mark.asyncio
 async def test_generate_response_skips_date_clarifier_when_carousel_deferred() -> None:
     """City-scoped cake discovery shows carousel without a redundant delivery-date gate."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.parsed = AssistantReply(
-        message="Here are some elegant birthday cakes for Colombo.",
-    )
-    mock_response.text = mock_response.parsed.model_dump_json()
-    mock_client.models.generate_content.return_value = mock_response
+    mock_generate = _reply_mock("Here are some elegant birthday cakes for Colombo.")
     state: AgentState = {
         "messages": [
             HumanMessage(
@@ -2198,7 +2230,8 @@ async def test_generate_response_skips_date_clarifier_when_carousel_deferred() -
         "session_id": "sess-discovery-date-skip",
     }
 
-    result = await generate_response(state, genai_client=mock_client)
+    with patch(_GENERATE_CONTENT_TARGET, mock_generate):
+        result = await generate_response(state)
 
     assert delivery_date_clarifying_question() not in result["assistant_message"]
     assert "sweetness" in result["assistant_message"].lower()

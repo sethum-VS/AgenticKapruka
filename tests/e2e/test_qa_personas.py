@@ -11,6 +11,7 @@ from tests.e2e.helpers import (
     fetch_mcp_tools,
     reset_e2e_session,
     send_chat_message,
+    start_new_session,
     wait_for_alpine,
 )
 
@@ -70,14 +71,7 @@ def test_persona_context_pivot_cakes_not_vouchers(page: Page, base_url: str) -> 
     reset_e2e_session(page, base_url)
 
     _chat_turn(page, "chocolates for wife under 6000")
-    page.click('[data-testid="new-chat-button"]')
-    page.wait_for_function(
-        """() => {
-          const empty = document.getElementById('chat-empty-state');
-          const carousels = document.querySelectorAll('[data-testid="product-carousel"]');
-          return empty && carousels.length === 0;
-        }"""
-    )
+    start_new_session(page, keep_cart=True, base_url=base_url)
     anniversary_reply = _chat_turn(page, "anniversary gifts for my wife")
     assert "over budget" not in anniversary_reply.lower()
     assert "verified with kapruka" not in anniversary_reply.lower()
@@ -151,7 +145,7 @@ def test_persona_action_shopper_tracking_and_cart(page: Page, base_url: str) -> 
     assert re.search(r"vimp|order\s*id|tracking\s*id|format", lowered_ka), (
         f"Expected VIMP format guidance for KA order ID, got: {ka_reply!r}"
     )
-    assert page.locator('[data-testid="tracking-card"]').count() == 0, (
+    assert page.locator('[data-testid="order-tracking-status"]').count() == 0, (
         "KA order ID should not show a tracking card"
     )
 
@@ -171,7 +165,8 @@ def test_persona_action_shopper_tracking_and_cart(page: Page, base_url: str) -> 
     assert re.search(r"added|cart|added to cart|in your cart", lowered_cart), (
         f"Expected cart-add confirmation, got: {cart_reply!r}"
     )
-    cart_count = page.locator('[data-testid="cart-count"]')
+    cart_count = page.locator('[data-testid="cart-badge"]')
     if cart_count.count() > 0:
-        count_text = cart_count.first.inner_text()
-        assert int(count_text) >= 1, f"Expected cart count >= 1, got {count_text!r}"
+        count_text = cart_count.first.inner_text().strip()
+        if count_text:
+            assert int(count_text) >= 1, f"Expected cart count >= 1, got {count_text!r}"

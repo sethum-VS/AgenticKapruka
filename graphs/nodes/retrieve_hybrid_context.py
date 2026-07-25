@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -12,8 +13,8 @@ from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.chat.intent_heuristics import is_budget_refinement_message
 from lib.chat.intent_metadata import IntentMetadata
-from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.embeddings.nvidia_embeddings import embed_texts
+from lib.embeddings.reranker import CrossEncoderService, get_reranker
 from lib.neo4j.client import Neo4jClient
 from lib.neo4j.hybrid_context import (
     build_graph_hybrid_context,
@@ -92,9 +93,7 @@ async def _fetch_graph_hybrid_context(
 
     direct_category_ids = [hit.id for hit in category_hits]
     threshold = get_settings().nvidia_vector_threshold
-    high_confidence_occasion_ids = [
-        hit.id for hit in occasion_hits if hit.score >= threshold
-    ]
+    high_confidence_occasion_ids = [hit.id for hit in occasion_hits if hit.score >= threshold]
     occasion_category_ids = await fetch_category_ids_for_occasions(
         neo4j_client,
         high_confidence_occasion_ids,
@@ -146,6 +145,15 @@ async def retrieve_hybrid_context(
     skip_graph_reembed = bool(
         is_budget_refinement_message(user_message) and hybrid_context,
     )
+    # Skip re-embed when GraphRAG was already degraded this session — avoid
+    # burning turn budget on Aura reconnects for budget-only refinements.
+    if (
+        not skip_graph_reembed
+        and isinstance(intent_metadata, dict)
+        and intent_metadata.get("graph_degraded")
+        and is_budget_refinement_message(user_message)
+    ):
+        skip_graph_reembed = True
     if topic_pivot:
         hybrid_context = {}
 
@@ -180,6 +188,7 @@ async def retrieve_hybrid_context(
         task_kinds.append("graph")
 
     graph_context: dict[str, Any] = {}
+    graph_started = time.monotonic() if graph_task is not None else None
     if async_tasks:
         results = await asyncio.gather(*async_tasks, return_exceptions=True)
         for kind, result in zip(task_kinds, results, strict=True):
@@ -194,6 +203,11 @@ async def retrieve_hybrid_context(
                 else:
                     preferences = result
             elif kind == "graph":
+                if graph_started is not None:
+                    logger.info(
+                        "retrieve_hybrid_context: Neo4j GraphRAG finished in %.0fms",
+                        (time.monotonic() - graph_started) * 1000,
+                    )
                 if isinstance(result, BaseException):
                     logger.exception(
                         "retrieve_hybrid_context: Neo4j GraphRAG failed; continuing with Zep only",
@@ -261,7 +275,7 @@ async def retrieve_hybrid_context(
     elif graph_context:
         graph_hints = graph_context.get("hints") or {}
         if graph_context.get("vector_hits") and not graph_hints:
-            logger.debug(
+            logger.warning(
                 "retrieve_hybrid_context: rerank_prune_empty_hints query=%r vector_hits=%d",
                 user_message[:80],
                 len(graph_context.get("vector_hits") or []),
@@ -291,9 +305,9 @@ def _merge_graph_hybrid_context(
 
     for key, value in graph_hints.items():
         if topic_pivot and key in ("occasion", "category"):
-            hints[key] = value
-        else:
-            hints.setdefault(key, value)
+            # Fresh category pivots must not re-inherit stale GraphRAG occasion/category.
+            continue
+        hints.setdefault(key, value)
 
     merged["hints"] = hints
     for key in (

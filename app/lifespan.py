@@ -47,11 +47,26 @@ async def _connect_optional[T](
     return client
 
 
+def _warn_missing_app_css() -> None:
+    from os import path as os_path
+
+    app_css = os_path.normpath(
+        os_path.join(os_path.dirname(__file__), "..", "static", "css", "app.css"),
+    )
+    if not os_path.isfile(app_css):
+        logger.warning(
+            "static/css/app.css is missing — UI will be unstyled. "
+            "Run `make css` or `.\\scripts\\dev.ps1 start` to build Tailwind CSS.",
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Connect external services on startup; release resources on shutdown."""
     configure_dev_logging()
     settings = get_settings()
+    _warn_missing_app_css()
+
     app.state.redis = await _connect_optional(
         "Redis",
         lambda: RedisClient.connect(settings.redis_url),

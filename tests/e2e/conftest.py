@@ -37,9 +37,42 @@ def _e2e_health_ok() -> bool:
 
 def _free_e2e_port() -> None:
     """Stop any process bound to the E2E port so pytest always runs fresh mock code."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    if os.name == "nt":
+        # Windows: no Makefile/`make` — free the E2E port directly.
+        try:
+            out = subprocess.check_output(
+                ["netstat", "-ano"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            return
+        needle = f":{E2E_PORT}"
+        pids: set[int] = set()
+        for line in out.splitlines():
+            if needle not in line or "LISTENING" not in line.upper():
+                continue
+            parts = line.split()
+            if not parts:
+                continue
+            try:
+                pids.add(int(parts[-1]))
+            except ValueError:
+                continue
+        for pid in pids:
+            # ``/T`` also terminates child processes; a spawned worker can inherit
+            # and hold the listening socket, which would otherwise keep answering
+            # /health and mask a freshly started E2E server.
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+            )
+        return
     subprocess.run(
         ["make", "stop-all"],
-        cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        cwd=root,
         check=False,
         capture_output=True,
     )

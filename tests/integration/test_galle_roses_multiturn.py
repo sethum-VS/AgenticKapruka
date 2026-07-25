@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,13 +9,10 @@ from zoneinfo import ZoneInfo
 
 import fakeredis.aioredis
 import pytest
-from google.genai import types
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from langgraph.checkpoint.redis.key_registry import AsyncCheckpointKeyRegistry
 
 from graphs.nodes.agent_loop import AgentPlannerStep
-from graphs.nodes.analyze_intent import IntentClassification
-from graphs.nodes.generate_response import AssistantReply
 from graphs.shopping_graph import (
     ShoppingGraphDeps,
     append_message_state,
@@ -93,19 +89,32 @@ async def checkpointer(redis_client: RedisClient) -> AsyncRedisSaver:
 def _discovery_mock_genai() -> MagicMock:
     mock_client = MagicMock()
 
-    async def fake_generate_content(*, model: str | None = None, messages: list = [], response_schema: Any = None, **kwargs: Any) -> Any:
+    async def fake_generate_content(
+        *,
+        model: str | None = None,
+        messages: list | None = None,
+        response_schema: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        if messages is None:
+            messages = []
         schema_name = getattr(response_schema, "__name__", "")
         if schema_name == "IntentClassification":
             from graphs.nodes.analyze_intent import IntentClassification
+
             return IntentClassification(intent="discovery")
         if schema_name == "AssistantReply":
             from graphs.nodes.generate_response import AssistantReply
+
             return AssistantReply(message="Here is a mock response.")
         if schema_name == "MasterFlowAlignment":
             from lib.chat.master_flow import MasterFlowAlignment
+
             return MasterFlowAlignment(decision="hold", confidence=0.9, active_flow="shopping")
         return {"content": "mocked"}
+
     from lib.genai.completions import set_override_generate_content
+
     try:
         from tests.helpers.mock_genai import ACTIVE_PATCHERS
     except ImportError:
@@ -113,7 +122,6 @@ def _discovery_mock_genai() -> MagicMock:
     set_override_generate_content(fake_generate_content)
     ACTIVE_PATCHERS.append(fake_generate_content)
     return mock_client
-
 
 
 def _planner_steps_turn1() -> list[AgentPlannerStep]:

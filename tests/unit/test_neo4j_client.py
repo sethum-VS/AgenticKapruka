@@ -91,6 +91,66 @@ async def test_neo4j_client_execute_returns_record_dicts() -> None:
     await client.close()
 
 
+async def test_neo4j_client_execute_retries_connection_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ConnectionResetError triggers reconnect and a successful retry."""
+    attempts = {"count": 0}
+    drivers_created: list[_MockAsyncDriver] = []
+
+    class _FlakySession(_MockAsyncSession):
+        async def run(
+            self,
+            cypher: str,
+            parameters: dict[str, Any] | None = None,
+            **kwargs: Any,
+        ) -> _MockAsyncResult:
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise ConnectionResetError("connection reset by peer")
+            return await super().run(cypher, parameters, **kwargs)
+
+    class _FlakyDriver(_MockAsyncDriver):
+        @asynccontextmanager
+        async def session(self, **kwargs: Any) -> AsyncIterator[_FlakySession]:
+            del kwargs
+            yield _FlakySession()
+
+    def mock_driver_factory(
+        uri: str,
+        *,
+        auth: tuple[str, str] | None = None,
+        **config: Any,
+    ) -> _MockAsyncDriver:
+        del uri, auth, config
+        driver = _FlakyDriver()
+        drivers_created.append(driver)
+        return driver
+
+    monkeypatch.setattr(AsyncGraphDatabase, "driver", mock_driver_factory)
+    monkeypatch.setattr("lib.neo4j.client.asyncio.sleep", _async_noop)
+
+    first_driver = _FlakyDriver()
+    client = Neo4jClient(
+        "bolt://localhost:7687",
+        "neo4j",
+        "password",
+        driver=first_driver,  # type: ignore[arg-type]
+    )
+
+    rows = await client.execute("RETURN $value AS value", {"value": "kapruka"})
+
+    assert rows == [{"value": "kapruka"}]
+    assert attempts["count"] == 2
+    assert first_driver.closed is True
+    assert len(drivers_created) == 1
+    assert drivers_created[0].verify_called is True
+
+
+async def _async_noop(*_args: Any, **_kwargs: Any) -> None:
+    return None
+
+
 async def test_neo4j_client_connect_verifies_and_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

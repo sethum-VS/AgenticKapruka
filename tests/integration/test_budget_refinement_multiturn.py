@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from datetime import date
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import fakeredis.aioredis
 import pytest
-from google.genai import types
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from langgraph.checkpoint.redis.key_registry import AsyncCheckpointKeyRegistry
 
@@ -111,14 +109,19 @@ def _discovery_mock_genai() -> MagicMock:
 
         if schema_name == "IntentClassification":
             intent_calls += 1
-            print(f"\n[DEBUG] IntentClassification called. Call count: {intent_calls}. User message: {messages[-1].get('content')}")
+            print(
+                f"\n[DEBUG] IntentClassification called. Call count: {intent_calls}. "
+                f"User message: {messages[-1].get('content')}",
+            )
             if intent_calls >= 3:
-                return IntentClassification(intent="delivery", requires_delivery_validation=True, target_city="Kandy")
+                return IntentClassification(
+                    intent="delivery", requires_delivery_validation=True, target_city="Kandy"
+                )
             return IntentClassification(intent="discovery")
 
         if schema_name == "AgentPlannerStep":
             return AgentPlannerStep(action="finish", thought="Testing", response_to_user="Done")
-            
+
         if schema_name == "AssistantReply":
             return AssistantReply(message="Here are chocolate gifts within your budget.")
 
@@ -128,10 +131,11 @@ def _discovery_mock_genai() -> MagicMock:
         return {"content": "mocked", "role": "assistant"}
 
     set_override_generate_content(fake_generate_content)
-    
+
     # We must append to ACTIVE_PATCHERS so tests/conftest.py cleans it up
     try:
         from tests.helpers.mock_genai import ACTIVE_PATCHERS
+
         ACTIVE_PATCHERS.append(fake_generate_content)
     except ImportError:
         pass

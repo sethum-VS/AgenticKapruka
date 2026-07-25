@@ -84,24 +84,8 @@ async def test_resolve_delivery_context_skips_when_no_city_signal() -> None:
 
 @pytest.mark.asyncio
 async def test_resolve_delivery_context_ambiguous_colombo_clarifies() -> None:
+    """Bare Colombo without a date soft-nudges without calling check_delivery."""
     service = AsyncMock(spec=KaprukaService)
-    preflight_output = {
-        "city": "Colombo",
-        "now": "2026-06-12T12:00:00+05:30",
-        "checked_date": "2026-06-12",
-        "available": True,
-        "rate": 500.0,
-        "currency": "LKR",
-        "reason": None,
-        "next_available_date": None,
-        "perishable_warning": None,
-    }
-
-    class _MockOutput:
-        def model_dump(self) -> dict[str, object]:
-            return preflight_output
-
-    service.check_delivery.return_value = _MockOutput()
 
     state: AgentState = {
         "messages": [HumanMessage(content="Birthday cake for mom in Colombo")],
@@ -130,21 +114,22 @@ async def test_resolve_delivery_context_ambiguous_colombo_clarifies() -> None:
         )
 
     assert result["delivery_city_status"] == "ambiguous"
-    assert result["agent_clarifying_question"] == ambiguous.customer_message
     assert result["delivery_context_ready"] is True
     assert result.get("agent_loop_exit_reason") is None
-    tool_trace = result.get("tool_trace") or []
-    assert len(tool_trace) == 1
-    assert tool_trace[0]["name"] == "kapruka_check_delivery"
-    assert tool_trace[0]["args"] == {"city": "Colombo"}
+    assert result.get("session_delivery_city_canonical") == "Colombo 03"
+    assert result.get("session_delivery_city_confirmed") is False
+    assert "Using Colombo 03" in (result.get("agent_clarifying_question") or "")
+    # Must not call check_delivery with bare "Colombo" (MCP Unknown city).
+    service.check_delivery.assert_not_awaited()
+    assert not (result.get("tool_trace") or [])
 
 
 @pytest.mark.asyncio
 async def test_resolve_delivery_context_ambiguous_colombo_soft_nudge_dated_preflight() -> None:
-    """Rich cake + bare Colombo runs dated check_delivery before zone clarify."""
+    """Rich cake + bare Colombo + date preflights with default zone, not raw Colombo."""
     service = AsyncMock(spec=KaprukaService)
     preflight_output = {
-        "city": "Colombo",
+        "city": "Colombo 03",
         "now": "2026-06-12T12:00:00+05:30",
         "checked_date": "2026-06-15",
         "available": True,
@@ -203,14 +188,19 @@ async def test_resolve_delivery_context_ambiguous_colombo_soft_nudge_dated_prefl
 
     service.check_delivery.assert_awaited_once_with(
         _CLIENT_IP,
-        city="Colombo",
+        city="Colombo 03",
         delivery_date="2026-06-15",
         product_id=None,
     )
     tool_trace = result.get("tool_trace") or []
     assert len(tool_trace) == 1
     assert tool_trace[0]["name"] == "kapruka_check_delivery"
-    assert tool_trace[0]["args"] == {"city": "Colombo", "delivery_date": "2026-06-15"}
+    assert tool_trace[0]["args"] == {"city": "Colombo 03", "delivery_date": "2026-06-15"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_delivery_context_delivery_only_bare_colombo_asks_zone() -> None:
+    """Pure delivery inquiry with bare Colombo blocks until a zone is chosen."""
     service = AsyncMock(spec=KaprukaService)
     state: AgentState = {
         "messages": [HumanMessage(content="Can you deliver to Colombo this Sunday?")],

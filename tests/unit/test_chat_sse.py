@@ -65,9 +65,10 @@ async def test_iter_chat_sse_events_skips_catalog_status_for_tracking_intent() -
     ):
         events.append(event)
 
-    assert len(events) == 2
+    assert len(events) == 3
     assert 'data: <div id="user">track</div>' in events[0]
     assert not any("Searching our catalog" in event for event in events)
+    assert any("That took too long" in event for event in events)
 
 
 @pytest.mark.asyncio
@@ -184,6 +185,107 @@ async def test_iter_chat_sse_events_yields_user_then_assistant_chunks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_iter_chat_sse_events_skips_catalog_status_for_clarify_band() -> None:
+    """Pre-scored clarify turns must not emit misleading Searching our catalog status."""
+    mock_graph = MagicMock()
+
+    async def empty_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        if False:
+            yield ("updates", {})
+
+    mock_graph.astream = empty_astream
+
+    events: list[str] = []
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={
+            "specificity_band": "clarify",
+            "agent_clarifying_question": "Who is the gift for?",
+            "messages": [],
+        },
+        config={"configurable": {"thread_id": "t-clarify"}},
+        user_html='<div id="user">gift ideas</div>',
+        stream_id="clarify1",
+    ):
+        events.append(event)
+
+    assert len(events) == 3
+    assert not any("Searching our catalog" in event for event in events)
+    assert any("That took too long" in event for event in events)
+
+
+@pytest.mark.asyncio
+async def test_iter_chat_sse_events_finally_yields_timeout_fallback_without_done() -> None:
+    """Silent graph completion still yields a user-visible fallback bubble."""
+    mock_graph = MagicMock()
+
+    async def empty_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        if False:
+            yield ("updates", {})
+
+    mock_graph.astream = empty_astream
+
+    events: list[str] = []
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={},
+        config={"configurable": {"thread_id": "t-silent"}},
+        user_html="<p>user</p>",
+        stream_id="silent1",
+    ):
+        events.append(event)
+
+    assert any("That took too long" in event for event in events)
+    assert events[-1].startswith("event: done\n")
+
+
+@pytest.mark.asyncio
+async def test_iter_chat_sse_events_yields_thinking_on_analyze_intent_clarify() -> None:
+    """Mid-stream analyze_intent clarify updates swap the status bubble to Thinking."""
+    mock_graph = MagicMock()
+
+    async def clarify_astream(
+        state: object,
+        config: dict[str, Any],
+        stream_mode: str | list[str] | None = None,
+    ) -> Any:
+        yield (
+            "updates",
+            {
+                "analyze_intent": {
+                    "specificity_band": "clarify",
+                    "agent_clarifying_question": "Who is the gift for?",
+                },
+            },
+        )
+        if False:
+            yield ("updates", {})
+
+    mock_graph.astream = clarify_astream
+
+    events: list[str] = []
+    async for event in iter_chat_sse_events(
+        graph=mock_graph,
+        state={},
+        config={"configurable": {"thread_id": "t-thinking"}},
+        user_html="<p>user</p>",
+        stream_id="think1",
+    ):
+        events.append(event)
+
+    status_events = [event for event in events if event.startswith("event: status\n")]
+    assert any("Thinking…" in event for event in status_events)
+
+
+@pytest.mark.asyncio
 async def test_iter_chat_sse_events_yields_timeout_partial_on_wall_clock_exceed() -> None:
     """Per-turn wall-clock guard yields graceful timeout copy when astream stalls."""
     mock_graph = MagicMock()
@@ -202,7 +304,7 @@ async def test_iter_chat_sse_events_yields_timeout_partial_on_wall_clock_exceed(
     mock_graph.astream = slow_astream
 
     collected: list[str] = []
-    with patch("lib.chat.streaming.CHAT_TURN_TIMEOUT_SECONDS", 0.01):
+    with patch("lib.chat.streaming.chat_turn_timeout_seconds", return_value=0.01):
         async for event in iter_chat_sse_events(
             graph=mock_graph,
             state={},
@@ -213,8 +315,8 @@ async def test_iter_chat_sse_events_yields_timeout_partial_on_wall_clock_exceed(
             collected.append(event)
 
     assert collected
-    assert any("longer than expected" in event for event in collected)
-    assert sum("longer than expected" in event for event in collected) == 1
+    assert any("That took too long" in event for event in collected)
+    assert sum("That took too long" in event for event in collected) == 1
 
 
 @pytest.mark.asyncio

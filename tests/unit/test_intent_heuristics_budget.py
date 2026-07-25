@@ -18,6 +18,17 @@ def test_is_budget_refinement_message_under_price_only() -> None:
     assert is_budget_refinement_message("Keep it under 6000 rupees.")
 
 
+def test_is_budget_refinement_message_soft_gifts_token() -> None:
+    assert is_budget_refinement_message("keep gifts under 6000")
+
+
+def test_is_budget_refinement_message_same_focus_allowed() -> None:
+    assert is_budget_refinement_message(
+        "chocolate gifts under 6000",
+        session_product_focus="chocolate",
+    )
+
+
 def test_is_budget_refinement_message_rejects_new_product() -> None:
     assert not is_budget_refinement_message("chocolate gifts under 6000")
 
@@ -27,14 +38,28 @@ def test_is_topic_pivot_message_nevermind_cakes() -> None:
     assert not is_topic_pivot_message("cakes")
 
 
+def test_is_topic_pivot_message_rejects_budget_only_actually() -> None:
+    """Budget refinements that start with Actually are not topic pivots."""
+    assert not is_topic_pivot_message("Actually, keep it under 6000 rupees.")
+    assert is_budget_refinement_message("Actually, keep it under 6000 rupees.")
+
+
 def test_is_topic_pivot_message_rejects_full_request() -> None:
     assert not is_topic_pivot_message("birthday cake for mom under 5000")
 
 
 def test_is_bare_category_pivot_nevermind_cakes() -> None:
     assert is_bare_category_pivot("Nevermind. Cakes.") == "cake"
-    assert is_bare_category_pivot("cakes") is None
+    assert is_bare_category_pivot("cakes") == "cake"
     assert is_bare_category_pivot("birthday cake for mom") is None
+
+
+def test_is_bare_category_pivot_fresh_flowers_with_modifiers() -> None:
+    assert is_bare_category_pivot("What about just normal fresh flowers?") == "flowers"
+    assert is_bare_category_pivot("Nevermind. Flowers.") == "flowers"
+    assert is_bare_category_pivot("Normal fresh flowers?") == "flowers"
+    assert is_bare_category_pivot("flowers for mom") is None
+    assert is_bare_category_pivot("cakes under 5000") is None
 
 
 def test_has_explicit_budget_constraint_anniversary_under_6000() -> None:

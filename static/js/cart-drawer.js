@@ -88,6 +88,11 @@ document.addEventListener("alpine:init", () => {
       document.body.addEventListener("htmx:afterSwap", (event) => {
         this.syncCountFromPanel(event);
       });
+      // Chat SSE cart confirmation uses hx-swap-oob on #cart-panel; that fires
+      // oobAfterSwap rather than afterSwap with target === cart-panel.
+      document.body.addEventListener("htmx:oobAfterSwap", (event) => {
+        this.syncCountFromPanel(event);
+      });
       window.addEventListener("resize", () => {
         if (this.open) {
           updateCartDrawerComposerClearance();
@@ -150,10 +155,11 @@ document.addEventListener("alpine:init", () => {
 
     syncCountFromPanel(event) {
       const target = event.detail?.target;
-      if (!target || target.id !== "cart-panel") {
+      const elt = event.detail?.elt;
+      if (target?.id !== "cart-panel" && elt?.id !== "cart-panel") {
         return;
       }
-      // outerHTML swap: detail.target is the removed node (stale count); read live panel.
+      // outerHTML/OOB swap: event nodes may be stale; read the live panel.
       const panel = document.getElementById("cart-panel");
       const raw = panel?.getAttribute("data-item-count") ?? "0";
       const count = parseInt(raw, 10);

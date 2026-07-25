@@ -124,6 +124,11 @@ _FOCUS_TOKEN_PATTERNS: dict[str, re.Pattern[str]] = {
     "gift": re.compile(r"\b(?:hamper|combo|combopack|gift)\b", re.I),
 }
 _ANNIVERSARY_OCCASION_RE = re.compile(r"\banniversary\b", re.I)
+_KIDS_THEMED_RE = re.compile(
+    r"\b(?:kids?|children|child|boy|girl|princess|superhero|cartoon)\b",
+    re.I,
+)
+_ADULT_RECIPIENTS = _FEMALE_RECIPIENTS | _MALE_RECIPIENTS | _NEUTRAL_RECIPIENTS
 _ANNIVERSARY_PROMOTE_RE = re.compile(
     r"\b(?:flower|flowers|rose|roses|bouquet|floral|cake|cakes|hamper|hampers|"
     r"chocolate|chocolates|combo|combopack)\b",
@@ -465,6 +470,33 @@ def demote_loose_grocery_items(
     return preferred + demoted
 
 
+def demote_kids_themed_products(
+    products: list[dict[str, Any]],
+    *,
+    session_recipient_hint: str | None = None,
+    user_message: str = "",
+) -> list[dict[str, Any]]:
+    """Demote kids/children-themed products when the recipient is an adult."""
+    if not products:
+        return []
+    recipient = (session_recipient_hint or "").strip().lower()
+    adult_turn = recipient in _ADULT_RECIPIENTS
+    if not adult_turn:
+        return list(products)
+
+    preferred: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        blob = _product_text_blob(product)
+        if _KIDS_THEMED_RE.search(blob):
+            demoted.append(product)
+        else:
+            preferred.append(product)
+    if len(preferred) >= 3:
+        return preferred
+    return preferred + demoted
+
+
 def demote_non_chocolate_for_chocolate_focus(
     products: list[dict[str, Any]],
     query: str,
@@ -484,6 +516,9 @@ def demote_non_chocolate_for_chocolate_focus(
     demoted: list[dict[str, Any]] = []
     for product in products:
         blob = _product_text_blob(product)
+        if _KIDS_THEMED_RE.search(blob):
+            demoted.append(product)
+            continue
         if _FLORAL_FOR_CHOCOLATE_DENYLIST.search(blob) and not _FOCUS_TOKEN_PATTERNS[
             "chocolate"
         ].search(blob):
@@ -555,15 +590,21 @@ def boost_carousel_relevance(
 
     from graphs.nodes.resolve_cart_product import phrase_product_overlap_score
 
+    # Prefer distinctive modifiers (blush/combo) over generic color+flower tokens.
+    distinctive = bool(
+        re.search(r"\b(?:blush|combo|lavender|hamper|arrangement)\b", stripped, re.I)
+    )
+    threshold = 0.45 if distinctive else 0.6
+
     scored = [
         (phrase_product_overlap_score(stripped, str(product.get("name") or "")), product)
         for product in products
     ]
     best_score = max(score for score, _ in scored)
-    if best_score < 0.6:
+    if best_score < threshold:
         return list(products)
-    top = [product for score, product in scored if score == best_score]
-    rest = [product for score, product in scored if score < best_score]
+    top = [product for score, product in scored if score >= best_score - 0.05]
+    rest = [product for score, product in scored if score < best_score - 0.05]
     return top + rest
 
 
@@ -628,14 +669,21 @@ def apply_recipient_curation(
     products: list[dict[str, Any]],
     session_recipient_hint: str | None,
 ) -> list[dict[str, Any]]:
-    """Drop gender-mismatched gift sets; fall back to demote-only if fewer than 3 would remain."""
+    """Drop gender-mismatched gift sets for female/male recipients (hard exclude).
+
+    Neutral recipients still soft-demote (append mismatched after preferred) when
+    fewer than 3 preferred items remain.
+    """
     if not products or not session_recipient_hint:
         return list(products)
     recipient = session_recipient_hint.strip().lower()
+    hard_drop = False
     if recipient in _FEMALE_RECIPIENTS:
         mismatch = _FOR_HIM_RE
+        hard_drop = True
     elif recipient in _MALE_RECIPIENTS:
         mismatch = _FOR_HER_RE
+        hard_drop = True
     elif recipient in _NEUTRAL_RECIPIENTS:
         mismatch = re.compile(
             r"\b(?:for him|for her|for dad|for mom|father'?s?|mother'?s?|"
@@ -655,9 +703,53 @@ def apply_recipient_curation(
             mismatched.append(product)
         else:
             preferred.append(product)
+    if hard_drop:
+        # Wife/mom/her (and male recipients): never resurface Dad/for-him noise.
+        return preferred if preferred else list(products)
     if len(preferred) >= 3:
         return preferred
     return preferred + mismatched
+
+
+_REQUESTED_FLOWER_COLORS = re.compile(
+    r"\b(?:blush|pink|lavender|purple|peach|yellow|orange|blue)\b",
+    re.I,
+)
+_GENERIC_ROSE_COLORS = re.compile(r"\b(?:red|white)\b", re.I)
+_FLOWER_PRODUCT_RE = re.compile(
+    r"\b(?:flower|flowers|rose|roses|bouquet|floral)\b",
+    re.I,
+)
+
+
+def demote_wrong_flower_color(
+    products: list[dict[str, Any]],
+    query: str,
+) -> list[dict[str, Any]]:
+    """Demote red/white-only roses when the shopper asked for blush/pink/etc."""
+    if not products or not query.strip():
+        return list(products)
+    requested = {m.group(0).lower() for m in _REQUESTED_FLOWER_COLORS.finditer(query)}
+    if not requested:
+        return list(products)
+    preferred: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    for product in products:
+        name = str(product.get("name") or "")
+        blob = _product_text_blob(product)
+        if not _FLOWER_PRODUCT_RE.search(blob):
+            preferred.append(product)
+            continue
+        name_lower = name.lower()
+        has_requested = any(color in name_lower for color in requested)
+        has_generic_only = bool(_GENERIC_ROSE_COLORS.search(name_lower)) and not has_requested
+        if has_generic_only:
+            demoted.append(product)
+        else:
+            preferred.append(product)
+    if not preferred:
+        return list(products)
+    return preferred + demoted
 
 
 def _merge_exclude_category_tokens(existing: str, additions: tuple[str, ...]) -> str:
@@ -747,16 +839,10 @@ def refine_last_search_by_budget(
             for product in in_budget
             if product_matches_focus(product, session_product_focus)
         ]
-        if not matching:
-            return None
-        demoted = [
-            product
-            for product in in_budget
-            if not product_matches_focus(product, session_product_focus)
-        ]
-        if demoted and any(_GIFT_DEMOTE_RE.search(_product_text_blob(item)) for item in demoted):
-            return None
-        return matching
+        # Prefer focus-matched items; fall back to any in-budget picks so a
+        # budget-only turn never forces a slow MCP/NIM loop when prices already fit.
+        if matching:
+            return matching
 
     return in_budget
 
@@ -813,6 +899,7 @@ def sort_and_filter_by_budget(
     currency: str,
     *,
     strict_in_budget: bool = False,
+    session_occasion: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hide items above 2× budget; sort in-budget asc, then near-budget (+10%) with badge."""
     if budget_max is None or budget_max <= 0:
@@ -849,6 +936,15 @@ def sort_and_filter_by_budget(
             tagged = dict(product)
             tagged["over_budget"] = True
             over_near.append(tagged)
+
+    if strict_in_budget and not in_budget and session_occasion:
+        return sort_and_filter_by_budget(
+            products,
+            budget_max,
+            currency,
+            strict_in_budget=False,
+            session_occasion=session_occasion,
+        )
 
     in_budget.sort(key=lambda item: product_price_amount(item) or 0.0)
     near_budget.sort(key=lambda item: product_price_amount(item) or 0.0)
@@ -943,6 +1039,12 @@ def curate_carousel_products(
     )
     scoped = demote_off_focus_products(scoped, session_product_focus)
     scoped = apply_recipient_curation(scoped, session_recipient_hint)
+    scoped = demote_wrong_flower_color(scoped, query)
+    scoped = demote_kids_themed_products(
+        scoped,
+        session_recipient_hint=session_recipient_hint,
+        user_message=query,
+    )
     scoped = filter_gift_noise_products(scoped, strict=strict_budget)
 
     def _budget_sort(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -951,12 +1053,13 @@ def curate_carousel_products(
             budget_max,
             currency,
             strict_in_budget=strict_budget,
+            session_occasion=session_occasion,
         )
 
     def _finalize_carousel(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         sorted_items = _budget_sort(items)
-        if budget_max is None:
-            sorted_items = boost_carousel_relevance(sorted_items, query)
+        # Always boost name overlap so "Blush Roses combo" beats generic red roses.
+        sorted_items = boost_carousel_relevance(sorted_items, query)
         if budget_max is not None and budget_max > 0 and is_flower_fruit_intent(query):
             sorted_items = ensure_flower_price_tier_diversity(sorted_items, budget_max)
         return sorted_items

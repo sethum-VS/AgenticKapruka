@@ -47,10 +47,11 @@ async def test_resolve_delivery_city_bare_colombo_is_ambiguous() -> None:
     service.list_delivery_cities.return_value = _COLOMBO_ZONES
     resolution = await resolve_delivery_city(service, _CLIENT_IP, "Colombo")
     assert resolution.status == "ambiguous"
-    assert resolution.candidates == _COLOMBO_ZONES[:5]
+    assert resolution.candidates == _COLOMBO_ZONES
     assert resolution.customer_message is not None
+    assert "supported delivery zones" in resolution.customer_message
     assert "Colombo 01" in resolution.customer_message
-    assert "Colombo 05" in resolution.customer_message
+    assert "Colombo 06" in resolution.customer_message
 
 
 @pytest.mark.asyncio
@@ -60,7 +61,25 @@ async def test_resolve_delivery_city_bare_colombo_ambiguous_even_with_exact_colo
     service.list_delivery_cities.return_value = ["Colombo", *_COLOMBO_ZONES]
     resolution = await resolve_delivery_city(service, _CLIENT_IP, "Colombo")
     assert resolution.status == "ambiguous"
-    assert resolution.candidates == _COLOMBO_ZONES[:5]
+    assert resolution.candidates == _COLOMBO_ZONES
+
+
+def test_build_city_choice_chips_html_renders_zone_buttons() -> None:
+    from lib.chat.city_resolution import build_city_choice_chips_html
+
+    html = build_city_choice_chips_html(["Colombo 03", "Colombo 07"])
+    assert html is not None
+    assert 'data-testid="delivery-zone-chip"' in html
+    assert 'data-chat-suggestion="Colombo 03"' in html
+    assert "Colombo 07" in html
+
+
+def test_is_unknown_city_error_detects_mcp_copy() -> None:
+    from lib.chat.city_resolution import is_unknown_city_error
+
+    assert is_unknown_city_error(raw_message="Error (city_not_found): Unknown city 'Colombo'")
+    assert is_unknown_city_error(error_code="city_not_found")
+    assert not is_unknown_city_error(error_code="date_not_deliverable", raw_message="past")
 
 
 @pytest.mark.asyncio

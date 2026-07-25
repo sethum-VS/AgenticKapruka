@@ -6,10 +6,8 @@ import logging
 import re
 from typing import Any
 
+from pydantic import BaseModel, Field
 
-from pydantic import BaseModel, Field, ValidationError
-
-from graphs.model_router import FLASH_MODEL
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState
 from lib.chat.city_resolution import _is_bare_colombo, resolve_delivery_city

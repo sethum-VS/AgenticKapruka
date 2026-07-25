@@ -24,7 +24,34 @@ def test_is_ordinal_phrase() -> None:
     assert is_ordinal_phrase("first")
     assert is_ordinal_phrase("the second one")
     assert is_ordinal_phrase("3rd")
+    assert is_ordinal_phrase("number 1")
+    assert is_ordinal_phrase("item 2")
+    assert is_ordinal_phrase("#3")
+    assert is_ordinal_phrase("1")
+    assert is_ordinal_phrase("number one")
     assert not is_ordinal_phrase("chocolate gift")
+
+
+def test_resolve_ordinal_number_one() -> None:
+    result = resolve_product_reference(
+        "number 1",
+        last_visible_products=[_BLUSH, _RED, _THIRD],
+        last_search_products=[_BLUSH, _RED, _THIRD],
+    )
+    assert result is not None
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "a"
+
+
+def test_resolve_ordinal_bare_digit() -> None:
+    result = resolve_product_reference(
+        "2",
+        last_visible_products=[_BLUSH, _RED, _THIRD],
+        last_search_products=[_BLUSH, _RED, _THIRD],
+    )
+    assert result is not None
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "b"
 
 
 def test_resolve_ordinal_with_trailing_descriptor() -> None:
@@ -49,7 +76,7 @@ def test_resolve_deictic_single_product() -> None:
     assert result["product"]["id"] == "a"
 
 
-def test_resolve_deictic_multi_clarify_normalizes_mojibake_apostrophe() -> None:
+def test_resolve_deictic_multi_defaults_to_first() -> None:
     mojibake = {
         "id": "gift-mens",
         "name": "Power Drive Menâ€™s Gift Box For Him",
@@ -60,23 +87,32 @@ def test_resolve_deictic_multi_clarify_normalizes_mojibake_apostrophe() -> None:
         last_search_products=[mojibake, _RED],
     )
     assert result is not None
-    assert result["status"] == "clarify"
-    question = result.get("clarifying_question") or ""
-    assert "â€™" not in question
-    assert "Men's" in question
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "gift-mens"
 
 
-def test_resolve_deictic_multi_clarify() -> None:
+def test_resolve_deictic_multi_defaults_to_first_visible() -> None:
+    """Deictic 'that' with multiple carousel items resolves to the first visible item."""
     result = resolve_product_reference(
         "that",
         last_visible_products=[_BLUSH, _RED],
         last_search_products=[_BLUSH, _RED],
     )
     assert result is not None
-    assert result["status"] == "clarify"
-    assert result["clarifying_question"] is not None
-    assert "1)" in result["clarifying_question"]
-    assert "2)" in result["clarifying_question"]
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "a"
+
+
+def test_resolve_deictic_add_that_to_cart_phrase() -> None:
+    """Natural-language cart add resolves deictic against a single visible product."""
+    result = resolve_product_reference(
+        "that",
+        last_visible_products=[_BLUSH],
+        last_search_products=[_BLUSH, _RED],
+    )
+    assert result is not None
+    assert result["status"] == "resolved"
+    assert result["product"]["id"] == "a"
 
 
 def test_resolve_ordinal_uses_visible_products() -> None:

@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import re
 import statistics
 from dataclasses import dataclass
 from typing import Any, Literal
 
-
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.config import get_settings
-
 from lib.chat.intent_metadata import IntentMetadata
 from lib.chat.model_router import select_rewrite_model
 from lib.chat.product_curation import (
@@ -764,6 +760,38 @@ _INVALID_MCP_CATEGORY_FILTERS = frozenset(
     }
 )
 
+# Safe single-token (or short) MCP subcategory filters. Neo4j Occasion display names
+# often look like "Chocolate And Fashion" / "Anniversary Flowers" and return 0 products
+# when passed as category= — those must not reach kapruka_search_products.
+_SAFE_MCP_CATEGORY_FILTERS = frozenset(
+    {
+        "birthday",
+        "anniversary",
+        "valentine",
+        "valentine's day",
+        "valentines day",
+        "mother's day",
+        "mothers day",
+        "father's day",
+        "fathers day",
+        "christmas",
+        "new year",
+        "wedding",
+        "graduation",
+        "get well",
+        "thank you",
+        "sympathy",
+        "congrats",
+        "congratulations",
+    }
+)
+_COMPOUND_OCCASION_AND_RE = re.compile(r"\band\b", re.I)
+_PRODUCT_TYPE_IN_OCCASION_RE = re.compile(
+    r"\b(?:flower|flowers|bouquet|floral|cake|cakes|chocolate|chocolates|"
+    r"fashion|hamper|hampers|card|cards|greeting)\b",
+    re.I,
+)
+
 # Sri Lankan delivery cities often appear in chat queries ("cake for mom in Colombo") but
 # pollute Kapruka keyword search when passed verbatim as q.
 _DELIVERY_CITY_NAMES = (
@@ -799,6 +827,9 @@ _PRODUCT_TOKEN_PRIORITY: tuple[str, ...] = (
     "tea",
     "cake",
     "cakes",
+    "blush",
+    "combo",
+    "combopack",
     "flower",
     "flowers",
     "roses",
@@ -864,6 +895,8 @@ def is_birthday_cake_intent(query: str) -> bool:
         return False
     if _BIRTHDAY_CAKE_INTENT.search(stripped):
         return True
+    if _BIRTHDAY_OCCASION_RE.search(stripped) and _CHOCOLATE_FLAVOR_RE.search(stripped):
+        return bool(_CAKE_TERM.search(stripped))
     return bool(_BIRTHDAY_OCCASION_RE.search(stripped) and _CAKE_TERM.search(stripped))
 
 
@@ -902,9 +935,6 @@ def is_birthday_cake_scoped_turn(
     if topic_pivot:
         return False
     stripped = query.strip()
-    # Birthday + chocolate without "cake" still scopes to birthday cakes (not confectionery)
-    if _BIRTHDAY_OCCASION_RE.search(stripped) and _CHOCOLATE_FLAVOR_RE.search(stripped):
-        return True
     if not birthday_occasion_from_context(hybrid_context, user_message=query):
         return False
     return bool(stripped and _CAKE_TERM.search(stripped))
@@ -1018,7 +1048,11 @@ def build_budget_refinement_search_args(
     intent_metadata = state.get("intent_metadata") or {}
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
     budget_gift_discovery = bool(intent_metadata.get("budgeted_gift_discovery"))
-    if budget_gift_discovery or topic_pivot:
+    # Budget-only refinements must still run even if a soft pivot flag leaked in
+    # (e.g. historical "Actually, under 6000" turns). Fresh gift discovery stays blocked.
+    if budget_gift_discovery:
+        return None
+    if topic_pivot and not is_budget_refinement_message(user_message):
         return None
 
     session_q = state.get("session_search_query")
@@ -1160,7 +1194,7 @@ def _birthday_biased_product_keyword(
     if chocolate_flavor and (birthday_occasion or cake_scoped):
         return "chocolate birthday cake"
     if normalized in {"chocolate", "chocolates"} and birthday_occasion and not cake_scoped:
-        return "chocolate gift"
+        return "chocolate gift box"
     if birthday_occasion and normalized in {"cake", "cakes"}:
         return "birthday cake"
     if birthday_occasion and normalized in {"chocolate", "chocolates"}:
@@ -1200,13 +1234,31 @@ def build_discovery_delivery_args(intent_metadata: IntentMetadata | None) -> dic
 
 
 def _is_valid_mcp_category_filter(name: str) -> bool:
+    """Return True only for occasion names that Kapruka MCP accepts as category=.
+
+    Rejects parent departments, compound Neo4j Occasion display names
+    (``Chocolate And Fashion``), and occasion+product composites
+    (``Anniversary Flowers``) that yield empty search results.
+    """
     stripped = name.strip()
     if not stripped:
         return False
-    return stripped.lower() not in _INVALID_MCP_CATEGORY_FILTERS
+    lower = stripped.lower()
+    if lower in _INVALID_MCP_CATEGORY_FILTERS:
+        return False
+    if _COMPOUND_OCCASION_AND_RE.search(stripped):
+        return False
+    if lower in _SAFE_MCP_CATEGORY_FILTERS:
+        return True
+    # Unknown multi-word or product-typed occasion labels are unsafe as MCP filters.
+    return not (_PRODUCT_TYPE_IN_OCCASION_RE.search(stripped) or " " in lower)
 
 
-def _resolve_mcp_category_filter(hybrid_context: dict[str, Any] | None) -> str | None:
+def _resolve_mcp_category_filter(
+    hybrid_context: dict[str, Any] | None,
+    *,
+    allow_preferences: bool = True,
+) -> str | None:
     """Pick a Kapruka MCP subcategory filter from graph/Zep hints.
 
     Graph reranker stores parent departments under ``hints['category']`` (Neo4j
@@ -1217,10 +1269,11 @@ def _resolve_mcp_category_filter(hybrid_context: dict[str, Any] | None) -> str |
     hints = context.get("hints") or {}
     preferences = context.get("preferences") or {}
 
-    for raw in (
-        hints.get("occasion"),
-        preferences.get("favorite_category"),
-    ):
+    candidates: list[object] = [hints.get("occasion")]
+    if allow_preferences:
+        candidates.append(preferences.get("favorite_category"))
+
+    for raw in candidates:
         if not raw:
             continue
         name = str(raw).strip()
@@ -1291,7 +1344,9 @@ def enrich_chocolate_focus_hints(
     chocolate_focus = session_product_focus == "chocolate" or bool(
         _CHOCOLATE_FLAVOR_RE.search(query),
     )
-    if not chocolate_focus or is_birthday_cake_intent(query) or _CAKE_TERM.search(query):
+    if not chocolate_focus or is_birthday_cake_intent(query):
+        return context
+    if _CAKE_TERM.search(query):
         return context
     hints = dict(context.get("hints") or {})
     existing = str(hints.get("exclude_categories") or "")
@@ -1299,6 +1354,11 @@ def enrich_chocolate_focus_hints(
         existing,
         CHOCOLATE_NEGATIVE_CATEGORY_HINTS,
     )
+    # Drop poisoned Neo4j Occasion labels (e.g. "Chocolate And Fashion") so they
+    # never become MCP category= filters.
+    occasion = str(hints.get("occasion") or "").strip()
+    if occasion and not _is_valid_mcp_category_filter(occasion):
+        hints.pop("occasion", None)
     context["hints"] = hints
     return context
 
@@ -1312,7 +1372,8 @@ def enrich_anniversary_hints(
     if not is_anniversary_occasion_intent(query, context):
         return context
     hints = dict(context.get("hints") or {})
-    hints.setdefault("occasion", "Anniversary")
+    # Overwrite poisoned composites like "Anniversary Flowers" — setdefault would keep them.
+    hints["occasion"] = "Anniversary"
     existing = str(hints.get("exclude_categories") or "")
     hints["exclude_categories"] = _merge_exclude_category_hints(
         existing,
@@ -1329,7 +1390,19 @@ def _anniversary_biased_search_q(query: str) -> str:
         return "anniversary flowers"
     if re.search(r"\b(?:cake|cakes|hamper|hampers)\b", lowered):
         return "anniversary gift hamper"
-    return "anniversary gift hamper"
+    return "anniversary gift"
+
+
+def anniversary_fallback_search_queries(query: str) -> tuple[str, ...]:
+    """Fallback ladder when the primary anniversary search returns no products."""
+    primary = _anniversary_biased_search_q(query)
+    fallbacks = (
+        primary,
+        "anniversary gift",
+        "anniversary gift hamper",
+        "anniversary flowers",
+    )
+    return tuple(dict.fromkeys(fallbacks))
 
 
 def enrich_birthday_cake_hints(
@@ -1372,14 +1445,18 @@ def build_discovery_search_args(
     *,
     currency: str,
     intent_metadata: IntentMetadata | None = None,
+    session_budget_max: float | None = None,
 ) -> dict[str, Any]:
     """Map graph/Zep hybrid_context hints to kapruka_search_products arguments."""
     context = hybrid_context or {}
     topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
     from lib.chat.intent_heuristics import is_bare_category_pivot
 
-    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
-    category = _resolve_mcp_category_filter(context)
+    bare_focus = is_bare_category_pivot(user_message)
+    category = _resolve_mcp_category_filter(
+        context,
+        allow_preferences=not topic_pivot,
+    )
     query = strip_location_from_search_query(user_message.strip(), intent_metadata)
     birthday_occasion = birthday_occasion_from_context(
         context,
@@ -1389,8 +1466,62 @@ def build_discovery_search_args(
     anniversary_occasion = is_anniversary_occasion_intent(query, context)
     fallback_category = category or ("Birthday" if birthday_occasion else None)
 
-    if topic_pivot and bare_focus == "cake":
+    if (topic_pivot or bare_focus) and bare_focus == "cake":
         return {"q": "cake", "currency": currency}
+    if (topic_pivot or bare_focus) and bare_focus == "flowers":
+        # Prefer the customer's wording when they said "fresh flowers" etc.
+        lowered = query.lower()
+        flower_q = "fresh flowers" if "fresh" in lowered else "flowers"
+        return {"q": flower_q, "currency": currency, "category": "Flowers"}
+    if (topic_pivot or bare_focus) and bare_focus == "chocolate":
+        return {"q": "chocolate", "currency": currency}
+    # Topic pivot with category tokens but bare_focus gated out — still search category.
+    if topic_pivot and bare_focus is None:
+        lowered = query.lower()
+        if re.search(r"\b(?:flower|flowers|rose|roses|bouquet)\b", lowered):
+            flower_q = "fresh flowers" if "fresh" in lowered else "flowers"
+            return {"q": flower_q, "currency": currency, "category": "Flowers"}
+        if re.search(r"\b(?:cup)?cakes?\b", lowered):
+            return {"q": "cake", "currency": currency}
+        if re.search(r"\b(?:chocolate|chocolates)\b", lowered):
+            return {"q": "chocolate", "currency": currency}
+
+    # Literal color+flower queries (blush roses) — do not expand to generic fresh roses.
+    color_flower = re.search(
+        r"\b(blush|pink|red|white|yellow|purple|lavender)\s+"
+        r"(roses?|flowers?|bouquets?)\b",
+        query,
+        re.I,
+    )
+    if color_flower:
+        color = color_flower.group(1).lower()
+        flower = color_flower.group(2).lower()
+        if flower.startswith("rose"):
+            flower = "roses"
+        elif flower.startswith("flower"):
+            flower = "flowers"
+        else:
+            flower = "bouquet"
+        # Keep trailing modifiers like "combo" when present in the customer message.
+        literal_q = f"{color} {flower}"
+        if re.search(r"\bcombo\b", query, re.I):
+            literal_q = f"{literal_q} combo"
+        args = {
+            "q": literal_q,
+            "currency": currency,
+            "category": "Flowers",
+        }
+        budget_cap = extract_budget(query)
+        if budget_cap is not None:
+            args["max_price"] = budget_cap.amount
+            args["sort"] = _budget_search_sort(query)
+            args["currency"] = budget_cap.currency
+        else:
+            max_price = _extract_max_price(query)
+            if max_price is not None:
+                args["max_price"] = max_price
+                args["sort"] = _budget_search_sort(query)
+        return args
 
     if is_broad_cakes_query(query) and not topic_pivot:
         query = "birthday cake"
@@ -1422,22 +1553,18 @@ def build_discovery_search_args(
         args["max_price"] = budget_cap.amount
         args["sort"] = _budget_search_sort(query)
         args["currency"] = budget_cap.currency
-        primary_token = _primary_product_token(query)
-        if primary_token:
-            args["q"] = _birthday_biased_product_keyword(
-                primary_token,
-                birthday_occasion=birthday_occasion,
-                query=query,
+        # Preserve distinctive product modifiers (blush/combo) instead of collapsing
+        # to a bare primary token like "rose".
+        if re.search(r"\b(?:blush|combo|lavender|arrangement)\b", query, re.I):
+            preserved = re.sub(
+                r"\b(?:under|below|less\s+than|around|about|budget\s+of)\s+"
+                r"(?:rs\.?\s*|lkr\s*|usd\s*|\$)?[\d,]+(?:\s*(?:rupees?|lkr))?",
+                "",
+                query,
+                flags=re.I,
             )
-        elif _MOM_BIRTHDAY_RE.search(query):
-            args["q"] = "Happy Birthday Mom"
+            args["q"] = re.sub(r"\s{2,}", " ", preserved).strip(" ,.-") or query.strip()
         else:
-            args["q"] = _fallback_search_query(fallback_category)
-    else:
-        max_price = _extract_max_price(query)
-        if max_price is not None:
-            args["max_price"] = max_price
-            args["sort"] = _budget_search_sort(query)
             primary_token = _primary_product_token(query)
             if primary_token:
                 args["q"] = _birthday_biased_product_keyword(
@@ -1445,19 +1572,57 @@ def build_discovery_search_args(
                     birthday_occasion=birthday_occasion,
                     query=query,
                 )
+            elif _MOM_BIRTHDAY_RE.search(query):
+                args["q"] = "Happy Birthday Mom"
             else:
                 args["q"] = _fallback_search_query(fallback_category)
+    else:
+        max_price = _extract_max_price(query)
+        if max_price is not None:
+            args["max_price"] = max_price
+            args["sort"] = _budget_search_sort(query)
+            if re.search(r"\b(?:blush|combo|lavender|arrangement)\b", query, re.I):
+                preserved = re.sub(
+                    r"\b(?:under|below|less\s+than|around|about|budget\s+of)\s+"
+                    r"(?:rs\.?\s*|lkr\s*|usd\s*|\$)?[\d,]+(?:\s*(?:rupees?|lkr))?",
+                    "",
+                    query,
+                    flags=re.I,
+                )
+                args["q"] = re.sub(r"\s{2,}", " ", preserved).strip(" ,.-") or query.strip()
+            else:
+                primary_token = _primary_product_token(query)
+                if primary_token:
+                    args["q"] = _birthday_biased_product_keyword(
+                        primary_token,
+                        birthday_occasion=birthday_occasion,
+                        query=query,
+                    )
+                else:
+                    args["q"] = _fallback_search_query(fallback_category)
 
     if _MOM_BIRTHDAY_RE.search(query) and "gift" in query.lower():
-        # Use product-specific q when the query carries a product focus
-        if _CHOCOLATE_FLAVOR_RE.search(query):
+        if _CHOCOLATE_FLAVOR_RE.search(query) and _CAKE_TERM.search(query):
             args["q"] = "chocolate birthday cake"
             args.setdefault("category", "Birthday")
+        elif _CHOCOLATE_FLAVOR_RE.search(query):
+            args["q"] = "chocolate gift box"
+            args.pop("category", None)
         elif _CAKE_TERM.search(query):
             args["q"] = "birthday cake"
             args.setdefault("category", "Birthday")
         else:
             args["q"] = "Happy Birthday Mom"
+
+    if (
+        _CHOCOLATE_FLAVOR_RE.search(query)
+        and not _CAKE_TERM.search(query)
+        and not is_birthday_cake_intent(query)
+    ):
+        args["q"] = "chocolate gift box"
+        # Chocolate gift searches must not keep occasion-derived category filters
+        # (Birthday, or poisoned Neo4j labels that slipped through).
+        args.pop("category", None)
 
     if _is_meta_catalog_query(query):
         args["q"] = _fallback_search_query(fallback_category)
@@ -1492,11 +1657,28 @@ def build_discovery_search_args(
         if isinstance(budget_currency, str) and budget_currency.strip():
             args["currency"] = budget_currency.strip().upper()
 
+    # Multi-turn: apply persisted session budget when the turn did not restate it.
+    if (
+        "max_price" not in args
+        and not topic_pivot
+        and isinstance(session_budget_max, (int, float))
+        and session_budget_max > 0
+    ):
+        args["max_price"] = float(session_budget_max)
+        args.setdefault("sort", _budget_search_sort(query))
+
     effective_budget = args.get("max_price")
+    # Only simplify to bare "roses" for generic budgeted rose searches —
+    # preserve modifiers like "blush" / "combo" for product-name precision.
     if (
         isinstance(effective_budget, (int, float))
         and effective_budget > 0
         and re.search(r"\b(?:rose|roses)\b", query, re.I)
+        and not re.search(
+            r"\b(?:blush|combo|combopack|pink|white|yellow|lavender|arrangement)\b",
+            query,
+            re.I,
+        )
     ):
         if re.search(r"\bred\b", query, re.I):
             args["q"] = "red roses"
@@ -1568,18 +1750,50 @@ def is_confident_discovery_turn(
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
     from lib.chat.intent_heuristics import is_bare_category_pivot
 
-    if topic_pivot and is_bare_category_pivot(stripped):
-        return False
+    bare_focus = is_bare_category_pivot(stripped)
+    # Topic pivot naming a product category is always confident — never ask_user for occasion.
+    _named_category = re.compile(
+        r"\b(?:cakes?|cupcakes?|flower|flowers|rose|roses|bouquet|chocolate|chocolates)\b",
+        re.I,
+    )
+    if topic_pivot and bare_focus is None and _named_category.search(stripped):
+        if re.search(r"\b(?:flower|flowers|rose|roses|bouquet)\b", stripped, re.I):
+            bare_focus = "flowers"
+        elif re.search(r"\b(?:cup)?cakes?\b", stripped, re.I):
+            bare_focus = "cake"
+        elif re.search(r"\b(?:chocolate|chocolates)\b", stripped, re.I):
+            bare_focus = "chocolate"
+    # Bare category utterance (e.g. "Normal fresh flowers?") is always confident.
+    if bare_focus is not None:
+        return True
     discovery_message = enrich_message_with_session_slots(stripped, state)
+    # On topic pivots, ignore stale session slots so cake/anniversary context does not
+    # poison a fresh flowers/cakes search.
+    if topic_pivot:
+        discovery_message = stripped
+    session_budget = None
+    if (
+        not topic_pivot
+        and state is not None
+        and isinstance(state.get("session_budget_max"), (int, float))
+    ):
+        session_budget = float(state["session_budget_max"])
     args = build_discovery_search_args(
         discovery_message,
         hybrid_context,
         currency=currency,
         intent_metadata=intent_metadata,
+        session_budget_max=session_budget,
     )
     query = str(args.get("q") or "").strip()
     if not query or _is_meta_catalog_query(query):
         return False
+    # Bare category pivots ("Nevermind. Cakes.") have deterministic args from
+    # build_discovery_search_args — skip the planner instead of blocking.
+    if bare_focus is not None:
+        return True
+    if topic_pivot and _named_category.search(stripped):
+        return True
     if _is_budgeted_flower_discovery(stripped, args):
         return True
     return has_strong_hybrid_hints(hybrid_context)
@@ -1597,13 +1811,7 @@ def _birthday_planner_q_needs_override(planner_q: str, user_message: str) -> boo
     if _should_canonicalize_birthday_search_q(user_message):
         canonical = canonical_birthday_cake_search_q(user_message)
         return stripped.lower() != canonical.lower()
-    # Birthday + chocolate intent but planner didn't include "cake" in the query → override
-    # e.g. planner used "chocolate birthday gift" but should be "chocolate birthday cake"
-    return bool(
-        _BIRTHDAY_OCCASION_RE.search(user_message)
-        and _CHOCOLATE_FLAVOR_RE.search(user_message)
-        and "cake" not in stripped.lower()
-    )
+    return False
 
 
 def enrich_message_with_session_slots(
@@ -1658,10 +1866,22 @@ def merge_planner_search_args(
     topic_pivot = bool(intent_metadata and intent_metadata.get("topic_pivot"))
     from lib.chat.intent_heuristics import is_bare_category_pivot
 
-    bare_focus = is_bare_category_pivot(user_message) if topic_pivot else None
+    bare_focus = is_bare_category_pivot(user_message)
 
-    if topic_pivot and bare_focus == "cake":
+    if bare_focus == "cake":
         merged["q"] = "cake"
+        merged.pop("category", None)
+        return merged
+
+    if bare_focus == "flowers":
+        lowered = user_message.lower()
+        flower_q = "fresh flowers" if "fresh" in lowered else "flowers"
+        merged["q"] = flower_q
+        merged["category"] = "Flowers"
+        return merged
+
+    if bare_focus == "chocolate":
+        merged["q"] = "chocolate"
         merged.pop("category", None)
         return merged
 
@@ -1671,11 +1891,15 @@ def merge_planner_search_args(
         return merged
 
     discovery_message = enrich_message_with_session_slots(user_message, state)
+    session_budget = None
+    if state is not None and isinstance(state.get("session_budget_max"), (int, float)):
+        session_budget = float(state["session_budget_max"])
     canonical = build_discovery_search_args(
         discovery_message,
         hybrid_context,
         currency=currency,
         intent_metadata=intent_metadata,
+        session_budget_max=session_budget,
     )
     planner_q = str(planner_args.get("q") or "").strip()
     if planner_q:
@@ -1699,6 +1923,19 @@ def merge_planner_search_args(
     )
     if birthday_scoped and needs_override and "q" in canonical:
         merged["q"] = canonical["q"]
+
+    canonical_q = str(canonical.get("q") or "").strip()
+    if (
+        planner_q
+        and _CHOCOLATE_FLAVOR_RE.search(discovery_message)
+        and _BIRTHDAY_OCCASION_RE.search(discovery_message)
+        and not _CAKE_TERM.search(discovery_message)
+        and "cake" not in planner_q.lower()
+        and canonical_q
+        and "gift box" in canonical_q.lower()
+    ):
+        merged["q"] = canonical_q
+        merged.pop("category", None)
 
     target_city = intent_metadata.get("target_city") if intent_metadata else None
     merged_q = str(merged.get("q") or "")

@@ -22,7 +22,9 @@ workers = max(1, int(_workers_env)) if _workers_env is not None else 1
 worker_class = "uvicorn.workers.UvicornWorker"
 
 # Long-lived SSE streams from POST /chat/stream.
-timeout = 120
+# Keep above CHAT_TURN_TIMEOUT_SECONDS (default 90) so soft SSE timeout
+# events can flush before the worker is killed.
+timeout = int(os.environ.get("GUNICORN_TIMEOUT", "150"))
 
 # Allow in-flight requests to finish during Cloud Run instance drain.
 graceful_timeout = 30

@@ -41,11 +41,12 @@ def test_cart_drawer_js_registers_alpine_component() -> None:
     assert 'Alpine.data("cartDrawer"' in source
     assert "init()" in source
     assert "htmx:afterSwap" in source
+    assert "htmx:oobAfterSwap" in source
     assert "openDrawer" in source
     assert 'htmx.ajax("GET", "/cart/panel"' in source
     assert "htmx:afterSettle" in source
     assert "syncCountFromPanel" in source
-    assert 'target.id !== "cart-panel"' in source
+    assert 'elt?.id !== "cart-panel"' in source
     assert "data-item-count" in source
     assert "proceedCheckoutInFlight" in source
     assert "isChatFormInFlight" in source
