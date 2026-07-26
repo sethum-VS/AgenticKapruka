@@ -2312,12 +2312,16 @@ async def _try_budget_refinement_fast_path(
             ] or None
         if refined_in_memory and len(refined_in_memory) >= BUDGET_REFINEMENT_IN_MEMORY_MIN:
             logger.debug("agent_loop: budget refinement in-memory fast-path")
-            trace_args = dict(budget_refinement_args) if budget_refinement_args else {
-                "q": state.get("session_search_query") or focus_str or "gift",
-                "currency": currency,
-                "max_price": float(budget_max_val),
-                "sort": "relevance",
-            }
+            trace_args = (
+                dict(budget_refinement_args)
+                if budget_refinement_args
+                else {
+                    "q": state.get("session_search_query") or focus_str or "gift",
+                    "currency": currency,
+                    "max_price": float(budget_max_val),
+                    "sort": "relevance",
+                }
+            )
             working_trace.append(
                 {
                     "name": tool_name,
