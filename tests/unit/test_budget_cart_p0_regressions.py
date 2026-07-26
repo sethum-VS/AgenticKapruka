@@ -64,8 +64,9 @@ async def test_budget_refine_in_memory_when_search_args_unavailable() -> None:
 @pytest.mark.asyncio
 async def test_add_that_uses_session_resolved_when_carousel_missing() -> None:
     """Deictic cart add falls back to session_resolved_product if lists were cleared."""
-    from graphs.nodes.resolve_cart_product import resolve_cart_product
     from langchain_core.messages import HumanMessage
+
+    from graphs.nodes.resolve_cart_product import resolve_cart_product
 
     product = _choc("fallback1", "Kunafa Chocolate", 1070.0)
     state: dict[str, Any] = {
