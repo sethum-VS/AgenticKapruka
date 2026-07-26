@@ -816,8 +816,8 @@ def test_build_budget_refinement_search_args_birthday_chocolate_bias() -> None:
         currency="LKR",
     )
     assert args is not None
-    assert args["q"] == "birthday chocolate cake"
-    assert args["category"] == "Birthday"
+    assert args["q"] == "chocolate cake"
+    assert "category" not in args
     assert args["sort"] == "relevance"
     assert args["max_price"] == 6000.0
 

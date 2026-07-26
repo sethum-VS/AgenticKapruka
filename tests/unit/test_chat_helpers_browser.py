@@ -35,7 +35,7 @@ def _chat_harness_html() -> str:
         <div style="height: 120px;">msg 3</div>
         <div style="height: 120px;">msg 4</div>
       </div>
-      <textarea id="chat-message" x-ref="input"></textarea>
+      <textarea id="chat-message"></textarea>
     </div>
   </body>
 </html>"""
@@ -111,7 +111,7 @@ def test_chat_helpers_focuses_input_after_successful_request() -> None:
     <div x-data="chatHelpers()">
       <div id="chat-messages" x-ref="messages" style="height: 100px; overflow-y: auto;"></div>
       <form id="chat-form">
-        <textarea id="chat-message" x-ref="input"></textarea>
+        <textarea id="chat-message"></textarea>
       </form>
     </div>
   </body>

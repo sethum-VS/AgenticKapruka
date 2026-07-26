@@ -6,7 +6,11 @@ document.addEventListener("alpine:init", () => {
     init() {
       document.body.addEventListener("htmx:afterSwap", (event) => {
         const target = event.detail?.target;
-        if (target?.id === "chat-messages") {
+        if (
+          target?.id === "chat-messages" ||
+          target === document.body ||
+          target?.id === "chat-loading"
+        ) {
           this.scrollToBottom();
         }
       });
@@ -32,13 +36,16 @@ document.addEventListener("alpine:init", () => {
         if (!form || !input) {
           return;
         }
-        input.value = suggestion;
+        input.value = suggestion ?? "";
         form.requestSubmit();
       });
 
       const form = document.getElementById("chat-form");
       const input = form?.querySelector("#chat-message");
       if (form && input) {
+        if (input.value === "undefined") {
+          input.value = "";
+        }
         input.addEventListener("keydown", (event) => {
           if (event.key !== "Enter" || event.shiftKey) {
             return;
@@ -53,7 +60,8 @@ document.addEventListener("alpine:init", () => {
     },
 
     scrollToBottom() {
-      const container = this.$refs.messages;
+      const container =
+        this.$refs.messages || document.getElementById("chat-messages");
       if (!container) {
         return;
       }
@@ -61,7 +69,7 @@ document.addEventListener("alpine:init", () => {
     },
 
     focusInput() {
-      const input = this.$refs.input;
+      const input = document.getElementById("chat-message");
       if (!input) {
         return;
       }

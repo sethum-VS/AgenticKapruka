@@ -134,17 +134,24 @@
 
   function pruneStaleCarousels(messagesRoot) {
     const assistants = messagesRoot.querySelectorAll('[data-role="assistant-message"]');
-    if (assistants.length <= 1) {
-      return;
-    }
-    for (let index = 0; index < assistants.length - 1; index += 1) {
-      const bubble = assistants[index];
-      for (const slot of bubble.querySelectorAll(
-        '.assistant-products, [data-slot="product-carousel"], [data-testid="product-carousel"]',
-      )) {
-        const container = slot.closest(".assistant-products") || slot;
-        container.remove();
+    if (assistants.length > 1) {
+      for (let index = 0; index < assistants.length - 1; index += 1) {
+        const bubble = assistants[index];
+        for (const slot of bubble.querySelectorAll(
+          '.assistant-products, [data-slot="product-carousel"], [data-testid="product-carousel"]',
+        )) {
+          const container = slot.closest(".assistant-products") || slot;
+          container.remove();
+        }
       }
+    }
+    // Prefer the final assistant slot over an orphan provisional seed.
+    const finalFilled = messagesRoot.querySelector(
+      '[data-role="assistant-message"] .assistant-products [data-testid="product-carousel"]',
+    );
+    const provisional = messagesRoot.querySelector("#carousel-slot-provisional");
+    if (finalFilled && provisional) {
+      provisional.remove();
     }
     const remaining = messagesRoot.querySelectorAll('[data-testid="product-carousel"]');
     if (remaining.length > 1) {
@@ -154,6 +161,19 @@
         container?.remove();
       }
     }
+  }
+
+  function dismissWelcomeEmptyState() {
+    const empty = document.getElementById("chat-empty-state");
+    empty?.remove();
+  }
+
+  function normalizeOutboundMessage(raw) {
+    const text = raw == null ? "" : String(raw);
+    if (text === "undefined") {
+      return "";
+    }
+    return text.replace(/^undefined(?=\S)/, "");
   }
 
   function swapListenerHtml(listener, html) {
@@ -284,8 +304,19 @@
   }
 
   function swapCarouselHtml(html) {
-    htmx.swap(document.body, html, { swapStyle: "none" });
     const messagesRoot = document.getElementById("chat-messages");
+    const targetMatch = html.match(/\bid="(carousel-slot-[^"]+)"/);
+    const targetId = targetMatch ? targetMatch[1] : "";
+    // Only drop the provisional seed once a distinct final slot is being applied.
+    if (
+      messagesRoot &&
+      targetId &&
+      targetId !== "carousel-slot-provisional" &&
+      messagesRoot.querySelector(`#${CSS.escape(targetId)}`)
+    ) {
+      messagesRoot.querySelector("#carousel-slot-provisional")?.remove();
+    }
+    htmx.swap(document.body, html, { swapStyle: "none" });
     if (messagesRoot && containsProductCarousel(html)) {
       pruneStaleCarousels(messagesRoot);
       removePendingAssistantBubbles();
@@ -319,6 +350,7 @@
       showLoadingIndicator(DEFAULT_LOADING_TEXT);
       lastStatusEventAt = Date.now();
       scheduleStatusHeartbeat();
+      dismissWelcomeEmptyState();
       if (submitButton) {
         submitButton.disabled = true;
       }
@@ -582,7 +614,22 @@
       if (form.classList.contains("htmx-request")) {
         return;
       }
+      const messageInput = form.querySelector("#chat-message");
+      const liveValue =
+        messageInput && typeof messageInput.value === "string"
+          ? messageInput.value
+          : "";
       const formData = new FormData(form);
+      const normalized = normalizeOutboundMessage(
+        liveValue || formData.get("message"),
+      );
+      formData.set("message", normalized);
+      if (messageInput) {
+        messageInput.value = normalized;
+      }
+      if (!normalized.trim()) {
+        return;
+      }
       toggleRequestState(form, true);
       void streamChatPost(form, formData).catch((error) => {
         console.error("chat SSE stream failed", error);

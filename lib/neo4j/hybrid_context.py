@@ -986,17 +986,41 @@ _GENERIC_BUDGET_Q_RE = re.compile(
 )
 
 
+def budget_focus_fallback_queries(state: dict[str, Any]) -> tuple[str, ...]:
+    """Simpler focus-only queries when occasion-biased budget search returns empty."""
+    focus = state.get("session_product_focus")
+    occasion = state.get("session_occasion")
+    occasion_l = occasion.strip().lower() if isinstance(occasion, str) else ""
+    if focus == "chocolate":
+        if occasion_l == "birthday":
+            return ("chocolate cake", "chocolate gift", "chocolate")
+        return ("chocolate gift", "chocolate")
+    if focus == "cake":
+        return ("cake", "birthday cake") if occasion_l == "birthday" else ("cake",)
+    if focus == "flowers":
+        return ("roses", "flowers")
+    if isinstance(focus, str) and focus.strip():
+        return (focus.strip(),)
+    return ()
+
+
 def _apply_occasion_budget_search_bias(
     state: dict[str, Any],
     args: dict[str, Any],
 ) -> dict[str, Any]:
-    """Bias budget-refinement MCP search toward occasion-appropriate gifts."""
+    """Bias budget-refinement MCP search toward occasion-appropriate gifts.
+
+    Prefer resilient q values; avoid hard category filters that often yield 0 hits
+    under a max_price constraint (broaden ladder can still specialize later).
+    """
     occasion = state.get("session_occasion")
     focus = state.get("session_product_focus")
     if isinstance(occasion, str) and occasion.strip().lower() == "birthday":
         if focus in ("chocolate", "cake"):
-            args["q"] = "birthday chocolate cake"
-            args["category"] = "Birthday"
+            # Chocolate cakes under budget are plentiful; skip category so MCP
+            # doesn't miss in-stock items tagged under Cakes/General.
+            args["q"] = "chocolate cake"
+            args.pop("category", None)
     elif isinstance(occasion, str) and occasion.strip().lower() == "anniversary":
         focus = state.get("session_product_focus")
         if focus == "flowers":
@@ -1005,6 +1029,7 @@ def _apply_occasion_budget_search_bias(
             args["q"] = "anniversary chocolate gift"
         else:
             args["q"] = "anniversary gift"
+        args.pop("category", None)
     args["sort"] = "relevance"
     return args
 

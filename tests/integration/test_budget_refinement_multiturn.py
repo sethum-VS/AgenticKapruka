@@ -358,16 +358,30 @@ async def test_budget_refinement_filters_snack_noise_from_mock_mcp(
         url="https://www.kapruka.com/cake",
     )
     mock_service = AsyncMock(spec=KaprukaService)
+    over_budget_choc = ProductResult(
+        id="choc999",
+        name="Luxury Chocolate Hamper",
+        summary="Premium assorted chocolates.",
+        price=Money(amount=9580.0, currency="LKR"),
+        compare_at_price=None,
+        in_stock=True,
+        stock_level="high",
+        image_url="https://example.com/lux.jpg",
+        category=CategoryRef(id="cat_choc", name="Chocolate", slug="chocolate"),
+        rating=None,
+        ships_internationally=False,
+        url="https://www.kapruka.com/lux-choc",
+    )
     mock_service.search_products.side_effect = [
         SearchProductsOutput(
-            results=[_CHOCOLATE_PRODUCT],
+            results=[over_budget_choc],
             next_cursor=None,
             applied_filters={"q": "chocolate gift"},
         ),
         SearchProductsOutput(
             results=[snack, curry, cake],
             next_cursor=None,
-            applied_filters={"q": "birthday chocolate cake", "max_price": 6000.0},
+            applied_filters={"q": "chocolate cake", "max_price": 6000.0},
         ),
     ]
     deps = ShoppingGraphDeps(

@@ -8,6 +8,13 @@ CHAT_SSE_JS = Path(__file__).resolve().parent.parent.parent / "static" / "js" / 
 NEW_SESSION_JS = Path(__file__).resolve().parent.parent.parent / "static" / "js" / "new-session.js"
 
 
+def test_chat_sse_js_normalizes_undefined_message_prefix() -> None:
+    source = CHAT_SSE_JS.read_text()
+    assert "normalizeOutboundMessage" in source
+    assert "dismissWelcomeEmptyState" in source
+    assert "carousel-slot-provisional" in source
+
+
 def test_chat_sse_js_wires_post_stream_bridge() -> None:
     """chat-sse.js bridges POST /chat/stream into sse-swap listener swaps."""
     source = CHAT_SSE_JS.read_text()
