@@ -42,6 +42,7 @@ from lib.chat.product_curation import (
     is_anniversary_occasion_intent,
     is_cake_accessory,
     is_flower_fruit_intent,
+    product_price_amount,
     refine_last_search_by_budget,
 )
 from lib.chat.product_detail import (
@@ -77,6 +78,7 @@ from lib.kapruka.tools.list_categories import TOOL_NAME as LIST_CATEGORIES_TOOL
 from lib.kapruka.tools.search_products import TOOL_NAME as SEARCH_PRODUCTS_TOOL
 from lib.neo4j.hybrid_context import (
     anniversary_fallback_search_queries,
+    budget_focus_fallback_queries,
     build_budget_refinement_search_args,
     build_discovery_search_args,
     enrich_message_with_session_slots,
@@ -429,6 +431,116 @@ def _search_has_products(result: Any) -> bool:
     if not isinstance(raw_results, list):
         return False
     return bool(raw_results)
+
+
+async def _broaden_budget_refinement_search(
+    *,
+    result: Any,
+    enriched_args: dict[str, Any],
+    state: AgentState,
+    tool_trace: list[ToolInvocation],
+    kapruka_service: KaprukaService,
+    rate_limit_key: str,
+    currency: str,
+) -> tuple[Any, dict[str, Any], list[ToolInvocation], bool]:
+    """Retry empty budget searches via broaden ladder + focus fallback queries.
+
+    Returns ``(result, args, tool_trace, broaden_applied)``.
+    """
+    if _search_has_products(result) or (isinstance(result, dict) and result.get("error")):
+        return result, enriched_args, tool_trace, False
+
+    working_trace = list(tool_trace)
+    working_args = dict(enriched_args)
+    broaden_applied = False
+    intent_meta = state.get("intent_metadata")
+    intent_dict = intent_meta if isinstance(intent_meta, dict) else None
+
+    # Ladder: strip category / simplify q while keeping max_price.
+    for _ in range(3):
+        if _search_has_products(result):
+            break
+        broadened_args, _step = apply_first_broaden(
+            working_args,
+            preserve_max_price=True,
+            intent_metadata=intent_dict,
+        )
+        if broadened_args is None:
+            break
+        if _is_duplicate_invocation(working_trace, SEARCH_PRODUCTS_TOOL, broadened_args):
+            break
+        broaden_applied = True
+        _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+        injected = _inject_tool_currency(
+            SEARCH_PRODUCTS_TOOL,
+            broadened_args,
+            state,
+            currency,
+        )
+        broaden_result = await _invoke_tool_with_rate_limit_retry(
+            SEARCH_PRODUCTS_TOOL,
+            injected,
+            kapruka_service=kapruka_service,
+            client_ip=rate_limit_key,
+            currency=currency,
+        )
+        broaden_result = _curate_search_trace_result(broaden_result, state=state)
+        working_trace.append(
+            {
+                "name": SEARCH_PRODUCTS_TOOL,
+                "args": injected,
+                "result": broaden_result,
+            },
+        )
+        working_args = injected
+        result = broaden_result
+        if isinstance(result, dict) and result.get("error"):
+            return result, working_args, working_trace, broaden_applied
+
+    # Focus fallback qs (e.g. chocolate cake → chocolate) still under max_price.
+    if not _search_has_products(result):
+        max_price = working_args.get("max_price")
+        for fallback_q in budget_focus_fallback_queries(dict(state)):
+            fallback_args: dict[str, Any] = {
+                "q": fallback_q,
+                "currency": working_args.get("currency") or currency,
+                "sort": "relevance",
+            }
+            if isinstance(max_price, (int, float)) and max_price > 0:
+                fallback_args["max_price"] = float(max_price)
+            if _is_duplicate_invocation(working_trace, SEARCH_PRODUCTS_TOOL, fallback_args):
+                continue
+            broaden_applied = True
+            _emit_status(_status_message_for_tool(SEARCH_PRODUCTS_TOOL))
+            injected = _inject_tool_currency(
+                SEARCH_PRODUCTS_TOOL,
+                fallback_args,
+                state,
+                currency,
+            )
+            fallback_result = await _invoke_tool_with_rate_limit_retry(
+                SEARCH_PRODUCTS_TOOL,
+                injected,
+                kapruka_service=kapruka_service,
+                client_ip=rate_limit_key,
+                currency=currency,
+            )
+            fallback_result = _curate_search_trace_result(fallback_result, state=state)
+            working_trace.append(
+                {
+                    "name": SEARCH_PRODUCTS_TOOL,
+                    "args": injected,
+                    "result": fallback_result,
+                },
+            )
+            working_args = injected
+            result = fallback_result
+            if _search_has_products(result):
+                break
+            if isinstance(result, dict) and result.get("error"):
+                break
+
+    return result, working_args, working_trace, broaden_applied
 
 
 def _persist_session_search_query(
@@ -819,6 +931,25 @@ def _curate_search_trace_result(
         from lib.chat.product_curation import ensure_flower_price_tier_diversity
 
         curated = ensure_flower_price_tier_diversity(curated, float(budget_max))
+    # Budget-refine turns must not wipe in-budget MCP hits via aggressive curation.
+    # Keep gift-noise filters; only recover focus-compatible in-budget gifts.
+    if (
+        not curated
+        and products
+        and is_budget_refinement_message(user_message)
+        and isinstance(budget_max, (int, float))
+        and budget_max > 0
+    ):
+        in_budget = [
+            item
+            for item in products
+            if (price := product_price_amount(item)) is not None and price <= float(budget_max)
+        ]
+        cleaned = filter_gift_noise_products(in_budget, strict=True)
+        if cleaned:
+            updated = dict(result)
+            updated["results"] = cleaned
+            return updated
     if curated == products:
         return result
     updated = dict(result)
@@ -2211,6 +2342,24 @@ async def _try_budget_refinement_fast_path(
         currency=currency,
     )
     result = _curate_search_trace_result(result, state=state)
+    working_trace.append(
+        {"name": tool_name, "args": enriched_args, "result": result},
+    )
+    (
+        result,
+        enriched_args,
+        working_trace,
+        broaden_applied,
+    ) = await _broaden_budget_refinement_search(
+        result=result,
+        enriched_args=enriched_args,
+        state=state,
+        tool_trace=working_trace,
+        kapruka_service=kapruka_service,
+        rate_limit_key=rate_limit_key,
+        currency=currency,
+    )
+    # Primary call already appended; broaden helper appends retries only.
     search_q_arg = enriched_args.get("q")
     intent_meta = state.get("intent_metadata")
     if isinstance(search_q_arg, str) and search_q_arg.strip():
@@ -2250,6 +2399,12 @@ async def _try_budget_refinement_fast_path(
                 result["results"] = demoted
             else:
                 result["results"] = demoted or products
+            # Keep last trace entry in sync with demoted results.
+            if working_trace:
+                working_trace[-1] = {
+                    **working_trace[-1],
+                    "result": result,
+                }
 
     if isinstance(result, dict) and result.get("error"):
         if _is_rate_limit_result(result) and prior_products:
@@ -2258,16 +2413,9 @@ async def _try_budget_refinement_fast_path(
                 if isinstance(budget_max_val, (int, float)) and budget_max_val > 0
                 else "that"
             )
-            working_trace.append(
-                {
-                    "name": tool_name,
-                    "args": enriched_args,
-                    "result": {"results": []},
-                },
-            )
             updates = _fast_path_agent_loop_updates(
                 working_trace,
-                tool_call_count=base_tool_count + 1,
+                tool_call_count=base_tool_count + len(working_trace),
                 exit_reason="ask_user",
             )
             updates["agent_clarifying_question"] = (
@@ -2278,20 +2426,14 @@ async def _try_budget_refinement_fast_path(
             updates["last_search_products"] = None
             updates["last_visible_products"] = None
             return updates
-        working_trace.append(
-            {"name": tool_name, "args": enriched_args, "result": result},
-        )
         updates = _fast_path_agent_loop_updates(
             working_trace,
-            tool_call_count=base_tool_count + 1,
+            tool_call_count=base_tool_count + len(working_trace),
             exit_reason="tool_error",
         )
         updates["agent_tool_error"] = _agent_tool_error_from_result(tool_name, result)
         return updates
 
-    working_trace.append(
-        {"name": tool_name, "args": enriched_args, "result": result},
-    )
     if _search_has_products(result):
         mcp_products = [item for item in (result.get("results") or []) if isinstance(item, dict)]
         if mcp_products:
@@ -2304,9 +2446,11 @@ async def _try_budget_refinement_fast_path(
     logger.debug("agent_loop: budget refinement MCP fast-path")
     updates = _fast_path_agent_loop_updates(
         working_trace,
-        tool_call_count=base_tool_count + 1,
+        tool_call_count=base_tool_count + len(working_trace),
         session_search_query_update=session_search_query_update,
     )
+    if broaden_applied:
+        updates["search_broaden_applied"] = True
     last_search_products = _last_search_products_from_trace(working_trace, state=state)
     if last_search_products:
         updates["last_search_products"] = last_search_products
@@ -2659,6 +2803,27 @@ async def agent_loop(
                 currency=currency,
             )
             result = _curate_search_trace_result(result, state=state)
+            trace_len_before = len(tool_trace)
+            tool_trace.append(
+                {"name": tool_name, "args": enriched_args, "result": result},
+            )
+            (
+                result,
+                enriched_args,
+                tool_trace,
+                budget_broaden_applied,
+            ) = await _broaden_budget_refinement_search(
+                result=result,
+                enriched_args=enriched_args,
+                state=state,
+                tool_trace=tool_trace,
+                kapruka_service=kapruka_service,
+                rate_limit_key=rate_limit_key,
+                currency=currency,
+            )
+            tool_call_count += len(tool_trace) - trace_len_before
+            if budget_broaden_applied:
+                search_broaden_applied = True
             search_q_arg = enriched_args.get("q")
             intent_meta = state.get("intent_metadata")
             if isinstance(search_q_arg, str) and search_q_arg.strip():
@@ -2697,10 +2862,8 @@ async def agent_loop(
                         result["results"] = demoted
                     else:
                         result["results"] = demoted or products
-            tool_trace.append(
-                {"name": tool_name, "args": enriched_args, "result": result},
-            )
-            tool_call_count += 1
+                    if tool_trace:
+                        tool_trace[-1] = {**tool_trace[-1], "result": result}
             if isinstance(result, dict) and result.get("error"):
                 # Soft miss when catalog is rate-limited after an all-over-budget carousel:
                 # do not keep stale over-budget cards or surface a hard tool_error banner.

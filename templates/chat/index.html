@@ -81,10 +81,10 @@
           <label for="chat-message" class="sr-only">Message</label>
           <textarea
             id="chat-message"
-            x-ref="input"
             name="message"
             rows="1"
             required
+            value=""
             placeholder="Type a message…"
             class="max-h-32 min-h-[44px] w-full resize-none border-0 bg-transparent py-2.5 text-body-md font-body-md text-on-surface placeholder:text-outline outline-none focus:border-0 focus:outline-none focus:ring-0"
             style="min-height: 44px;"
@@ -100,7 +100,7 @@
 
         <div
           id="chat-loading"
-          class="htmx-indicator absolute -top-8 left-0 flex items-center gap-2 text-label-sm text-on-surface-variant"
+          class="htmx-indicator absolute -top-10 left-0 z-10 flex items-center gap-2 rounded-md bg-white/95 px-2 py-1 text-label-sm font-medium text-primary shadow-sm"
           role="status"
           aria-live="polite"
           aria-atomic="true"

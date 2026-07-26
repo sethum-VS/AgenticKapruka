@@ -632,6 +632,50 @@ def test_chat_suggestion_chip_fills_input_and_submits() -> None:
 
 
 @pytest.mark.browser
+def test_chat_sse_strips_undefined_message_prefix() -> None:
+    """Composer must not send the literal 'undefined' prefix from a bad input value."""
+    captured: list[str] = []
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+
+        def handle_stream(route: Route) -> None:
+            post_data = route.request.post_data or ""
+            captured.append(post_data)
+            route.fulfill(
+                status=200,
+                headers={"Content-Type": "text/event-stream"},
+                body=(
+                    "event: message\n"
+                    "data: <div data-role='user-message'>ok</div>\n\n"
+                    "event: done\n"
+                    "data: \n\n"
+                ),
+            )
+
+        page.route("http://localhost/chat/stream", handle_stream)
+        page.set_content(_chat_sse_harness_html())
+        _wait_for_alpine(page)
+        page.evaluate(
+            """() => {
+              const input = document.getElementById('chat-message');
+              input.value = 'undefinedHi, I need help finding a gift.';
+            }"""
+        )
+        page.click('button[type="submit"]')
+        page.wait_for_function(
+            "() => !document.getElementById('chat-form').classList.contains('htmx-request')",
+            timeout=2000,
+        )
+        assert captured, "expected a chat stream POST"
+        assert "undefinedHi" not in captured[0]
+        assert "Hi%2C+I+need+help" in captured[0] or "Hi, I need help" in captured[0]
+
+        browser.close()
+
+
+@pytest.mark.browser
 def test_chat_sse_prunes_stale_carousels_after_new_carousel() -> None:
     """Only the latest product carousel remains after a follow-up search."""
     carousel_a = (

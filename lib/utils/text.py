@@ -16,6 +16,12 @@ _MOJIBAKE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("\u00e2\u20ac\u009d", '"'),
     ("\u00e2\u20ac\u2013", "–"),
     ("\u00e2\u20ac\u2014", "—"),
+    # Windows-1252 / UTF-8 double-encoding wreckage for apostrophe
+    ("â??", "'"),
+    ("â\x3f\x3f", "'"),
+    ("â\ufffd\ufffd", "'"),
+    ("â€™", "'"),
+    ("â€˜", "'"),
 )
 
 

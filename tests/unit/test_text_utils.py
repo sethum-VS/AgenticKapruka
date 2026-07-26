@@ -78,6 +78,31 @@ def test_normalize_catalog_text_fixes_apostrophe_mojibake() -> None:
     assert "'" in normalized or "’" in normalized
 
 
+def test_normalize_catalog_text_fixes_kid_apostrophe_replacement_chars() -> None:
+    raw = "Perfect for a kidâ??s birthday party"
+    normalized = normalize_catalog_text(raw)
+    assert "â??" not in normalized
+    assert "kid's" in normalized or "kid’s" in normalized
+
+
+def test_product_card_template_normalizes_mojibake_description() -> None:
+    from app.templating import render_product_carousel
+
+    product = {
+        "id": "gift002",
+        "name": "Kids Party Set",
+        "description": "Ideal for a kidâ??s celebration",
+        "price": {"amount": 2500.0, "currency": "LKR"},
+        "in_stock": True,
+        "stock_level": "high",
+        "url": "https://www.kapruka.com/example",
+        "image_url": None,
+    }
+    html = render_product_carousel([product])
+    assert "â??" not in html
+    assert "kid&#39;s" in html or "kid's" in html or "kid’s" in html
+
+
 def test_product_card_template_normalizes_mojibake_name() -> None:
     from app.templating import render_product_carousel
 

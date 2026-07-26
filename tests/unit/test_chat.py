@@ -85,7 +85,7 @@ def test_chat_index_template_renders_empty_state() -> None:
     assert "htmx-indicator" in html
     assert 'x-data="chatHelpers()"' in html
     assert 'x-ref="messages"' in html
-    assert 'x-ref="input"' in html
+    assert 'id="chat-message"' in html
     assert "/static/js/chat-sse.js" in html
     assert 'defer src="/static/js/chat-helpers.js"' in html
     assert html.index('defer src="/static/js/chat-helpers.js"') < html.index(

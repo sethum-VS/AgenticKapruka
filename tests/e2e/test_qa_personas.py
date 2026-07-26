@@ -32,13 +32,23 @@ def test_persona_clueless_gift_giver_budget_and_delivery(
     wait_for_alpine(page)
     reset_e2e_session(page, base_url)
 
+    # Guard: composer must not ship a literal "undefined" prefix.
+    page.evaluate("() => { document.getElementById('chat-message').value = ''; }")
+    assert page.input_value("#chat-message") in ("",)
+
     _chat_turn(page, "I need a gift for my wife")
+    first_user = page.locator('[data-role="user-message"]').first.inner_text()
+    assert not first_user.strip().lower().startswith("undefined"), (
+        f"First user message must not be prefixed with undefined: {first_user!r}"
+    )
     _chat_turn(page, "chocolate")
     budget_reply = _chat_turn(page, "Keep it under 6000 rupees.")
+    assert "couldn't find" not in budget_reply.lower()
+    assert "close match" not in budget_reply.lower()
     delivery_reply = _chat_turn(page, "can you deliver to Kandy this Sunday?")
 
-    expect(page.locator('[data-testid="product-carousel"]')).to_have_count(1)
-    carousel_text = page.inner_text('[data-testid="product-carousel"]')
+    expect(page.locator('[data-testid="product-carousel"]').last).to_be_visible()
+    carousel_text = page.locator('[data-testid="product-carousel"]').last.inner_text()
     assert "26,310" not in carousel_text
     assert "curry" not in carousel_text.lower()
     lowered_carousel = carousel_text.lower()
