@@ -11,7 +11,6 @@ if (-not (Test-Path $EnvFile)) {
 }
 
 $SecretKeys = @(
-    "REDIS_URL",
     "NEO4J_URI",
     "NEO4J_USER",
     "NEO4J_PASSWORD",
@@ -52,3 +51,4 @@ foreach ($key in $SecretKeys) {
 }
 
 Write-Host "Done. HEROKU_API_KEY and HEROKU_APP_NAME must already exist in GitHub secrets."
+Write-Host "REDIS_URL is provisioned by the Heroku Redis addon during deploy (not synced from .env)."

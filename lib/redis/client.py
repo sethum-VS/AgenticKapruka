@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import ssl
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -50,6 +51,9 @@ class RedisClient:
             "health_check_interval": health_check_interval,
             "retry_on_timeout": True,
         }
+        if url.startswith("rediss://"):
+            # Heroku Redis and other managed TLS endpoints use platform CAs.
+            self._pool_kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
         self._client = client
 
     @classmethod

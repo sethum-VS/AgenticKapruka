@@ -109,11 +109,26 @@ jobs:
       - name: Install Heroku CLI
         run: curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
 
+      - name: Ensure Heroku Redis addon
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+          HEROKU_APP_NAME: ${{ secrets.HEROKU_APP_NAME }}
+        run: |
+          if ! heroku addons -a "$HEROKU_APP_NAME" | grep -qE 'heroku-redis|rediscloud|redisgreen'; then
+            heroku addons:create heroku-redis:mini -a "$HEROKU_APP_NAME" --wait
+          fi
+          heroku redis:wait -a "$HEROKU_APP_NAME" || true
+          # Repair REDIS_URL when a prior deploy synced localhost from dev secrets.
+          REDIS_TLS_URL="$(heroku config:get REDIS_TLS_URL -a "$HEROKU_APP_NAME" 2>/dev/null || true)"
+          CURRENT_REDIS_URL="$(heroku config:get REDIS_URL -a "$HEROKU_APP_NAME" 2>/dev/null || true)"
+          if [ -n "$REDIS_TLS_URL" ] && echo "$CURRENT_REDIS_URL" | grep -qE 'localhost|127\.0\.0\.1'; then
+            heroku config:set REDIS_URL="$REDIS_TLS_URL" -a "$HEROKU_APP_NAME"
+          fi
+
       - name: Sync config vars to Heroku
         env:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
           HEROKU_APP_NAME: ${{ secrets.HEROKU_APP_NAME }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
           NEO4J_URI: ${{ secrets.NEO4J_URI }}
           NEO4J_USER: ${{ secrets.NEO4J_USER }}
           NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
@@ -130,7 +145,6 @@ jobs:
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
         run: |
           heroku config:set \
-            REDIS_URL="$REDIS_URL" \
             NEO4J_URI="$NEO4J_URI" \
             NEO4J_USER="$NEO4J_USER" \
             NEO4J_PASSWORD="$NEO4J_PASSWORD" \
@@ -176,7 +190,8 @@ jobs:
           for attempt in 1 2 3 4 5 6 7 8; do
             HTTP_CODE="$(curl -sS -o /tmp/health.json -w "%{http_code}" "${APP_URL}/health" || echo "000")"
             if { [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "503" ]; } \
-              && grep -q '"status"' /tmp/health.json; then
+              && grep -q '"status"' /tmp/health.json \
+              && python3 -c "import json,sys; b=json.load(open('/tmp/health.json')); sys.exit(0 if b.get('services',{}).get('redis',{}).get('status')=='up' else 1)"; then
               cat /tmp/health.json
               exit 0
             fi

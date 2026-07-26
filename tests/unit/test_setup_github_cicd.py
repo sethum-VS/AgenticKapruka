@@ -47,6 +47,7 @@ def test_main_workflow_contract() -> None:
     assert "pytest tests/e2e" in content
     assert "evals.ragas_eval --ci" in content
     assert "heroku config:set" in content
+    assert "heroku addons:create heroku-redis:mini" in content
     assert "heroku container:push" in content
     assert "heroku ps:resize web=eco" in content
     assert "/health" in content
