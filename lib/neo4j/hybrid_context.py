@@ -1073,9 +1073,9 @@ def build_budget_refinement_search_args(
     intent_metadata = state.get("intent_metadata") or {}
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
     budget_gift_discovery = bool(intent_metadata.get("budgeted_gift_discovery"))
-    # Budget-only refinements must still run even if a soft pivot flag leaked in
-    # (e.g. historical "Actually, under 6000" turns). Fresh gift discovery stays blocked.
-    if budget_gift_discovery:
+    # Budgeted gift discovery (welcome chip) stays blocked from this refine path.
+    # Soft topic_pivot leaks must not block in-memory/MCP budget refine.
+    if budget_gift_discovery and not is_budget_refinement_message(user_message):
         return None
     if topic_pivot and not is_budget_refinement_message(user_message):
         return None

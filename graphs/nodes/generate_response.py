@@ -2521,7 +2521,10 @@ async def generate_response(
                 products_html=None if delivery_only else products_html,
                 delivery_status_html=delivery_status_html,
             )
-            fast_path_updates["last_visible_products"] = visible_products
+            if visible_products:
+                fast_path_updates["last_visible_products"] = visible_products
+                fast_path_updates["last_search_products"] = visible_products
+                fast_path_updates["session_resolved_product"] = visible_products[0]
             return fast_path_updates
 
     model = select_model(state)
@@ -2721,9 +2724,12 @@ async def generate_response(
     )
     if visible_products:
         updates["last_visible_products"] = visible_products
-    if topic_pivot:
-        updates["last_visible_products"] = visible_products or None
-        updates["last_search_products"] = visible_products or None
+        updates["last_search_products"] = visible_products
+        updates["session_resolved_product"] = visible_products[0]
+    elif topic_pivot:
+        # Only clear carousel on an explicit pivot when this turn has no products.
+        updates["last_visible_products"] = None
+        updates["last_search_products"] = None
     if isinstance(pivot_meta, dict) and (
         pivot_meta.get("budget_confirmation_pending") or pivot_meta.get("delivery_date_ambiguous")
     ):
