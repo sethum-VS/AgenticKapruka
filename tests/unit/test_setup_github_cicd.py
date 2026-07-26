@@ -48,6 +48,7 @@ def test_main_workflow_contract() -> None:
     assert "evals.ragas_eval --ci" in content
     assert "heroku config:set" in content
     assert "heroku container:push" in content
+    assert "heroku ps:resize web=eco" in content
     assert "/health" in content
 
 

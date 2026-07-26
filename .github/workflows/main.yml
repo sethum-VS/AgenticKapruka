@@ -162,6 +162,8 @@ jobs:
           heroku stack:set container -a $HEROKU_APP_NAME
           heroku container:push web -a $HEROKU_APP_NAME
           heroku container:release web -a $HEROKU_APP_NAME
+          # Eco dynos auto-sleep after 30 minutes without HTTP traffic (no dyno-hour billing while asleep).
+          heroku ps:resize web=eco -a $HEROKU_APP_NAME
           heroku ps:scale web=1 -a $HEROKU_APP_NAME
 
       - name: Verify deployment health
