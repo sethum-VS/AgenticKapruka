@@ -683,11 +683,9 @@ def _should_run_budgeted_gift_ideas_search(
     """True when the welcome chip or budgeted gift-ideas turn needs dual MCP search."""
     if already_ran:
         return False
-    # Mid-chat budget refine must never pivot into gift-voucher discovery.
-    focus = state.get("session_product_focus")
-    focus_str = focus.strip() if isinstance(focus, str) else None
-    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
-        return False
+    # Mid-chat turns that already have a carousel must not pivot into gift-voucher discovery.
+    # Do NOT gate on is_budget_refinement_message — welcome chip text like
+    # "Gift ideas under Rs. 5,000" is budget-shaped and must still dual-search.
     if state.get("last_visible_products") or state.get("last_search_products"):
         return False
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
