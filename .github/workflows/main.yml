@@ -149,6 +149,8 @@ jobs:
             DEBUG_TRACE=0 \
             LOG_LEVEL=INFO \
             RERANKER_PRELOAD=false \
+            OMP_NUM_THREADS=1 \
+            TOKENIZERS_PARALLELISM=false \
             -a "$HEROKU_APP_NAME"
 
       - name: Deploy to Heroku

@@ -56,7 +56,7 @@ def test_score_pairs_strips_query_whitespace() -> None:
 def test_lazy_model_load_uses_default_model_name() -> None:
     service = CrossEncoderService()
 
-    with patch("lib.embeddings.reranker.CrossEncoder") as cross_encoder_cls:
+    with patch("sentence_transformers.CrossEncoder") as cross_encoder_cls:
         cross_encoder_cls.return_value = _mock_cross_encoder(scores=[0.7])
         scores = service.score_pairs("query", ["doc"])
 

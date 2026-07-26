@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal, cast
 
-from google import genai
-
 from graphs.nodes.analyze_intent import _extract_latest_user_message
 from graphs.state import AgentState, ToolInvocation
 from lib.chat.address_resolution import resolve_shipment_address
@@ -319,7 +317,7 @@ async def resolve_delivery_context(
     *,
     kapruka_service: KaprukaService | None = None,
     client_ip: str | None = None,
-    genai_client: genai.Client | None = None,
+    genai_client: object | None = None,
 ) -> dict[str, Any]:
     """LangGraph node: canonicalize delivery city and date before catalog planning."""
     user_message = _extract_latest_user_message(state.get("messages") or [])

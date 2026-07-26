@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
-from google import genai
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
@@ -41,7 +40,7 @@ class ShoppingGraphDeps:
 
     kapruka_service: KaprukaService | None = None
     client_ip: str | None = None
-    genai_client: genai.Client | None = None
+    genai_client: object | None = None
     neo4j_client: Neo4jClient | None = None
     zep_client: ZepClient | None = None
     redis_client: RedisClient | None = None
