@@ -683,6 +683,13 @@ def _should_run_budgeted_gift_ideas_search(
     """True when the welcome chip or budgeted gift-ideas turn needs dual MCP search."""
     if already_ran:
         return False
+    # Mid-chat budget refine must never pivot into gift-voucher discovery.
+    focus = state.get("session_product_focus")
+    focus_str = focus.strip() if isinstance(focus, str) else None
+    if is_budget_refinement_message(user_message, session_product_focus=focus_str):
+        return False
+    if state.get("last_visible_products") or state.get("last_search_products"):
+        return False
     intent_metadata: dict[str, Any] = dict(state.get("intent_metadata") or {})
     if not intent_metadata.get("budgeted_gift_discovery") and not is_budgeted_gift_ideas_message(
         user_message,
@@ -2241,18 +2248,13 @@ async def _try_budget_refinement_fast_path(
     ):
         return None
 
-    budget_refinement_args = build_budget_refinement_search_args(
-        dict(state),
-        user_message,
-        currency=currency,
-    )
-    if budget_refinement_args is None:
-        return None
-
     base_tool_count = int(state.get("tool_call_count") or 0)
     working_trace = list(tool_trace)
     tool_name = SEARCH_PRODUCTS_TOOL
     # Prefer last_visible (what the shopper saw) then last_search.
+    # In-memory filter MUST run before build_budget_refinement_search_args: when args
+    # cannot be built (missing q / budgeted_gift_discovery leak) we still keep
+    # under-budget carousel items instead of falling through to gift-voucher search.
     prior_products = [
         item for item in list(state.get("last_visible_products") or []) if isinstance(item, dict)
     ]
@@ -2273,6 +2275,12 @@ async def _try_budget_refinement_fast_path(
                 budget_max_val = float(turn_budget)
     session_search_query_update: str | None = None
 
+    budget_refinement_args = build_budget_refinement_search_args(
+        dict(state),
+        user_message,
+        currency=currency,
+    )
+
     if prior_products and isinstance(budget_max_val, (int, float)) and budget_max_val > 0:
         refined_in_memory = refine_last_search_by_budget(
             prior_products,
@@ -2292,12 +2300,32 @@ async def _try_budget_refinement_fast_path(
             if isinstance(state.get("hybrid_context"), dict)
             else None,
         )
+        if not refined_in_memory:
+            # Safety net when curation drops everything: keep raw under-budget picks.
+            from lib.chat.product_curation import product_price_amount
+
+            refined_in_memory = [
+                product
+                for product in prior_products
+                if (price := product_price_amount(product)) is not None
+                and price <= float(budget_max_val)
+            ] or None
         if refined_in_memory and len(refined_in_memory) >= BUDGET_REFINEMENT_IN_MEMORY_MIN:
             logger.debug("agent_loop: budget refinement in-memory fast-path")
+            trace_args = (
+                dict(budget_refinement_args)
+                if budget_refinement_args
+                else {
+                    "q": state.get("session_search_query") or focus_str or "gift",
+                    "currency": currency,
+                    "max_price": float(budget_max_val),
+                    "sort": "relevance",
+                }
+            )
             working_trace.append(
                 {
                     "name": tool_name,
-                    "args": dict(budget_refinement_args),
+                    "args": trace_args,
                     "result": {"results": refined_in_memory},
                 },
             )
@@ -2311,7 +2339,11 @@ async def _try_budget_refinement_fast_path(
                 tool_call_count=base_tool_count + 1,
             )
             updates["last_search_products"] = refined_in_memory
+            updates["last_visible_products"] = refined_in_memory
             return updates
+
+    if budget_refinement_args is None:
+        return None
 
     enriched_args = _inject_tool_currency(
         tool_name,

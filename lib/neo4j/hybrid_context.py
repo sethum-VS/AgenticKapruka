@@ -1073,8 +1073,10 @@ def build_budget_refinement_search_args(
     intent_metadata = state.get("intent_metadata") or {}
     topic_pivot = bool(intent_metadata.get("topic_pivot"))
     budget_gift_discovery = bool(intent_metadata.get("budgeted_gift_discovery"))
-    # Budget-only refinements must still run even if a soft pivot flag leaked in
-    # (e.g. historical "Actually, under 6000" turns). Fresh gift discovery stays blocked.
+    # Welcome-chip gift discovery must not reuse the refine path (would keep stale q).
+    # Soft topic_pivot leaks must not block genuine budget-only refine messages.
+    # Mid-chat "Under N" with a leaked gift-discovery flag still works via the
+    # agent_loop in-memory filter that runs before this args gate.
     if budget_gift_discovery:
         return None
     if topic_pivot and not is_budget_refinement_message(user_message):

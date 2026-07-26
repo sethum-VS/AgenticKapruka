@@ -132,6 +132,11 @@ async def resolve_cart_product(
 
     last_visible = list(state.get("last_visible_products") or [])
     last_search = list(state.get("last_search_products") or [])
+    # Fallback when checkpoint carousel was dropped but a recently shown product remains.
+    if not last_visible and not last_search:
+        resolved = state.get("session_resolved_product")
+        if isinstance(resolved, dict) and resolved.get("id"):
+            last_visible = [resolved]
     reference = resolve_product_reference(
         phrase,
         last_visible_products=last_visible or None,
