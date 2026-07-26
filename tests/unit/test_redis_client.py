@@ -8,7 +8,17 @@ import fakeredis.aioredis
 import pytest
 import redis.asyncio as aioredis
 
-from lib.redis.client import RedisClient
+from lib.redis.client import RedisClient, _normalize_redis_url
+
+
+def test_normalize_redis_url_adds_ssl_cert_reqs_for_rediss() -> None:
+    url = "rediss://:secret@redis.example.com:6379"
+    assert _normalize_redis_url(url) == f"{url}?ssl_cert_reqs=none"
+
+
+def test_normalize_redis_url_preserves_existing_query_params() -> None:
+    url = "rediss://redis.example.com:6379/0?foo=bar"
+    assert _normalize_redis_url(url) == f"{url}&ssl_cert_reqs=none"
 
 
 async def test_redis_client_ping_succeeds_with_fakeredis() -> None:

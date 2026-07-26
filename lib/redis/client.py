@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import ssl
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -17,6 +16,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_CONNECTIONS = 10
 _DEFAULT_SOCKET_CONNECT_TIMEOUT = 5.0
 _DEFAULT_HEALTH_CHECK_INTERVAL = 30
+
+
+def _normalize_redis_url(url: str) -> str:
+    """Ensure managed TLS Redis URLs disable cert verification for Heroku Redis."""
+    if not url.startswith("rediss://") or "ssl_cert_reqs=" in url:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}ssl_cert_reqs=none"
 
 
 def _redacted_redis_endpoint(url: str) -> str:
@@ -41,7 +48,7 @@ class RedisClient:
         socket_keepalive: bool = True,
         health_check_interval: int = _DEFAULT_HEALTH_CHECK_INTERVAL,
     ) -> None:
-        self._url = url
+        self._url = _normalize_redis_url(url)
         self._pool_kwargs: dict[str, Any] = {
             "encoding": "utf-8",
             "decode_responses": True,
@@ -51,9 +58,6 @@ class RedisClient:
             "health_check_interval": health_check_interval,
             "retry_on_timeout": True,
         }
-        if url.startswith("rediss://"):
-            # Heroku Redis and other managed TLS endpoints use platform CAs.
-            self._pool_kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
         self._client = client
 
     @classmethod

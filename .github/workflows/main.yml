@@ -118,10 +118,9 @@ jobs:
             heroku addons:create heroku-redis:mini -a "$HEROKU_APP_NAME" --wait
           fi
           heroku redis:wait -a "$HEROKU_APP_NAME" || true
-          # Repair REDIS_URL when a prior deploy synced localhost from dev secrets.
+          # Always use the Heroku Redis addon TLS URL in production.
           REDIS_TLS_URL="$(heroku config:get REDIS_TLS_URL -a "$HEROKU_APP_NAME" 2>/dev/null || true)"
-          CURRENT_REDIS_URL="$(heroku config:get REDIS_URL -a "$HEROKU_APP_NAME" 2>/dev/null || true)"
-          if [ -n "$REDIS_TLS_URL" ] && echo "$CURRENT_REDIS_URL" | grep -qE 'localhost|127\.0\.0\.1'; then
+          if [ -n "$REDIS_TLS_URL" ]; then
             heroku config:set REDIS_URL="$REDIS_TLS_URL" -a "$HEROKU_APP_NAME"
           fi
 
