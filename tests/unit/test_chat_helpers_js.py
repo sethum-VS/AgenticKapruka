@@ -41,7 +41,4 @@ def test_chat_helpers_js_wires_suggestion_chip_click() -> None:
     assert 'getAttribute("data-chat-suggestion")' in source
     assert 'querySelector("#chat-message")' in source
     assert "form.requestSubmit()" in source
-    assert (
-        'input.value = suggestion ?? ""' in source
-        or "input.value = suggestion ?? \"\"" in source
-    )
+    assert 'input.value = suggestion ?? ""' in source or 'input.value = suggestion ?? ""' in source
