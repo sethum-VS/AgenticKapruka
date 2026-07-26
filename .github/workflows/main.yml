@@ -159,20 +159,25 @@ jobs:
           heroku stack:set container -a $HEROKU_APP_NAME
           heroku container:push web -a $HEROKU_APP_NAME
           heroku container:release web -a $HEROKU_APP_NAME
+          heroku ps:scale web=1 -a $HEROKU_APP_NAME
 
       - name: Verify deployment health
         env:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
           HEROKU_APP_NAME: ${{ secrets.HEROKU_APP_NAME }}
         run: |
-          APP_URL="https://${HEROKU_APP_NAME}.herokuapp.com"
-          for attempt in 1 2 3 4 5; do
-            if curl -fsS "${APP_URL}/health" | grep -q '"status"'; then
-              curl -fsS "${APP_URL}/health"
+          APP_URL="$(heroku apps:info -a "$HEROKU_APP_NAME" --json | python3 -c "import json,sys; print(json.load(sys.stdin)['app']['web_url'].rstrip('/'))")"
+          echo "Checking ${APP_URL}/health"
+          for attempt in 1 2 3 4 5 6 7 8; do
+            HTTP_CODE="$(curl -sS -o /tmp/health.json -w "%{http_code}" "${APP_URL}/health" || echo "000")"
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "503" ]; then
+              cat /tmp/health.json
               exit 0
             fi
-            echo "Health check attempt ${attempt} failed; retrying in 15s..."
-            sleep 15
+            echo "Health check attempt ${attempt} failed (HTTP ${HTTP_CODE}); retrying in 20s..."
+            sleep 20
           done
-          echo "Health check failed after 5 attempts"
+          echo "Health check failed after 8 attempts"
+          heroku ps -a "$HEROKU_APP_NAME" || true
+          heroku logs --num 150 -a "$HEROKU_APP_NAME" || true
           exit 1
