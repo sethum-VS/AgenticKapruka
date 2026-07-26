@@ -97,8 +97,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         community_worker = NetworkXCommunityWorker(app.state.neo4j)
         await community_worker.start()
     app.state.community_worker = community_worker
-    await asyncio.to_thread(preload_reranker)
-    logger.info("Cross-encoder reranker preloaded")
+    if settings.reranker_preload:
+        await asyncio.to_thread(preload_reranker)
+        logger.info("Cross-encoder reranker preloaded")
+    else:
+        logger.info("Cross-encoder reranker preload skipped (RERANKER_PRELOAD=false)")
     logger.info("Application startup complete")
 
     yield

@@ -116,6 +116,13 @@ class Settings(BaseSettings):
         le=1.0,
         description="Minimum cross-encoder score to keep Occasion/Category traversal nodes",
     )
+    reranker_preload: bool = Field(
+        default=True,
+        description=(
+            "Eagerly load the cross-encoder during app startup. "
+            "Disable on memory-constrained hosts (e.g. Heroku 512MB dynos)."
+        ),
+    )
     master_flow_enabled: bool = Field(
         default=True,
         description="Enable flow-state supervisor after analyze_intent on conflict triggers",
