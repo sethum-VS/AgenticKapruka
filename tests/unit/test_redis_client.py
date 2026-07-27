@@ -63,3 +63,21 @@ async def test_redis_client_connect_from_url(
     assert await client.ping() is True
 
     await client.close()
+
+
+async def test_redis_client_connect_normalizes_rediss_tls_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """connect() must pass normalized rediss URL so Heroku TLS cert verify is disabled."""
+    fake = fakeredis.aioredis.FakeRedis()
+    captured: dict[str, Any] = {}
+
+    def mock_from_url(url: str, **kwargs: Any) -> fakeredis.aioredis.FakeRedis:
+        captured["url"] = url
+        return fake
+
+    monkeypatch.setattr(aioredis, "from_url", mock_from_url)
+
+    await RedisClient.connect("rediss://:secret@redis.example.com:6379")
+
+    assert captured["url"] == "rediss://:secret@redis.example.com:6379?ssl_cert_reqs=none"

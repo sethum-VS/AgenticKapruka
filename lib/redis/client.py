@@ -80,7 +80,7 @@ class RedisClient:
         )
         instance._client = cast(
             Redis,
-            aioredis.from_url(url, **instance._pool_kwargs),  # type: ignore[no-untyped-call]
+            aioredis.from_url(instance._url, **instance._pool_kwargs),  # type: ignore[no-untyped-call]
         )
         return instance
 
